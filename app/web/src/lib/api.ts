@@ -72,8 +72,9 @@ export async function getText(path: string): Promise<{ text: string; mtime: numb
   return { text: await res.text(), mtime: mtime ? Number(mtime) : null };
 }
 
-export function renderedUrl(run: string, style: string, cite: boolean, path: string, download = false): string {
+export function renderedUrl(run: string, style: string, cite: boolean, path: string, download = false, built?: number): string {
   const params: Record<string, string> = { style, cite: String(cite), path, token: TOKEN };
+  if (built !== undefined) params.v = String(built);
   if (download) params.download = "true";
   return `/api/runs/${encodeURIComponent(run)}/rendered?${new URLSearchParams(params).toString()}`;
 }

@@ -434,6 +434,7 @@ def _rendered_view(name: str, body: RenderBody, meta: dict[str, Any]) -> dict[st
             for f in meta["figures"]
         ],
         "cached": meta.get("cached"),
+        "built": meta.get("built"),
         "log": meta.get("log", ""),
         "style": body.style,
         "cite": body.cite,
@@ -460,7 +461,8 @@ def rendered_file(
         raise _bad(exc, 404) from exc
     if download:
         return FileResponse(target, filename=f"{name}-{style}-{target.name}")
-    return FileResponse(target)
+    # The path stays the same across rebuilds, so the browser must not reuse an old copy.
+    return FileResponse(target, headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/runs/{name}/export")

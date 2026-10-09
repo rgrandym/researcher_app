@@ -18,6 +18,7 @@ interface Rendered {
   html: string;
   figures: { name: string; files: Record<string, string> }[];
   cached: boolean;
+  built: number;
   log: string;
 }
 
@@ -190,7 +191,11 @@ function HtmlPane({ run, version }: { run: string; version: number }) {
   const rendered = useQuery({
     queryKey: ["render", run, style, cite, version],
     queryFn: () => api.post<Rendered>(`/api/runs/${encodeURIComponent(run)}/render`, { style, cite }),
-    staleTime: Infinity,
+    // Picks up edits made outside the app (VS Code, an agent). The server answers from its
+    // cache until the source changes, and the frame reloads only when `built` moves. A failed
+    // render stops the polling, so a broken document is not rebuilt every few seconds.
+    staleTime: 0,
+    refetchInterval: (query) => (query.state.status === "error" ? false : 3_000),
     retry: false,
   });
   const exportRun = useMutation({
@@ -258,7 +263,7 @@ function HtmlPane({ run, version }: { run: string; version: number }) {
         <div className="min-w-0 flex-1 bg-white">
           {rendered.isFetching && !data && <div className="p-6 text-[13px] text-faint">Rendering the figures and the HTML…</div>}
           {rendered.isError && <pre className="whitespace-pre-wrap p-6 text-[12.5px] text-bad">{(rendered.error as Error).message}</pre>}
-          {data && <iframe key={data.html + version} title="HTML" src={renderedUrl(run, style, cite, data.html)} onLoad={(e) => onFrameLoad(e.currentTarget)} className="h-full w-full border-0" />}
+          {data && <iframe key={`${data.html}@${data.built}`} title="HTML" src={renderedUrl(run, style, cite, data.html, false, data.built)} onLoad={(e) => onFrameLoad(e.currentTarget)} className="h-full w-full border-0" />}
         </div>
         {data && data.figures.length > 0 && (
           <aside className="scroll-thin w-60 shrink-0 overflow-y-auto border-l border-border bg-panel/50 p-3 text-[12px]">
@@ -271,7 +276,7 @@ function HtmlPane({ run, version }: { run: string; version: number }) {
             {saved && <div className="mb-2 text-[11.5px] text-good">{saved}</div>}
             {data.figures.map((f) => (
               <div key={f.name} className="mb-3">
-                {f.files.png && <img src={renderedUrl(run, style, cite, f.files.png)} alt={f.name} className="w-full rounded border border-border bg-white" />}
+                {f.files.png && <img src={renderedUrl(run, style, cite, f.files.png, false, data.built)} alt={f.name} className="w-full rounded border border-border bg-white" />}
                 <div className="mt-1 flex items-center gap-2">
                   <span className="font-medium">{f.name}</span>
                   {Object.entries(f.files).map(([kind, path]) => (
