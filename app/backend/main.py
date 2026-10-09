@@ -15,6 +15,7 @@ import base64
 import contextlib
 import json
 import re
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -378,19 +379,34 @@ def _run_busy(name: str) -> bool:
 
 @app.delete("/api/runs/{name}")
 def delete_run(name: str) -> dict[str, Any]:
-    """Remove a project from the workspace: the run folder goes to the macOS Trash."""
-    if _run_busy(name):
-        raise HTTPException(409, "An agent is working on this run. Stop it first.")
+    """Remove a project and everything the app holds about it.
+
+    The run folder goes to the macOS Trash (recoverable until the Trash is emptied).
+    Its conversations go: the project's Chat-tab ones, and any that only ever worked on
+    this run. A conversation that also touched other runs is kept, with this run struck
+    from it. The render cache and the run's lock file are deleted."""
+    own, shared = [], []
+    for s in sessions.list_all():
+        session = sessions.load(s["id"])
+        if session.project == name or session.runs == [name]:
+            own.append(session)
+        elif name in session.runs:
+            shared.append(session)
+    if _run_busy(name) or any(manager.is_running(s.id) for s in own):
+        raise HTTPException(409, "An agent is working on this project. Stop it first.")
     try:
         where = workspace.trash_run(name)
     except (FileNotFoundError, ValueError) as exc:
         raise _bad(exc, 404) from exc
-    for s in sessions.list_all():
-        if name in s["runs"]:
-            session = sessions.load(s["id"])
-            session.runs = [r for r in session.runs if r != name]
-            sessions.save(session)
-    return {"ok": True, "trash": where}
+    for session in own:
+        sessions.delete(session.id)
+    for session in shared:
+        session.runs = [r for r in session.runs if r != name]
+        sessions.save(session)
+    shutil.rmtree(config.DATA / "render" / name, ignore_errors=True)
+    (config.DATA / "locks" / f"{name}.lock").unlink(missing_ok=True)
+    manager.locks.pop(name, None)
+    return {"ok": True, "trash": where, "removed_sessions": [s.id for s in own]}
 
 
 @app.get("/api/styles")

@@ -147,8 +147,8 @@ def root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data: Path) -> Path:
         "---\nname: research\ndescription: >\n  Run a sourced\n  investigation.\n---\n\n# Research\n",
     )
     _write(
-        ws / ".claude/commands/cv.md",
-        "---\ndescription: Adapt the CV\n---\n\nAdapt the CV. Target: $ARGUMENTS\n",
+        ws / ".claude/commands/figures.md",
+        "---\ndescription: Improve the figures\n---\n\nImprove the figures. Target: $ARGUMENTS\n",
     )
     run = ws / "outputs" / RUN
     _write(

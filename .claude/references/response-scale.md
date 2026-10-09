@@ -1,6 +1,6 @@
 # Scaling the response to the question
 
-Shared doctrine. `research-pipeline`, `research`, `report` and `compose` point
+Shared doctrine. `research-pipeline`, `research` and `report` point
 here.
 
 The workspace's failure mode in both directions is real and neither is cheap:
@@ -59,22 +59,6 @@ non-negotiables: nothing asserted that a source doesn't say, no citation written
 from memory, no invented figure, uncertainty stated where it bears. A Tier 0
 answer is shorter, not looser. If you cannot answer in four sentences without
 overstating, that is the signal you are at Tier 1, not permission to guess.
-
-## The compose lane
-
-A request to write something the author signs (a CV, a letter, an answer, a
-paragraph of theirs to develop) runs on the same logic with its own three
-tiers, set out in the `compose` skill. Two of the questions above change:
-
-- **"Did the user ask for a document?"** becomes "will a named reader receive
-  this?" A letter that gets sent takes a run folder and an independent review,
-  however short it is. Rewording one sentence does not.
-- **"Does an action depend on the answer?"** is nearly always yes in this lane,
-  and it decides depth rather than the existence of a folder. A job application
-  is a decision the author is asking someone else to make about them.
-
-Research inside a compose run is a separate judgement: it happens when the
-author asks for a claim to be checked, and not on your own initiative.
 
 ## Re-judging mid-flight
 

@@ -1,6 +1,6 @@
 # Public repository. It holds the pipeline (.claude/), the app and the guides.
 # Everything personal stays out: research output, supplied sources, the
-# author's dossier, voice profile and corpus, internal notes, and credentials.
+# author's voice profile and corpus, internal notes, and credentials.
 # Check `git status --ignored` before publishing anything new.
 
 # ---------------------------------------------------------------- research output
@@ -18,21 +18,14 @@ outputs/
 **/*.pptx
 **/*.csv
 
-# ---------------------------------------------------------------- the dossier
-# The author's standing record: master CV, letters already sent, bios, work
-# history. At least as confidential as a run folder, and held to the same rule.
-# The scaffolding READMEs are doctrine and stay tracked; nothing else does.
-dossier/**
-!dossier/**/
-!dossier/**/README.md
-!dossier/README.md
-
 # ---------------------------------------------------------------- author's voice
 # The corpus holds the author's own unpublished prose, captured from their
-# manual edits, and the profile holds their personal writing rules and their
-# history. Both are personal; /voice-rule creates the profile when it is missing.
+# manual edits; the profile holds their personal writing rules and their
+# history; rules.py holds the lint patterns for those rules. All personal.
+# /voice-rule creates the profile and rules.py when they are missing.
 .claude/voice/corpus/
 .claude/voice/profile.md
+.claude/voice/rules.py
 .claude/voice/measured.json
 
 # ---------------------------------------------------------------- recovery copies

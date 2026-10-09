@@ -435,7 +435,7 @@ def editable(rel: str) -> Path:
     if root().resolve() not in target.parents:
         raise ValueError("outside the workspace")
     rel_norm = str(target.relative_to(root().resolve()))
-    if rel_norm.startswith(("dossier/", "outputs/", ".git/")) or "/external_data/" in rel_norm:
+    if rel_norm.startswith(("outputs/", ".git/")) or "/external_data/" in rel_norm:
         raise ValueError("not editable from the Workspace view")
     listed = {f["path"] for g in workspace_files() for f in g["files"]}
     new_ok = re.match(

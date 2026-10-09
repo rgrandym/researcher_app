@@ -25,12 +25,9 @@ def test_commands_from_real_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
         "repair",
         "export",
         "expand",
-        "compose",
-        "cv",
-        "cover-letter",
-        "answer",
-        "develop",
         "polish",
+        "figures",
+        "app",
         "user-edits",
         "narrator",
         "visualize",
@@ -38,7 +35,9 @@ def test_commands_from_real_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
     ):
         assert expected in names, expected
         assert names[expected]["description"], expected
-    assert names["cv"]["kind"] == "command" and names["research"]["kind"] == "skill"
+    assert names["figures"]["kind"] == "command" and names["research"]["kind"] == "skill"
+    for gone in ("compose", "cv", "cover-letter", "answer", "develop"):
+        assert gone not in names, gone
 
 
 def test_frontmatter() -> None:
@@ -55,8 +54,8 @@ def test_expand_command(root: Path) -> None:
         and ".claude/skills/research/SKILL.md" in text
         and "lithium costs" in text
     )
-    text, name = workspace.expand_command("/cv the posting")
-    assert name == "cv" and "Target: the posting" in text and "$ARGUMENTS" not in text
+    text, name = workspace.expand_command("/figures F4 horizontal")
+    assert name == "figures" and "Target: F4 horizontal" in text and "$ARGUMENTS" not in text
     assert workspace.expand_command("plain question") == ("plain question", None)
     assert workspace.expand_command("/nonexistent x") == ("/nonexistent x", None)
 
@@ -118,8 +117,7 @@ def test_checks(root: Path) -> None:
 
 
 def test_editable_scope(root: Path) -> None:
-    (root / "dossier").mkdir()
-    for bad in ("dossier/cv.md", f"outputs/{RUN}/brief.md", "../outside.md", ".git/config"):
+    for bad in (f"outputs/{RUN}/brief.md", "../outside.md", ".git/config"):
         with pytest.raises(ValueError):
             workspace.editable(bad)
     assert workspace.editable(".claude/skills/research/SKILL.md")

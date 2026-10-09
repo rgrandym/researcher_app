@@ -107,7 +107,6 @@ def build(
     """Render one document into `out`: <stem>.md (reader copy), style.css, <stem>.html."""
     run = workspace.run_dir(run_name)
     src = _source(run, doc)
-    compose = workspace.run_meta(run).get("kind") == "compose"
     if style not in {s["name"] for s in styles()}:
         raise RenderError(f"Unknown style: {style}")
     out.mkdir(parents=True, exist_ok=True)
@@ -134,7 +133,7 @@ def build(
             ]
         )
     ]
-    cited = cite and not compose and (run / "evidence.jsonl").is_file()
+    cited = cite and (run / "evidence.jsonl").is_file()
     if cited:
         log.append(
             _run(
@@ -157,7 +156,7 @@ def build(
     else:
         shutil.copyfile(styled, reader)
     css = [py, _script("style.py"), "css", style, "-o", str(out / "style.css")]
-    log.append(_run(css + ([] if compose else ["--cover"])))
+    log.append(_run([*css, "--cover"]))
     html = out / f"{stem}.html"
     pandoc = [
         _pandoc(),
@@ -170,8 +169,7 @@ def build(
         "-o",
         str(html),
     ]
-    if not compose:
-        pandoc.insert(3, "--toc")
+    pandoc.insert(3, "--toc")
     # pandoc resolves the relative figure paths from the reader copy's folder.
     try:
         done = subprocess.run(

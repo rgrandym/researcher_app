@@ -28,7 +28,7 @@ a good intention.
 Under --hook, stdin carries the Claude Code tool payload; a path that is not a
 master document of its run exits 0 in silence. Which documents those are is
 declared in `<run>/.run.json` and read through runmeta.py: report.md and
-draft.md for a research run, the piece itself for a compose run. Only the hook updates the
+draft.md by default. Only the hook updates the
 mirror, because only the hook knows an agent has just written: a manual run of
 this script after the author has edited by hand must leave their edit visible
 to voice.py learn.
@@ -60,7 +60,7 @@ sys.path.insert(0, str(SCRIPTS))
 import runmeta                                            # noqa: E402
 
 # Documents worth gating: anything a run declares as a master. A research run
-# declares report.md and draft.md by default; a compose run declares its piece.
+# declares report.md and draft.md by default.
 TARGET = re.compile(r"outputs/[^/]+/[^/]+\.md$")
 # The file headers of a Codex apply_patch.
 PATCH_FILE = re.compile(r"^\*\*\* (?:Add File|Update File|Move to): (.+?)\s*$", re.M)

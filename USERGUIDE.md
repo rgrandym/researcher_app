@@ -1,6 +1,6 @@
 # User guide
 
-A workspace for producing research reports whose every claim can be traced to a source that actually says it, and for writing the pieces you sign and send: a CV against a posting, a cover letter, an application answer, a draft of yours developed into finished prose.
+A workspace for producing research reports whose every claim can be traced to a source that actually says it.
 
 The design assumption: an AI writing research prose unaided will be fluent, plausible, and occasionally wrong in ways you cannot see. So writing is separated from checking, the checking is adversarial, and the parts that can be verified by a script are verified by a script instead of by a model.
 
@@ -29,18 +29,9 @@ Claude picks up `/research-pipeline` and runs the whole thing. When you want to 
 
 Every stage works standalone. You can hand `/verify` someone else's document and get a fact-check with no research run behind it.
 
-When what you want is writing rather than research, the commands are:
+`/polish` rewrites a passage in your voice without changing what it claims. To teach the agents how you write, and what you don't want to read, see **[Teaching it your style over time](#teaching-it-your-style-over-time)**.
 
-```
-/answer        "describe a time when…", 300 words
-/develop       here is my rough draft, make it work
-/polish        rewrite this paragraph in my voice
-/compose       any of the above, when you'd rather describe it than pick
-```
-
-See **[Writing, not researching](#writing-not-researching)** below. To teach the agents how you write, and what you don't want to read, see **[Teaching it your style over time](#teaching-it-your-style-over-time)**.
-
-Three you'll use after the first report is written: **[`/export`](#applying-a-style)** puts it in a professional style and a real file format, **[`/expand`](#continuing-research-on-a-finished-report)** researches further without breaking the document you already have, and **[`/user-edits`](#editing-the-report-yourself)** picks up changes you made by hand, to a report or to a letter.
+Three you'll use after the first report is written: **[`/export`](#applying-a-style)** puts it in a professional style and a real file format, **[`/expand`](#continuing-research-on-a-finished-report)** researches further without breaking the document you already have, and **[`/user-edits`](#editing-the-report-yourself)** picks up changes you made by hand.
 
 ---
 
@@ -79,61 +70,7 @@ One supporting skill fires on its own: **`/visualize`** — which findings earn 
 
 ---
 
-## Writing, not researching
-
-Half of what you ask for is not a research question. It is a letter, a CV cut to fit a posting, an answer to a question on a form, a paragraph you drafted at midnight that needs to work. That lane is `/compose`, and it runs on the same machinery: your voice profile, the gates, a run folder, an independent review before anything goes out.
-
-The two lanes differ in what the writing answers to. A report answers to sources; a piece answers to **your record**, and that record lives in `dossier/`.
-
-### The dossier
-
-```
-dossier/
-  cv/       the master CV, in full: every role, date, figure and result
-  letters/  letters and applications already sent
-  bio/      biographies at each length, personal statements
-  work/     publications, patents, talks, metrics, references
-```
-
-Put your material in there once. Every piece is then written by **selecting** from it, and the rule is absolute: a date, an employer, a title, a number or a qualification appears in a letter because a file in `dossier/` says so. Nothing is written from what the model remembers you saying three sessions ago. That is the same rule as "never cite a URL you haven't fetched", applied to the document you sign.
-
-When a posting asks for something your record does not support, you get told. The gap goes in the run's `context.md` and into the chat message, and the piece is written on what is true. You will often have the fact and simply not have filed it; say so and it goes into the dossier for next time.
-
-### What a run looks like
-
-```
-outputs/2026-08-28-programme-manager-letter/
-  prompt.md          what you asked, verbatim
-  context.md         who reads it, what it has to do, the line it runs along,
-                     word limits, and the claims that still need checking
-  source_material/   the posting, the form, the thread you're answering
-  cover-letter.md    the piece itself, and the file you edit
-  review.md          what an independent read found
-  export/            .docx, .pdf, .html
-```
-
-Markdown is the master, so it needs no export. `.docx` and `.pdf` are one command away, and a CV usually wants `.docx`: applicant tracking systems parse it and recruiters edit it, while a multi-column PDF defeats both.
-
-### Editing it yourself, and having the rest follow
-
-This is the case the lane is built around. You change the last paragraph, and the three above it no longer lead into it.
-
-Say so, and `/user-edits` runs on the piece exactly as it runs on a report: your paragraph stands, and the document is repaired around it, end to end. It reads the whole piece before touching anything, because an edit that is local on the page is rarely local to the argument. A claim you moved into the closing paragraph comes out of the opening one.
-
-Two things worth knowing:
-
-- **Save the file first.** The agent reads what is on disk; your editor holds what is not. The check runs automatically and stops the round if your edit is still in the buffer, which also stops your next save from overwriting the agent's work.
-- **Your edits teach it your voice.** Every hand-written passage is captured into the style corpus before the agent writes over it, which is why the pieces sound more like you the more of them you write.
-
-### Asking it to check what you wrote
-
-"Is that right?", "find me something that backs this up", "does this claim hold?"
-
-The research machinery runs inside the writing run: a scout searches, fetches, and records the verbatim quote and the URL in the run's evidence ledger. You get the verdict and the source **in chat**. The evidence marker does not go into the text, because a cover letter with `[E4]` in it is not a cover letter. A research statement or a grant answer is the exception: those carry citations by convention, and they are rendered the same way a report's are.
-
-If a source contradicts something you wrote, you are told and **your sentence is left alone**. Your claim, your call.
-
-### Editing the report yourself
+## Editing the report yourself
 
 You are meant to. `report.md` is a plain Markdown file and it is yours to change.
 
@@ -407,8 +344,6 @@ Not every question gets the pipeline. The effort is judged from your question be
 | **2 · Report** | Several sub-questions, a decision rides on it, or you asked for a document | The full pipeline: 3–5 scouts, full verify, one critic, `report.md` |
 | **3 · Deep** | Contested or high-stakes — someone will argue with it | 6 scouts incl. a dedicated dissent scout, two critics, two repair rounds |
 
-The writing lane has its own three tiers on the same logic, described under [Writing, not researching](#writing-not-researching): rewording a sentence stays in chat, and anything a named reader will receive gets a folder and an independent review.
-
 Say "quick answer" or "go deep on this" to pick directly, and **asking for a document always gets you at least Tier 2** — naming the deliverable is not something the agent may downgrade.
 
 **The tier is re-judged as evidence arrives, in both directions.** A question that sounded simple but turns out contested gets escalated, and you are told. A question that sounded big but resolves to one authoritative source gets handed back short — that is a good outcome, not a shortfall, and the remaining budget is not spent justifying the first guess.
@@ -438,9 +373,9 @@ In the app, the command a message starts with picks the model, on Claude and on 
 
 | Tier | Claude | Codex | Commands |
 |---|---|---|---|
-| Frontier | Opus | `gpt-6-astra` | `/research`, `/research-pipeline`, `/expand`, `/critique`, `/report`, `/repair`, `/user-edits`, `/figures`, `/narrator`, `/develop`, `/polish` |
+| Frontier | Opus | `gpt-6-astra` | `/research`, `/research-pipeline`, `/expand`, `/critique`, `/report`, `/repair`, `/user-edits`, `/figures`, `/narrator`, `/polish` |
 | Workhorse | Sonnet | `gpt-6.1-sol` | `/verify`, `/export`, `/visualize`, `/voice-rule`, and plain chat |
-| Fast | Haiku 4.5 | `gpt-6-luna` | `/app`: questions about the app, answered from this guide |
+| Fast | Haiku (the latest, through the `haiku` alias) | `gpt-6-luna` | `/app`: questions about the app, answered from this guide |
 
 Inside a run, scouts and the fact-checker run on Sonnet; the critic and the writer run on Opus. Change the maps, or switch routing off, under Models. `python3 .claude/scripts/cost_report.py --last 1` shows where the last session's tokens went.
 
@@ -589,12 +524,65 @@ If a heading has to change to survive the new mode, you get asked rather than to
 
 ### Your writing style
 
-The workspace learns how you write, from the edits you make by hand.
+The workspace learns how you write, from the rules you state and the edits you
+make by hand.
+
+#### Building your own voice
+
+Your voice is personal, so none of it ships with the workspace. A fresh clone
+has no profile, no rules of yours and no samples of your writing. Until you add
+some, the agents write to the **house rules** that `voice.py lint` enforces for
+everyone: no em-dashes used as asides, no "what matters is" formula, no "it is
+not X, it is Y" antithesis, no stock phrases or clichés, no decorative symbols,
+and plain professional British English.
+
+Everything you add lives in `.claude/voice/`, and git ignores all of it, so it
+stays on your machine and is never pushed with the workspace:
+
+| File | What it holds | Created by |
+|---|---|---|
+| `profile.md` | Your rules in prose, each with an example and the rebuild, plus a dated history | `/voice-rule`, or by hand |
+| `rules.py` | The patterns that check the rules a script can check | `/voice-rule` |
+| `corpus/` | Finished sentences you wrote into reports, kept as samples | `/user-edits` |
+| `measured.json` | Your cadence, measured from the corpus | `voice.py profile --rebuild` |
+
+To build it from nothing:
+
+1. **Record your first rule.** Run a report, read it, and the first time a
+   sentence grates, say why: *"I never open a sentence with 'Notably'. Record
+   that."* `/voice-rule` creates `profile.md` and, when the rule can be checked
+   by a script, `rules.py`, then tests the new check against your reports.
+2. **Or write the profile yourself.** Create `.claude/voice/profile.md` with
+   three headings and fill in what you already know about how you write:
+
+   ```markdown
+   # Voice profile
+
+   ## Stated rules
+   - **No sentence opens on "Notably".** Start with the fact.
+     "Notably, yields fell." → "Yields fell."
+
+   ## History
+   - 2026-10-09: profile created; first rule recorded by hand.
+   ```
+
+   Rules written by hand are followed by every writer agent from the next piece
+   of writing. They are only checked by script once a pattern for them is in
+   `rules.py`; ask the agent to add one with `/voice-rule`.
+3. **Edit the reports in your own words.** Every finished sentence you write
+   into a report is filed into `corpus/` the next time `/user-edits` runs.
+4. **Let the cadence follow you.** Once the corpus holds a few reports' worth
+   of your prose, `python3 .claude/scripts/voice.py profile --rebuild` measures
+   it, and the targets for sentence length, semicolons and bold move from the
+   defaults to yours.
+
+Back up `.claude/voice/` yourself if you want it on another machine. A clone
+of the workspace does not carry it, by design.
 
 #### Teaching it your style over time
 
 Every agent that writes prose reads one file before it starts,
-[.claude/voice/profile.md](.claude/voice/profile.md), and a checker enforces what
+`.claude/voice/profile.md`, and a checker enforces what
 can be checked on every save. So the way to improve how the agents write is to
 improve that file, a little at a time, as you read their work. Five ways in, from
 the quickest:
@@ -617,7 +605,8 @@ the quickest:
    toward yours over a few rounds. Rough notes telling the agent what to write
    are treated as instructions and are not learned from as style.
 4. **Edit the rules directly.** In the app, open **Workspace → Voice →
-   profile.md**. Each save is a commit, so any change can be undone. Use this to
+   profile.md**. The file is private, so a save writes it to disk and is not
+   committed to the repository; keep your own copy if you want to undo. Use this to
    reword a rule, delete one you no longer want, or add a preference that is too
    subtle to state in a sentence of chat.
 5. **Check how a report measures up.** `python3 .claude/scripts/voice.py lint
@@ -628,8 +617,7 @@ What makes a rule stick:
 
 - **Name the construction, give an example, say what you would write instead.**
   *"No 'X, not Y' endings. 'It is a floor, not a quote' becomes 'It is a floor.'"*
-- **Say whether it is a rule or a one-off.** A rule applies to every later report
-  and letter; a one-off ("cut this sentence") is an edit and is left there. One
+- **Say whether it is a rule or a one-off.** A rule applies to every later report; a one-off ("cut this sentence") is an edit and is left there. One
   changed semicolon is never turned into a rule on a guess: you are asked, or the
   agent waits for the pattern to repeat.
 - **Rules that a script can check become hard failures** that block a report until
@@ -644,15 +632,15 @@ The rest of this section explains the machinery.
 
 Two halves, and they work differently:
 
-- **Rules you state** live in [.claude/voice/profile.md](.claude/voice/profile.md) and are enforced mechanically. Currently: no em-dashes (commas, semicolons, colons and parentheses instead), no "what matters is" formula, no "it is not X, it is Y" antithesis, no editorial adverbs, no decorative symbols, no word echoed inside a paragraph, and plain British professional vocabulary rather than literary. Tell the agent a new rule and ask it to record it; a rule that lives only in a conversation is lost by the next session.
+- **Rules you state** live in `.claude/voice/profile.md`, and the ones a script can check are enforced mechanically through patterns in `.claude/voice/rules.py`, on top of the house rules in `voice.py`. Tell the agent a new rule and ask it to record it; a rule that lives only in a conversation is lost by the next session.
 - **Cadence it observes** is measured from your own sentences: how often you reach for a semicolon, how long your sentences run, how much you bold. This is reported, never enforced, because cadence is a tendency rather than a rule.
 
-The loop runs by itself. An agent writes, then records what it wrote. You edit the document by hand, and a letter or a CV teaches it as well as a report does. The next time `/user-edits` runs, it separates your sentences from the agent's, files yours into a corpus, and re-measures. Over a few rounds the cadence targets move toward you.
+The loop runs by itself. An agent writes, then records what it wrote. You edit the document by hand. The next time `/user-edits` runs, it separates your sentences from the agent's, files yours into a corpus, and re-measures. Over a few rounds the cadence targets move toward you.
 
 Two things to know about it:
 
 - Your edits are read twice, for two different things. As **content** they are editorial direction, and `/user-edits` absorbs them. As **voice** only your finished prose counts; a rough note telling the agent what to write is content, and it gets discarded from the corpus rather than learned from.
-- The corpus is small and hand-editable on purpose. Open [.claude/voice/corpus/](.claude/voice/corpus/) and delete anything that is not a sample of how you write.
+- The corpus is small and hand-editable on purpose. Open `.claude/voice/corpus/` and delete anything that is not a sample of how you write.
 
 #### Teaching it a rule
 
@@ -666,8 +654,8 @@ session:
 you   I never write "leverage" as a verb. Record that.
 
       Added to .claude/voice/profile.md under Stated rules (2026-08-15) and to
-      the HARD list in voice.py. It now fails the gate rather than relying on
-      an agent remembering.
+      the HARD list in .claude/voice/rules.py. It now fails the gate rather
+      than relying on an agent remembering.
 ```
 
 A rule is never guessed from one edit. If you replace a single semicolon with a full stop, nothing is inferred; you get asked, or it waits for the pattern to repeat.
@@ -1210,7 +1198,7 @@ You can call one directly — "have the report-critic look at this draft" — fo
 | How follow-up research is reconciled | [.claude/skills/expand/SKILL.md](.claude/skills/expand/SKILL.md) |
 | How your own edits are absorbed | [.claude/skills/user-edits/SKILL.md](.claude/skills/user-edits/SKILL.md) |
 | What counts as an agent artifact | [.claude/scripts/audit_citations.py](.claude/scripts/audit_citations.py) — `ARTIFACTS` and `SLOP` |
-| Your writing rules | [.claude/voice/profile.md](.claude/voice/profile.md) for the prose; [.claude/scripts/voice.py](.claude/scripts/voice.py) `HARD` for the patterns that are checked |
+| Your writing rules | `.claude/voice/profile.md` for the prose; `.claude/voice/rules.py` for the patterns that check them (both private, see [Building your own voice](#building-your-own-voice)); [.claude/scripts/voice.py](.claude/scripts/voice.py) `HARD` for the house rules |
 | How much explaining a report does | [.claude/references/voice.md](.claude/references/voice.md) — the two narration modes |
 | How supplied sources are handled | [.claude/references/external-data.md](.claude/references/external-data.md) |
 | Handling of data that couldn't be obtained | [.claude/references/gaps.md](.claude/references/gaps.md) |
@@ -1224,8 +1212,7 @@ Skills are Markdown with YAML frontmatter. The `description` field is what Claud
 ## Running the audit yourself
 
 The checks run on their own. A hook fires after every write an agent makes to a
-run's master document, `report.md` and `draft.md` for research and the piece
-itself for a letter or a CV. It runs the voice lint, the citation audit and the
+run's master document, `report.md` or `draft.md`. It runs the voice lint, the citation audit and the
 figure check together, and hands any hard failure straight back to the agent to
 fix. You do not have to ask for it and an agent cannot skip it.
 

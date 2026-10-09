@@ -97,11 +97,12 @@ export default function Sidebar() {
   });
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const removeRun = useMutation({
-    mutationFn: (name: string) => api.del(`/api/runs/${encodeURIComponent(name)}`),
-    onSuccess: (_, name) => {
+    mutationFn: (name: string) => api.del<{ removed_sessions: string[] }>(`/api/runs/${encodeURIComponent(name)}`),
+    onSuccess: (res, name) => {
       void client.invalidateQueries({ queryKey: ["runs"] });
       void client.invalidateQueries({ queryKey: ["exports"] });
-      if (view.kind === "run" && view.name === name) setView({ kind: "home" });
+      void client.invalidateQueries({ queryKey: ["sessions"] });
+      if ((view.kind === "run" && view.name === name) || (view.kind === "session" && res.removed_sessions.includes(view.id))) setView({ kind: "home" });
     },
   });
   const toggle = (key: keyof typeof open) => setOpen((o) => ({ ...o, [key]: !o[key] }));
@@ -173,14 +174,14 @@ export default function Sidebar() {
                   <button className="min-w-0 flex-1 text-left" onClick={() => setView({ kind: "run", name: r.name })} title={r.prompt}>
                     <div className="truncate">{r.name.slice(11)}</div>
                     <div className="text-[11px] text-faint">
-                      {r.name.slice(0, 10)} · {r.kind === "compose" ? r.doc_kind : "research"}
+                      {r.name.slice(0, 10)}
                     </div>
                   </button>
                   <button
                     title="Remove this project (moves it to the Trash)"
                     className="hidden text-faint hover:text-bad group-hover:block"
                     onClick={() => {
-                      if (window.confirm(`Remove ${r.name} from the workspace? The folder moves to the Trash, so you can still restore it from there.`)) removeRun.mutate(r.name);
+                      if (window.confirm(`Remove ${r.name}? Its folder moves to the Trash, where you can still restore it. Its conversations and cached renders are deleted.`)) removeRun.mutate(r.name);
                     }}
                   >
                     <Trash2 size={13} />

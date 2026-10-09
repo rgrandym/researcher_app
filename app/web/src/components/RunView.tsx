@@ -156,10 +156,10 @@ function EditPane({ run, path, onSaved }: { run: string; path: string; onSaved: 
   );
 }
 
-function HtmlPane({ run, compose, version }: { run: string; compose: boolean; version: number }) {
+function HtmlPane({ run, version }: { run: string; version: number }) {
   const styles = useQuery({ queryKey: ["styles"], queryFn: () => api.get<{ name: string; description: string }[]>("/api/styles"), staleTime: Infinity });
   const [style, setStyleState] = useState(() => place(run).style ?? "meridian");
-  const [cite, setCiteState] = useState(() => place(run).cite ?? !compose);
+  const [cite, setCiteState] = useState(() => place(run).cite ?? true);
   const setStyle = (v: string) => {
     setStyleState(v);
     remember(run, { style: v });
@@ -214,15 +214,11 @@ function HtmlPane({ run, compose, version }: { run: string; compose: boolean; ve
             </option>
           ))}
         </select>
-        {!compose && (
-          <>
-            <label className="ml-2 text-faint">Citations</label>
-            <select value={cite ? "cited" : "ids"} onChange={(e) => setCite(e.target.value === "cited")} className="rounded-md border border-border bg-surface px-2 py-1">
-              <option value="cited">Author and year</option>
-              <option value="ids">Evidence IDs</option>
-            </select>
-          </>
-        )}
+        <label className="ml-2 text-faint">Citations</label>
+        <select value={cite ? "cited" : "ids"} onChange={(e) => setCite(e.target.value === "cited")} className="rounded-md border border-border bg-surface px-2 py-1">
+          <option value="cited">Author and year</option>
+          <option value="ids">Evidence IDs</option>
+        </select>
         <button onClick={() => void rendered.refetch()} title="Render again" className="rounded-md p-1 text-faint hover:text-fg">
           <RefreshCw size={13} className={clsx(rendered.isFetching && "animate-spin")} />
         </button>
@@ -350,6 +346,7 @@ export default function RunView({ name, file }: { name: string; file?: string })
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: ["runs"] });
       void client.invalidateQueries({ queryKey: ["exports"] });
+      void client.invalidateQueries({ queryKey: ["sessions"] });
       setView({ kind: "home" });
     },
   });
@@ -380,7 +377,6 @@ export default function RunView({ name, file }: { name: string; file?: string })
   if (run.isError) return <div className="p-6 text-bad">{(run.error as Error).message}</div>;
   if (!data) return <div className="p-6 text-faint">Loading…</div>;
   const primary = data.meta.primary;
-  const compose = data.meta.kind === "compose";
   const editing = editPath ?? primary ?? undefined;
   const onSaved = () => {
     setVersion((v) => v + 1);
@@ -401,7 +397,7 @@ export default function RunView({ name, file }: { name: string; file?: string })
         <div className="flex items-center gap-2 border-b border-border px-5 py-2">
           <div className="min-w-0 flex-1">
             <div className="text-[11.5px] text-faint">
-              {compose ? `Compose · ${data.meta.doc_kind ?? "piece"}` : "Research"} · {data.evidence_rows} evidence rows · {data.notes} notes
+              Research · {data.evidence_rows} evidence rows · {data.notes} notes
             </div>
             <div className="truncate text-[15px] font-medium">{name}</div>
           </div>
@@ -422,7 +418,7 @@ export default function RunView({ name, file }: { name: string; file?: string })
           )}
           <button
             onClick={() => {
-              if (window.confirm(`Remove ${name} from the workspace? The folder moves to the Trash, so you can still restore it from there.`)) remove.mutate();
+              if (window.confirm(`Remove ${name}? Its folder moves to the Trash, where you can still restore it. Its conversations and cached renders are deleted.`)) remove.mutate();
             }}
             className="flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-[12px] text-bad hover:border-bad"
           >
@@ -457,7 +453,7 @@ export default function RunView({ name, file }: { name: string; file?: string })
             ) : (
               <div className="p-6 text-[13px] text-faint">{openChat.isError ? (openChat.error as Error).message : "Opening the project's conversation…"}</div>
             ))}
-          {tab === "html" && <HtmlPane run={name} compose={compose} version={version} />}
+          {tab === "html" && <HtmlPane run={name} version={version} />}
           {tab === "edit" && editing && <EditPane run={name} path={editing} onSaved={onSaved} />}
           {(tab === "document" || tab === "file") && (
             <div ref={reader} onScroll={(e) => rememberScroll(name, readerKey, e.currentTarget.scrollTop)} className="scroll-thin h-full overflow-y-auto">

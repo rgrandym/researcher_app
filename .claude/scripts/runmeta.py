@@ -3,20 +3,14 @@
 
     python3 .claude/scripts/runmeta.py <run>              # print the metadata
     python3 .claude/scripts/runmeta.py <run> --masters    # one path per line
-    python3 .claude/scripts/runmeta.py <run> --kind       # research | compose
+    python3 .claude/scripts/runmeta.py <run> --kind       # research
 
-A run holds a research report or a written piece, and the two are checked
-differently: a report is gated on evidence, coverage and a verification ledger,
-while a cover letter is gated on voice and on the author's own record. The
-distinction is recorded once, in `<run>/.run.json`, and every script reads it
-from here rather than matching on filenames.
+Which documents are a run's masters, read in one place so every script follows
+the same answer rather than matching on filenames. A run with no `.run.json` (the
+normal case) is a research run whose masters are report.md and draft.md; a
+`.run.json` can name other masters:
 
-    {"kind": "compose", "doc_kind": "cover-letter",
-     "masters": ["cover-letter.md"], "created": "2026-08-28"}
-
-A run with no `.run.json` is a research run whose masters are report.md and
-draft.md, which is what every run in this workspace was before compose existed.
-Nothing has to be migrated.
+    {"kind": "research", "masters": ["report.md", "draft.md"]}
 """
 import json
 import sys

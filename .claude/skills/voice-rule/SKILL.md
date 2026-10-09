@@ -19,9 +19,9 @@ wouldn't say it like that"*, and *"stop doing X"* are all rules.
 One line, and wait for the answer when anything is ambiguous. The distinction
 that matters is scope:
 
-- **A ban** applies everywhere and goes to `HARD` in `voice.py`.
-- **A preference** is right most of the time and goes to `SHAPE`, which is
-  advisory.
+- **A ban** applies everywhere and goes to `HARD` in `.claude/voice/rules.py`.
+- **A preference** is right most of the time and goes to `SHAPE` in the same
+  file, which is advisory.
 - **A one-off** is a reaction to a single sentence. Fix the sentence, record
   nothing. Ask if you cannot tell.
 
@@ -44,9 +44,15 @@ appending it to the end.
 ## 3. Make it mechanical, when it can be
 
 A rule the linter cannot see is a rule that will be broken. Add a pattern to
-`.claude/scripts/voice.py`: `HARD` for a ban, `SHAPE` for a preference. Each
-entry is a compiled regex and the instruction that replaces it, written as a
-repair rather than a complaint: *"em-dash. Use a comma, a semicolon, a colon,
+`.claude/voice/rules.py`: `HARD` for a ban, `SHAPE` for a preference.
+`voice.py` loads that file on every lint and adds its lists to the house rules.
+Like the profile, it is personal and kept out of the repository, so **never
+write the author's rules into `.claude/scripts/voice.py`**: that file is
+published, and its lists hold only the house rules every user gets. If
+`rules.py` is missing, create it with a short docstring and empty `HARD = []`
+and `SHAPE = []` lists; `re` is already in scope. Each entry is a compiled regex
+and the instruction that replaces it, written as a repair rather than a
+complaint: *"em-dash. Use a comma, a semicolon, a colon,
 or parentheses"* tells the writer what to do.
 
 **Test the pattern against real prose before you finish**, both directions:
@@ -66,7 +72,7 @@ and say plainly that no pattern enforces them.
 
 ## 4. Report back
 
-Three lines: the rule as recorded, where it went (`HARD`, `SHAPE`, or profile
-only), and what the test found. If the new pattern flags existing reports, say
+Three lines: the rule as recorded, where it went (`HARD` or `SHAPE` in
+`rules.py`, or profile only), and what the test found. If the new pattern flags existing reports, say
 how many hits and offer to fix them; do not go and rewrite a finished document
 on the strength of a rule recorded a minute ago.

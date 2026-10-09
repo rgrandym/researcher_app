@@ -69,9 +69,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "activity_open": True,
         "run_panel_open": True,
     },
-    # Workspace commands this app does not offer: the job-application side of the compose
-    # lane. They stay usable in VS Code; here they leave the menu and a typed one is refused.
-    "hidden_commands": ["compose", "cv", "cover-letter", "answer"],
+    # Workspace commands this app does not offer: they leave the menu, and a typed one is
+    # refused. Empty by default.
+    "hidden_commands": [],
     # Model routing (backend/router.py): the command a turn starts with picks a tier and an
     # effort, and each runtime maps the tiers to its models. Off: the connection decides.
     "routing": {
@@ -95,7 +95,6 @@ DEFAULT_SETTINGS: dict[str, Any] = {
                     "repair",
                     "user-edits",
                     "narrator",
-                    "develop",
                     "polish",
                 )
             },

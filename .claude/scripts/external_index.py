@@ -52,14 +52,12 @@ IMAGE = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".tif", ".tiff", ".heic"}
 def ext_dir(run):
     """The folder of supplied files this index covers.
 
-    A research run keeps them in `external_data/`; a compose run keeps the
-    brief for one piece in `source_material/`; the standing dossier of the
-    author's own record is itself a folder of files and is scanned directly.
+    A run keeps them in `external_data/`.
     Falling back to the argument only when it holds no prompt.md keeps this
     from ever indexing a run folder whole.
     """
     run = Path(run)
-    for name in ("external_data", "source_material"):
+    for name in ("external_data",):
         if (run / name).is_dir():
             return run / name
     if not (run / "prompt.md").exists():

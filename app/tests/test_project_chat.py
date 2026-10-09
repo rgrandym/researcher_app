@@ -6,10 +6,11 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
 from conftest import RUN, FakeProvider
 from test_turns import _settle
 
-from backend import main, sessions
+from backend import config, main, sessions
 from backend.turns import TurnManager
 
 
@@ -44,3 +45,31 @@ def test_new_agent_conversations_are_told_the_project(root: Path) -> None:
 
     asyncio.run(go())
     assert sessions.load(sid).project == RUN
+
+
+def test_removing_a_project_takes_its_conversations_and_caches(
+    root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "home").mkdir()
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    chat = main.project_chat(RUN, main.ProjectChat())["id"]
+    only = sessions.create("about this run")
+    only.runs = [RUN]
+    sessions.save(only)
+    both = sessions.create("two runs")
+    both.runs = [RUN, "2026-01-16-other"]
+    sessions.save(both)
+    cache = config.DATA / "render" / RUN / "meridian-cited"
+    cache.mkdir(parents=True)
+    (cache / "report.html").write_text("<p>cached</p>")
+    lock = config.data_dir("locks") / f"{RUN}.lock"
+    lock.write_text("{}")
+
+    res = main.delete_run(RUN)
+    assert set(res["removed_sessions"]) == {chat, only.id}
+    ids = {s["id"] for s in sessions.list_all()}
+    assert chat not in ids and only.id not in ids and both.id in ids
+    assert sessions.load(both.id).runs == ["2026-01-16-other"]
+    assert not (config.DATA / "render" / RUN).exists() and not lock.exists()
+    assert not (root / "outputs" / RUN).exists()
+    assert (tmp_path / "home" / ".Trash" / RUN / "prompt.md").is_file()

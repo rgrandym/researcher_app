@@ -99,7 +99,7 @@ Record the decision in `<run>/voice.md`:
 **Citation system:** house
 **Audience:** founders and investors; no battery-chemistry background assumed
 **Chosen:** 2026-08-15, by the user at drafting
-**Profile:** .claude/voice/profile.md (rev 2026-08-15)
+**Profile:** .claude/voice/profile.md
 ```
 
 Three of those fields are decided once and read by every later round rather than

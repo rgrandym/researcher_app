@@ -25,4 +25,4 @@ How this workspace maps onto your tools:
   is missing with `python3 .claude/scripts/wanted.py`.
 
 Write every run's files under `outputs/<date>-<slug>/`, scaffolded with
-`.claude/scripts/new_run.sh` or `.claude/scripts/new_piece.sh` as the skill says.
+`.claude/scripts/new_run.sh` as the skill says.

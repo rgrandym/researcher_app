@@ -95,8 +95,7 @@ British, and unadorned.
 - **Connective adverbs are the author's own** and are not downgraded to the
   plain ones. *Nevertheless*, *however*, *therefore*, *accordingly*,
   *moreover*, *furthermore* and *importantly* open paragraphs and join clauses
-  in this register (profile, *Connective tissue*, and rule 3 as overturned
-  2026-08-28). The one check they face is whether the relation they name is the
+  in this register (profile, *Connective tissue*). The one check they face is whether the relation they name is the
   relation the sentences actually have.
 
 Concision is part of register. A sentence that has said its thing stops.
@@ -175,8 +174,9 @@ needs:
   *the buyer pays for the guarantee offered by the supplier*. Rebuild by
   promoting the noun inside the clause to subject and its verb to main verb.
   The fronting word varies (*what*, *all that*, *the reason why*, *the thing
-  that*) and the repair does not. `voice.py lint` reports it as `VOICE`,
-  clause-initial only, so questions are untouched. Profile, 2026-08-24.
+  that*) and the repair does not. When the author's rules make it a ban,
+  `voice.py lint` reports it as `VOICE`, clause-initial only, so questions are
+  untouched.
 - **The abstract-subject colon reveal.** "The benefit is broad by construction:
   defined raw materials lower the barrier." The subject is a nominalisation and
   the verb is a copula, so the first clause says nothing and the colon then

@@ -18,7 +18,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import biblio  # noqa: E402
-import runmeta  # noqa: E402
 
 REQUIRED = ("id", "claim", "quote", "url", "accessed", "type")
 CITE = re.compile(r"\[(E\d+)\]")
@@ -108,12 +107,6 @@ def main():
         sys.exit(__doc__)
     run = Path(sys.argv[1])
     draft = run / (sys.argv[2] if len(sys.argv) > 2 else "draft.md")
-    # A written piece cites nothing in its text on purpose: a cover letter that
-    # says (Smith 2024) is not a cover letter. Its evidence rows back the
-    # author's statements in the ledger and in chat, so the two checks that
-    # assume a report (every paragraph cites, every row is used) are off here.
-    compose = runmeta.meta(run)["kind"] == "compose"
-
     rows, problems = load_evidence(run / "evidence.jsonl")
 
     # duplicate fetches of the same URL
@@ -158,16 +151,13 @@ def main():
         for ref in sorted((cited | listed) - set(rows), key=lambda s: int(s[1:])):
             problems.append(f"ERROR {draft.name} cites {ref} with no row in evidence.jsonl (fabricated citation?)")
         for ref in sorted(set(rows) - cited, key=lambda s: int(s[1:])):
-            if not compose:
-                problems.append(f"INFO  {ref} gathered but unused")
+            problems.append(f"INFO  {ref} gathered but unused")
 
         problems += scan_artifacts(text, draft.name)
 
         # paragraphs of prose carrying no citation and no hedge marker
         # (figure blocks are data, not prose — their citations live in `source`)
         for para in [p.strip() for p in FIGURE.sub("", text).split("\n\n")]:
-            if compose:
-                break
             if len(para) < 120 or para.startswith(("#", "|", "```", ">", "-", "*")):
                 continue
             if not CITE.search(para) and not UNVERIFIED.search(para):

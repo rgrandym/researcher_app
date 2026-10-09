@@ -48,9 +48,10 @@ PROFILE = VOICE / "profile.md"
 MEASURED = VOICE / "measured.json"
 
 # ---------------------------------------------------------------- hard bans
-# Each entry: (compiled pattern, what to write instead). These are the user's
-# stated preferences plus the constructions that most reliably read as machine
-# prose. A hit is a defect, not a suggestion.
+# Each entry: (compiled pattern, what to write instead). These are the house
+# rules: the constructions that most reliably read as machine prose. The
+# author's own rules are added from `.claude/voice/rules.py` (see below). A hit
+# is a defect, not a suggestion.
 HARD = [
     (re.compile(r"\s—\s|^—\s|\s—$|\w—\w"),
      "em-dash. Use a comma, a semicolon, a colon, or parentheses"),
@@ -62,34 +63,6 @@ HARD = [
      "'matters more/most' formula. Rank the things explicitly"),
     (re.compile(r"\bthe (?:part|thing|question|point|one) that matters\b", re.I),
      "'the thing that matters'. Name it directly"),
-    # The wh-clause subject, stated by the author 2026-08-28: a headless
-    # relative clause standing as the subject of a lexical verb ("How the two
-    # chains are held together then varies"). Same demotion as the pseudo-cleft
-    # below, which only covers the copula form. Clause-initial and comma-free,
-    # so a fronted adverbial ("When the material degrades, the read-out moves")
-    # and a real question both pass.
-    (re.compile(r"(?:^|(?<=[.;:!?]\s)|(?<=[.;:!?]\s\s))"
-                r"(?<![0-9]\.\s)"          # not a numbered heading: "## 7. What would…"
-                r"(?:How|Where|When|Why|Whether|Which|What)\s+"
-                r"[^,.;:!?\n]{5,70}?\s(?:then\s+|therefore\s+|also\s+)?"
-                r"(?:varies|vary|differs|differ|determines|determine|depends|"
-                r"depend|decides|decide|governs|govern|dictates|dictate|drives|"
-                r"drive|changes|change|matters|matter|remains|remain|follows|"
-                r"follow|shapes|shape|explains|explain|predicts|predict)\b"
-                r"(?!\s*\?)"),
-     "wh-clause subject. Name the thing and let it act: 'How the two chains "
-     "are held together then varies' \u2192 'The mechanisms holding the two "
-     "chains together vary with the sequence'. Give it a head noun, and say "
-     "what it varies with"),
-    # The pseudo-cleft, stated by the author 2026-08-24. Clause-initial only,
-    # so an embedded question ("it is unclear what the driver is") and a real
-    # question ("What is the mechanism?") both pass.
-    (re.compile(r"(?:^|(?<=[.;:!?]\s)|(?<=[.;:!?]\s\s))"
-                r"(?:What|All that|The (?:thing|part|point|reason) (?:that|why))\s+"
-                r"[^.;:!?\n]{2,60}?\s(?:is|are|was|were)\b(?!\s*(?:\?|that\b))"),
-     "pseudo-cleft. Put the subject first and let it act: "
-     "'What the buyer pays for is the guarantee the supplier offers' → "
-     "'The buyer pays for the guarantee offered by the supplier'"),
     (re.compile(r"\b(?:is|are|was|were|it'?s|that'?s)\s+not\s+(?:just\s+)?[^.,;:]{1,60},\s*(?:it'?s|they'?re|that'?s|but)\b", re.I),
      "'not X, it is Y' antithesis. State Y and drop the setup"),
     (re.compile(r"\bnot (?:only|just) [^.;:]{1,60}\b(?:but|;)\s*(?:also\s+)?", re.I),
@@ -108,10 +81,6 @@ HARD = [
      "conversational hook. Delete and start with the claim"),
     (re.compile(r"\b(?:at its core|make no mistake|the (?:hard|simple|uncomfortable) truth|let'?s be clear|the reality is)\b", re.I),
      "rhetorical stiffener. Delete it"),
-    # Editorial adverbs were banned here until 2026-08-28, when the author
-    # overturned it: "Importantly", "Furthermore" and their kind are how they
-    # join sentences, and they are part of the register. Nothing replaces this
-    # entry. See profile.md rule 3 and the Connective tissue section.
     (re.compile(r"\bis (?:a|the) testament to\b|\bspeaks volumes\b|\bunderscore[sd]?\b|\bdelve into\b", re.I),
      "stock phrase"),
     (re.compile(r"\b(?:double-edged sword|the elephant in the room|low-hanging fruit|move the needle|paradigm shift)\b", re.I),
@@ -145,22 +114,11 @@ SHAPE = [
     (re.compile(r",\s*so\s+[^.;:!?]{0,70}(?=[.!?]|$)", re.I),
      "trailing 'so' clause. Check it adds a fact the reader did not already "
      "have from the clause before it"),
-    # The narrator's "we", which the author replaced with "I" (profile,
-    # 2026-08-19). Deliberately narrow: it matches research-narration verbs
-    # only, so the company "we" ("if we can secure a second supplier") and a quoted
-    # "we" both pass. Advisory, because judging which "we" is speaking needs a
-    # reader.
-    (re.compile(r"\b(?:we|our)\s+(?:could not|cannot|can't|were unable to|"
-                r"found|find|searched|looked|located|assessed|examined|"
-                r"analysis|estimate|estimated|assume|assumed|show|showed|"
-                r"argue|argued|conclude|concluded|report|reported)\b", re.I),
-     "editorial 'we'. The narrator of this report is 'I'. A company 'we' and a "
-     "quoted 'we' are both fine; this is the research talking about itself"),
 ]
 
 # The elliptical echo: a negated sentence answered by a short pro-verb sentence
 # that repeats its verb ("Its magnitude does not transfer. The mechanism does.").
-# The mechanically visible case of the punch-line rule (profile, 2026-08-28).
+# The mechanically visible case of the punch-line rule.
 # Needs the sentence before it, so it is checked separately from SHAPE.
 ELLIPTIC_ECHO = re.compile(
     r"^(?:The|That|This|These|Those|It|Its|They|Their|Both|Each)\s+"
@@ -168,6 +126,29 @@ ELLIPTIC_ECHO = re.compile(
     r"(?:does|do|did|is|are|was|were|can|could|will|would|has|have|had)\.$")
 ELLIPTIC_NEG = re.compile(
     r"\b(?:not|never|no|nothing|neither|cannot)\b", re.I)
+
+# ---------------------------------------------------------------- author rules
+# The author's own patterns live in `.claude/voice/rules.py`, which is personal
+# and kept out of the repository beside `profile.md`. It defines `HARD` and/or
+# `SHAPE` lists in the same (compiled pattern, instruction) form as above, with
+# `re` already imported. `/voice-rule` creates it with the first checkable rule.
+RULES = VOICE / "rules.py"
+
+
+def _author_rules():
+    if not RULES.exists():
+        return [], []
+    ns = {"re": re}
+    try:
+        exec(compile(RULES.read_text(), str(RULES), "exec"), ns)
+    except Exception as exc:
+        sys.exit(f"voice.py: {RULES} does not load: {exc}")
+    return list(ns.get("HARD", [])), list(ns.get("SHAPE", []))
+
+
+_hard, _shape = _author_rules()
+HARD += _hard
+SHAPE += _shape
 
 # ---------------------------------------------------------------- soft ratios
 # Reported, never fatal. Defaults are seeded and then overwritten by

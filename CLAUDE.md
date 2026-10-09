@@ -1,13 +1,7 @@
 # Research Workspace
 
-This workspace produces two things, in two lanes that share one set of rules:
-
-- **Cited research reports.** `/research` → `report.md`, accountable to evidence
-  about the world.
-- **Writing the author signs and sends**: a CV against a posting, a cover
-  letter, an application answer, a statement, a draft of theirs developed into
-  finished prose. `/compose` → a piece, accountable to the author's own record
-  in `dossier/` and to the reader it is aimed at.
+This workspace produces **cited research reports**: `/research` → `report.md`,
+accountable to evidence about the world.
 
 Human-facing docs: [USERGUIDE.md](USERGUIDE.md).
 
@@ -38,31 +32,25 @@ from evidence, never from restatement or filler.
 7. **What the author writes into the report is direction: preserve the concept,
    not the sentence.** Their additions, deletions and rewrites stand. If the
    evidence contradicts them, leave their text and flag it in chat.
-8. **Facts about the author come from `dossier/`, never from memory.** A date,
-   employer, title, figure, degree or publication appears in a CV, a letter or
-   an answer because a file in that folder says so. Rule 1 in the other lane.
-   The author asserting something about their own life is itself a source; file
-   it in the dossier so the next piece has it.
-9. **Scale the response to the question.** A fact gets a few plain sentences in
+8. **Scale the response to the question.** A fact gets a few plain sentences in
    chat and no run folder; a decision-grade question gets the full pipeline.
    State the tier and say when it moves. Plain language is never lower
    standards, and a small question yields no report rather than a simplified
-   one. The same scale runs in the compose lane: rewording a sentence is a chat
-   answer, and a letter someone will read is a run folder with a review.
-   **Runs start only from a command the author types.** A message without one is
+   one. **Runs start only from a command the author types.** A message without one is
    a chat question: answer it at Tier 0 or 1 with a few searches at most, scaffold
    nothing, spawn no scouts, and when it deserves more, name the command that
    would do it (`/research`, `/verify`, `/expand`).
    Doctrine: `.claude/references/response-scale.md`.
-10. **Today's date is in context and the knowledge cutoff is not the present.**
+9. **Today's date is in context and the knowledge cutoff is not the present.**
    Anything time-sensitive gets fetched.
 
 ## Voice
 
-The author's writing rules live in `.claude/voice/profile.md` and nowhere else.
-The file is personal and not in the repository; when it does not exist, write to
-the house rules that `voice.py lint` enforces, and `/voice-rule` creates it with
-the author's first rule.
+The author's writing rules live in `.claude/voice/profile.md` and nowhere else;
+the lint patterns that check them live in `.claude/voice/rules.py`, never in
+`voice.py`. Both files are personal and not in the repository; when the profile
+does not exist, write to the house rules that `voice.py lint` enforces, and
+`/voice-rule` creates it with the author's first rule.
 Read that file before writing prose. The register is plain professional British
 English for an educated reader.
 
@@ -97,24 +85,17 @@ clean result, and the author's next save overwrites the agent's work.
 **Research:** `/research` → `/report` → `/verify` → `/critique` → `/repair`,
 then `/export` and `/expand` on request.
 
-**Compose:** `/compose` (or `/cv`, `/cover-letter`, `/answer`, `/develop`,
-`/polish`) reads `dossier/` and the run's `source_material/`, writes the piece,
-takes an independent review, and exports to md, docx and pdf. `/user-edits` and
-`/export` serve both lanes and act on whichever master the run declares in
-`.run.json`. `/verify` runs inside a compose run when the author asks for a
-claim to be checked; the evidence stays in the ledger and out of the text.
-
-Run the research lane end to end with `/research-pipeline`. `/narrator` decides
+Run the pipeline end to end with `/research-pipeline`. `/narrator` decides
 who the report is written for and is consulted before the first draft.
-`/user-edits` absorbs what the author wrote by hand into whichever master the
-run declares. `/visualize` governs tables and charts.
+`/user-edits` absorbs what the author wrote by hand into the report.
+`/visualize` governs tables and charts, and `/figures` improves them on request.
+`/polish` rewrites a passage in the author's voice without changing its claims.
 
 Each stage is a skill in `.claude/skills/`. Doctrine shared by several of them
 lives in `.claude/references/` and is **pointed to, never restated**: a rule
 written in five places gets reconciled rather than obeyed.
 
-A run has one master document, always current: `report.md` for research, and
-the piece itself for a compose run. `draft.md` is promoted to `report.md` once,
+A run has one master document, always current: `report.md`. `draft.md` is promoted to `report.md` once,
 during the first repair; every later edit is made to the master in place.
 Exports are derived copies.
 
@@ -125,12 +106,11 @@ and nothing from a run is written anywhere else. Scaffold it with:
 
 ```bash
 bash .claude/scripts/new_run.sh "<slug>" "<the user's prompt, verbatim>"
-bash .claude/scripts/new_piece.sh <kind> "<slug>" "<prompt>"   # cv · cover-letter · answer · statement · piece
 ```
 
-`.run.json` records which lane the run is in and which document is its master.
-Every script reads it through `runmeta.py`, so the gates, the save check, the
-edit absorption and the export all follow the piece without being told its name.
+Which documents are a run's masters is read through `runmeta.py` (from
+`.run.json` when a run has one), so the gates, the save check, the edit absorption
+and the export all agree on what to act on.
 
 `prompt.md` is written first, before any searching, and holds the request word
 for word. A run you cannot trace back to what was asked cannot be audited.
@@ -144,11 +124,6 @@ report.md  figures/  rounds/rN/  export/<style>/
 Keep every intermediate file: they are the reason a claim can be defended six
 months later. `/expand` never scaffolds a new folder; it opens `rounds/rN/`
 inside the original run and edits `report.md` in place.
-
-A compose run is lighter: `prompt.md`, `context.md` (reader, purpose, the line,
-constraints), `source_material/`, the master named for its kind, `review.md`,
-`export/`. The standing record it draws on is `dossier/`, which is shared by
-every piece and is never written to by a run.
 
 Sources the author supplies live in `<run>/external_data/`, are indexed by
 content hash, and are read exactly once. A supplied file nobody read is the same

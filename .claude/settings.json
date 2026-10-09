@@ -27,7 +27,7 @@
     "flightdeck@claude-flightdeck": true,
     "statuspane@claude-statuspane": true,
     "effort-cycle@anerco": true,
-    "launch-codes@claude-code-mods": true
+    "launch-codes@claude-code-mods": false
   },
   "extraKnownMarketplaces": {
     "claude-flightdeck": {
@@ -58,6 +58,39 @@
   "permissions": {
     "allow": [
       "Bash(python3 .claude/scripts/*)"
+    ],
+    "ask": [
+      "Bash(rm *)",
+      "Bash(rmdir *)",
+      "Bash(unlink *)",
+      "Bash(trash *)",
+      "Bash(shred *)",
+      "Bash(git rm *)",
+      "Bash(git clean *)",
+      "Bash(find * -delete*)",
+      "Bash(find * -exec rm *)",
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(git push * --force*)",
+      "Bash(git push * -f*)",
+      "Bash(git reset --hard*)",
+      "Bash(git reset * --hard*)",
+      "Bash(*DROP TABLE*)",
+      "Bash(*DROP DATABASE*)",
+      "Bash(*TRUNCATE*)",
+      "Bash(*drop table*)",
+      "Bash(*drop database*)",
+      "Bash(*truncate table*)",
+      "Bash(supabase db reset*)",
+      "Bash(vercel --prod*)",
+      "Bash(vercel * --prod*)",
+      "Bash(chmod -R 777*)",
+      "Bash(chmod * 777*)",
+      "Bash(sh)",
+      "Bash(bash)",
+      "Bash(zsh)",
+      "Bash(sh -s*)",
+      "Bash(bash -s*)"
     ]
   }
 }

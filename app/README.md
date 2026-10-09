@@ -104,7 +104,7 @@ the HTML re-renders from the saved file. No model call is involved in any of thi
 Each turn's model and effort follow the command it starts with (`backend/router.py`).
 Research, drafting, critique and repair run on the frontier tier (Opus, `gpt-6-astra`);
 `/verify`, `/export` and plain chat on the workhorse tier (Sonnet, `gpt-6.1-sol`);
-`/app` questions on the fast tier (Haiku 4.5, `gpt-6-luna`). The maps are in Models
+`/app` questions on the fast tier (Haiku, `gpt-6-luna`). The maps are in Models
 and in `app/data/settings.json` under `routing`; turning routing off returns every turn
 to the connection's own model and the effort meter. Each turn's route shows as a faint
 line in the transcript.
@@ -123,10 +123,8 @@ conversation: gather, draft, review, finish. When a turn ends, `turns.py` checks
 files through `run_check.py`; a complete stage starts the next, an incomplete one waits for
 the author. The session's `pipeline` field records where it is.
 
-The app is for research. The job-application commands (`/cv`, `/cover-letter`,
-`/answer`, and `/compose` behind them) are left out of its command menu and refused if
-typed; they still work in VS Code. The list is `hidden_commands` in
-`app/data/settings.json`.
+Commands listed under `hidden_commands` in `app/data/settings.json` leave the command
+menu and are refused if typed; the list is empty by default.
 
 The app spends model tokens only when you send a turn. Titles, listings, stage status,
 handoff packets and limit detection are built by code. "Test" on a connection checks

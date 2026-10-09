@@ -139,11 +139,13 @@ def test_command_starts_a_fresh_conversation_on_the_run(root: Path) -> None:
     asyncio.run(go())
 
 
-def test_application_commands_are_not_part_of_the_app(root: Path) -> None:
+def test_hidden_commands_leave_the_menu_and_are_refused(root: Path) -> None:
     from backend import main
     from backend.providers.base import ProviderError
 
-    hidden = {"compose", "cv", "cover-letter", "answer"}
+    assert config.load_settings()["hidden_commands"] == []
+    hidden = {"figures"}
+    config.save_settings({"hidden_commands": sorted(hidden)})
     offered = {c["name"] for c in main.commands()}
     assert offered.isdisjoint(hidden)
     assert offered == {c["name"] for c in workspace.commands()} - hidden
@@ -154,7 +156,7 @@ def test_application_commands_are_not_part_of_the_app(root: Path) -> None:
     async def go() -> None:
         s = sessions.create()
         try:
-            await m.send(s.id, "/cover-letter for the post", "claude-sub")
+            await m.send(s.id, "/figures F4 horizontal", "claude-sub")
         except ProviderError as exc:
             assert "not part of this app" in str(exc)
         else:

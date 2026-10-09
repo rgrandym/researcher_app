@@ -10,19 +10,6 @@ Format and style conversion, nothing else. Never fix, rewrite, or trim content
 during an export — if the content is wrong, that is `/repair`'s job, and exporting
 first just produces a polished wrong document.
 
-## Two kinds of run, and the gate differs
-
-```bash
-python3 .claude/scripts/runmeta.py <run> --kind      # research | compose
-```
-
-A **research** run exports `report.md` through the full pipeline below: figures
-rendered, evidence IDs resolved into citations, reference list rebuilt. A
-**compose** run exports a written piece (a CV, a letter, an answer) and skips
-both of those steps, because the piece carries no figure blocks and no `[E#]`
-markers by design. See "Exporting a written piece" at the end of this file, and
-do not run steps 1 and 2 on one.
-
 ## Gate
 
 Export only content that has passed verification. Before converting, confirm:
@@ -260,52 +247,6 @@ per slide where it carries the point, evidence IDs retained, and a final sources
 slide. Set `"chart_title": true` on figures headed for a deck so each chart states
 its own message when it appears without surrounding prose. State that you
 restructured rather than dumping the report into `-t pptx`.
-
-## Exporting a written piece
-
-A compose run (`runmeta.py <run> --kind` prints `compose`) exports its master
-straight from Markdown. There are no charts to render and no citations to
-resolve, so steps 1 and 2 of the pipeline above do not apply.
-
-```bash
-run=outputs/<slug>
-doc=$(python3 .claude/scripts/runmeta.py $run --masters | head -1)
-name=$(basename $doc .md); S=graphite; out=$run/export/$S
-mkdir -p "$out" && cp "$doc" "$out/$name.md"
-
-python3 .claude/scripts/style.py css      $S -o "$out/style.css"     # no --cover
-python3 .claude/scripts/style.py docx-ref $S -o "$out/reference.docx"
-
-pandoc "$out/$name.md" -s --section-divs --embed-resources \
-       -c "$out/style.css" -o "$out/$name.html"
-pandoc "$out/$name.md" --reference-doc="$out/reference.docx" -o "$out/$name.docx"
-
-export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib:$DYLD_FALLBACK_LIBRARY_PATH
-python3 -c "
-import weasyprint
-weasyprint.HTML(filename='$out/$name.html', base_url='$out/').write_pdf('$out/$name.pdf')"
-
-python3 .claude/scripts/check_export.py "$out/$name.md" \
-        "$out/$name.pdf" "$out/$name.docx" "$out/$name.html"
-```
-
-Four rules specific to this branch:
-
-- **No `--cover` and no `--toc`.** A cover page on a two-page letter and a table
-  of contents on a CV both read as a document produced by a machine.
-- **The word count is the whole loss check.** With no citations and no exhibits
-  to compare, `check_export.py` falls back to counting words, and that is what
-  catches a CV whose second page was clipped. Read the number it prints.
-- **A CV usually wants `.docx`.** Applicant tracking systems parse it and
-  recruiters edit it; a multi-column PDF defeats both. Offer the PDF as the
-  copy for a human reader, and say why.
-- **Markdown needs no export.** The master already is Markdown. Copying it into
-  `export/` is for keeping the set together, and the author can be handed the
-  master's path instead.
-
-The gate for a compose run is `run_check.py <run> --ship` (prompt, context,
-piece, independent review) plus `gate.py` on the master. `verification.md` is
-required only where the piece asserts facts about the world.
 
 ## Where files go
 

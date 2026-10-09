@@ -3,11 +3,11 @@
 This workspace is set up for Claude Code; its rules apply to every agent that works
 in it. Before acting, read these two files and treat them as binding:
 
-- `CLAUDE.md`: the ten rules, the two lanes (research reports and the author's own
-  writing), the run layout under `outputs/`, and the pipelines.
+- `CLAUDE.md`: the nine rules, the run layout under `outputs/`, and the pipeline.
 - `.claude/voice/profile.md`: the author's writing rules, for any prose you write.
+  It is personal and may not exist; then follow the rules `voice.py lint` checks.
 
-The workspace commands (`/research`, `/report`, `/verify`, `/cv` and the rest) are
+The workspace commands (`/research`, `/report`, `/verify`, `/figures` and the rest) are
 skills in `.claude/skills/<name>/SKILL.md` and commands in `.claude/commands/<name>.md`.
 When the author invokes one, read that file and follow it. Never start one on your
 own: a message that does not begin with a command is a chat question, answered

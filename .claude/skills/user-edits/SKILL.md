@@ -1,6 +1,6 @@
 ---
 name: user-edits
-description: Absorb edits the user made by hand to a run's master document, a research report.md or a written piece such as a CV, letter or answer: take their additions, deletions and rewrites as they stand, then fix the grammar, flow, transitions, repetition and reference numbers around them so the document reads as one piece again. Editing is the default and no research runs unless the user asks for it. Use when the user says they edited/changed/added/deleted something in the report, hands back a manually modified report or piece, or wants the story line adjusted around their changes. Every concept they introduced survives into the result; changes stay inside the sections they touched unless a wider blast radius is declared first.
+description: Absorb edits the user made by hand to a run's master document, the research report.md: take their additions, deletions and rewrites as they stand, then fix the grammar, flow, transitions, repetition and reference numbers around them so the document reads as one piece again. Editing is the default and no research runs unless the user asks for it. Use when the user says they edited/changed/added/deleted something in the report, hands back a manually modified report or piece, or wants the story line adjusted around their changes. Every concept they introduced survives into the result; changes stay inside the sections they touched unless a wider blast radius is declared first.
 disable-model-invocation: true
 ---
 
@@ -50,9 +50,9 @@ Rules for choosing:
 
 ## 1. Establish containment and scope
 
-**Name the document first.** A run's master is `report.md` for research and the
-piece itself for a compose run (`cv.md`, `cover-letter.md`, `answer.md`). Every
-command below is written against `$doc`, and this is where it comes from:
+**Name the document first.** A run's master is `report.md`, as `.run.json`
+declares through `runmeta.py`. Every command below is written against `$doc`,
+and this is where it comes from:
 
 ```bash
 run=outputs/<slug>
@@ -60,10 +60,7 @@ doc=$(python3 .claude/scripts/runmeta.py $run --masters | head -1)
 mirror=$run/.voice-mirror-$(basename $doc .md).md
 ```
 
-Everything in this skill applies to both, with one difference: a compose piece
-has no sections to guard and no citations to renumber, so `section_guard` and
-`audit_citations` return nothing and the whole-document read in §2 does the work
-instead. The rule that decides the round is the same either way: **their
+The rule that decides the round: **their
 concepts, not their sentences.**
 
 **Run the save check next, before anything else.** It answers the one question
@@ -146,10 +143,9 @@ Then read the edit as intent:
 | A precise, finished sentence replacing yours | Literal. Keep the wording |
 | A typo or grammar fix | Literal. Nothing to do |
 
-**A deletion is a finished decision, and it is not reported back.** Stated by
-the author 2026-08-28: *"if I remove a sentence, it is usually because I do not
-like how it sounds. Either I changed it or delete it because I feel the text
-works well as it is."* Do not list what they cut, do not offer to restore it,
+**A deletion is a finished decision, and it is not reported back.** An author
+who removes a sentence usually did so because they did not like how it sounds,
+or because the text works without it. Do not list what they cut, do not offer to restore it,
 and do not carry it into the report-back as a loss. Repair what depended on the
 deleted line and carry on.
 
@@ -279,15 +275,6 @@ not rewrite their assertion on the strength of your own check without saying so.
 An unasked-for validation pass is not a favour. It spends a round on work the
 user did not request, and it tends to end with the agent arguing against the
 document's owner.
-
-**In a compose run** (`runmeta.py $run --kind` prints `compose`), both §5 and
-§6 run the same way with one change: the evidence stays out of the text. The
-rows go into `evidence.jsonl` and the verdicts go into the chat message, and
-neither an `[E#]` marker nor an `[UNVERIFIED]` tag appears in a letter, a CV or
-a form answer. A statement or a grant answer that carries citations by
-convention is the exception; the `compose` skill's `references/kinds.md` says
-which kinds those are. A claim of the user's that the sources contradict is
-flagged and left standing, exactly as above.
 
 ## 7. When the edit changes the report's direction
 
