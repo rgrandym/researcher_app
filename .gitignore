@@ -1,0 +1,73 @@
+# Public repository. It holds the pipeline (.claude/), the app and the guides.
+# Everything personal stays out: research output, supplied sources, the
+# author's dossier, voice profile and corpus, internal notes, and credentials.
+# Check `git status --ignored` before publishing anything new.
+
+# ---------------------------------------------------------------- research output
+# Every run folder: the author's prompts, drafts, reports, evidence, notes,
+# supplied source documents, and exports. Assume all of it is confidential.
+outputs/
+
+# ---------------------------------------------------------------- supplied material
+# External sources dropped in by hand can be anywhere and are never ours to
+# publish: purchased reports, datasheets, certificates, internal memos, scans.
+**/external_data/
+**/*.pdf
+**/*.docx
+**/*.xlsx
+**/*.pptx
+**/*.csv
+
+# ---------------------------------------------------------------- the dossier
+# The author's standing record: master CV, letters already sent, bios, work
+# history. At least as confidential as a run folder, and held to the same rule.
+# The scaffolding READMEs are doctrine and stay tracked; nothing else does.
+dossier/**
+!dossier/**/
+!dossier/**/README.md
+!dossier/README.md
+
+# ---------------------------------------------------------------- author's voice
+# The corpus holds the author's own unpublished prose, captured from their
+# manual edits, and the profile holds their personal writing rules and their
+# history. Both are personal; /voice-rule creates the profile when it is missing.
+.claude/voice/corpus/
+.claude/voice/profile.md
+.claude/voice/measured.json
+
+# ---------------------------------------------------------------- recovery copies
+**/.history/
+**/.voice-mirror-*.md
+**/.guard-report.json
+.claude/.monitor-state/
+
+# ---------------------------------------------------------------- credentials
+.env
+.env.*
+*.pem
+*.key
+credentials.json
+secrets.*
+.claude/settings.local.json
+
+# ---------------------------------------------------------------- machine noise
+.DS_Store
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+
+# ---------------------------------------------------------------- the Research app
+# Sessions, settings, locks and logs; the built front end.
+app/data/
+app/web/dist/
+
+# ---------------------------------------------------------------- the source library
+# Text of every page a script fetched, shared by all runs (library.py). Research
+# material, held to the same rule as outputs/.
+library/
+app/web/*.tsbuildinfo
+
+# ---------------------------------------------------------------- internal notes
+# Working notes and build prompts: they name runs, costs and other projects.
+docs/

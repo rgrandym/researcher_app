@@ -1,0 +1,11 @@
+# The app's conda env (scripts/env.sh installs these).
+# Backend
+fastapi>=0.109
+uvicorn[standard]>=0.27  # [standard] brings the WebSocket support the live transcript needs
+pydantic>=2.5
+# What the workspace's scripts import when the app runs them, and the hooks they back
+matplotlib>=3.8
+weasyprint>=60
+# Tests
+pytest>=8
+httpx>=0.26

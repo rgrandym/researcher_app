@@ -1,0 +1,99 @@
+{
+  "name": "meridian",
+  "label": "Meridian",
+  "tagline": "Navy, serif, restrained. The classic strategy-house look.",
+  "best_for": "Board papers, regulatory and policy work, anything that must read as institutional rather than clever.",
+  "series_advice": "Comfortable to 8 series; the first four are the strongest separated.",
+  "fonts": {
+    "heading": [
+      "Charter",
+      "Palatino",
+      "Georgia",
+      "serif"
+    ],
+    "body": [
+      "Charter",
+      "Palatino",
+      "Georgia",
+      "serif"
+    ],
+    "mono": [
+      "Menlo",
+      "SFMono-Regular",
+      "Consolas",
+      "monospace"
+    ],
+    "base_pt": 10.5,
+    "heading_weight": 600,
+    "heading_case": "none",
+    "heading_tracking": "0"
+  },
+  "color": {
+    "ink": "#0B2545",
+    "body": "#1F2933",
+    "muted": "#5C6B7A",
+    "accent": "#1B4F8A",
+    "accent_soft": "#E8EFF7",
+    "rule": "#CBD6E2",
+    "mute_fill": "#B9C4D1",
+    "surface": "#FFFFFF",
+    "surface_alt": "#F5F8FB",
+    "link": "#1B4F8A",
+    "warn": "#9A6B00"
+  },
+  "series": [
+    "#1B4F8A",
+    "#C9A227",
+    "#2F7A6F",
+    "#7A96AE",
+    "#6B4E71",
+    "#B0763A",
+    "#4E8ABF",
+    "#45525E"
+  ],
+  "sequential": [
+    "#EDF3F9",
+    "#C6D9EC",
+    "#93B6D8",
+    "#5C8CBE",
+    "#2F6499",
+    "#0B2545"
+  ],
+  "diverging": [
+    "#8C3B2E",
+    "#C58B7E",
+    "#E9DDD8",
+    "#A9C2DA",
+    "#4E7FAE",
+    "#0B2545"
+  ],
+  "table": {
+    "header_bg": "#0B2545",
+    "header_fg": "#FFFFFF",
+    "zebra": "#F5F8FB",
+    "border": "#CBD6E2",
+    "rule_weight_pt": 0.6,
+    "style": "banded"
+  },
+  "chart": {
+    "grid": "#E3E9EF",
+    "axis": "#8A97A5",
+    "spines": "left_bottom",
+    "bar_width": 0.62,
+    "line_width": 1.9,
+    "marker_size": 4.5,
+    "value_labels": true,
+    "title_case": "none"
+  },
+  "page": {
+    "size": "A4",
+    "margin_mm": [
+      20,
+      18,
+      20,
+      18
+    ],
+    "cover": "rule",
+    "footer": "title-page"
+  }
+}

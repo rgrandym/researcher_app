@@ -1,0 +1,29 @@
+[project]
+name = "research-app"
+version = "0.1.0"
+description = "A local app over the research workspace: prompt bar, transcript, runs, exports, provider continuation."
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.109",
+  "uvicorn>=0.27",
+  "pydantic>=2.5",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "httpx>=0.26", "ruff", "mypy"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.mypy]
+strict = true
+python_version = "3.11"
+packages = ["backend"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,6 @@
+{
+  "searchCap": 400,
+  "fetchCap": 700,
+  "warnEvery": 100,
+  "raise": { "searches": 100, "fetches": 150 }
+}

@@ -1,0 +1,99 @@
+{
+  "name": "graphite",
+  "label": "Graphite",
+  "tagline": "Near-monochrome with one orange accent. Dense, quiet, data-first \u2014 the look of an analyst note rather than a brochure.",
+  "best_for": "Technical and quantitative work, appendix-heavy documents, readers who resent decoration.",
+  "series_advice": "Best at 2\u20134 series: accent for the subject, greys for context. Beyond 4 the greys stop separating \u2014 switch style or switch to small multiples.",
+  "fonts": {
+    "heading": [
+      "Inter",
+      "Helvetica Neue",
+      "Arial",
+      "sans-serif"
+    ],
+    "body": [
+      "Inter",
+      "Helvetica Neue",
+      "Arial",
+      "sans-serif"
+    ],
+    "mono": [
+      "SFMono-Regular",
+      "Menlo",
+      "Consolas",
+      "monospace"
+    ],
+    "base_pt": 9.5,
+    "heading_weight": 600,
+    "heading_case": "none",
+    "heading_tracking": "-0.005em"
+  },
+  "color": {
+    "ink": "#111418",
+    "body": "#22282E",
+    "muted": "#6B7480",
+    "accent": "#FF4F00",
+    "accent_soft": "#FFEDE4",
+    "rule": "#DDE1E6",
+    "mute_fill": "#C6CCD3",
+    "surface": "#FFFFFF",
+    "surface_alt": "#F7F8F9",
+    "link": "#C23C00",
+    "warn": "#8A5A00"
+  },
+  "series": [
+    "#FF4F00",
+    "#111418",
+    "#6B7480",
+    "#A8B0B9",
+    "#0A6E8A",
+    "#C6CCD3",
+    "#8A4B2A",
+    "#3D454E"
+  ],
+  "sequential": [
+    "#F2F4F6",
+    "#D6DBE0",
+    "#AEB6BF",
+    "#7E8895",
+    "#4C5561",
+    "#111418"
+  ],
+  "diverging": [
+    "#0A6E8A",
+    "#7FAFC0",
+    "#ECEEF0",
+    "#FFC6AA",
+    "#FF8B4F",
+    "#FF4F00"
+  ],
+  "table": {
+    "header_bg": "#FFFFFF",
+    "header_fg": "#111418",
+    "zebra": "none",
+    "border": "#DDE1E6",
+    "rule_weight_pt": 0.5,
+    "style": "rules"
+  },
+  "chart": {
+    "grid": "#EDEFF2",
+    "axis": "#9AA3AE",
+    "spines": "none",
+    "bar_width": 0.7,
+    "line_width": 1.6,
+    "marker_size": 3.8,
+    "value_labels": true,
+    "title_case": "none"
+  },
+  "page": {
+    "size": "A4",
+    "margin_mm": [
+      18,
+      16,
+      18,
+      16
+    ],
+    "cover": "minimal",
+    "footer": "title-page"
+  }
+}

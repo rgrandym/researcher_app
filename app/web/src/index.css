@@ -1,0 +1,190 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #faf9f7;
+  --bg-panel: #f3f1ed;
+  --bg-surface: #ffffff;
+  --border: #e4e0d8;
+  --text-primary: #1f1e1c;
+  --text-secondary: #5c5953;
+  --text-muted: #8f8a81;
+  --accent: #b5562f;
+  --accent-bg: #f6e9e2;
+  --good: #3d7a4f;
+  --warn: #a86b12;
+  --bad: #b3362b;
+  color-scheme: light;
+}
+
+/* "Match system": no data-theme attribute, so macOS decides between the two Claude palettes. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --bg: #1c1b19;
+    --bg-panel: #232220;
+    --bg-surface: #2a2926;
+    --border: #3a3834;
+    --text-primary: #ecebe8;
+    --text-secondary: #b3afa7;
+    --text-muted: #85817a;
+    --accent: #e08158;
+    --accent-bg: #3a2a22;
+    --good: #7cbf8e;
+    --warn: #e0a64a;
+    --bad: #e57a6e;
+    color-scheme: dark;
+  }
+}
+
+/* Chosen themes (lib/theme.ts). "light" is the :root palette above. */
+:root[data-theme="dark"] {
+  --bg: #1c1b19;
+  --bg-panel: #232220;
+  --bg-surface: #2a2926;
+  --border: #3a3834;
+  --text-primary: #ecebe8;
+  --text-secondary: #b3afa7;
+  --text-muted: #85817a;
+  --accent: #e08158;
+  --accent-bg: #3a2a22;
+  --good: #7cbf8e;
+  --warn: #e0a64a;
+  --bad: #e57a6e;
+  color-scheme: dark;
+}
+
+/* Colour-blind friendly: blue for good, orange for bad, so the two never rely on red
+   against green. */
+:root[data-theme="light-cb"] {
+  --bg: #fafafa;
+  --bg-panel: #f0f1f3;
+  --bg-surface: #ffffff;
+  --border: #dcdee3;
+  --text-primary: #1c1d20;
+  --text-secondary: #55585f;
+  --text-muted: #8a8d94;
+  --accent: #2b62b8;
+  --accent-bg: #e4ecf8;
+  --good: #1f6fb2;
+  --warn: #8a6d00;
+  --bad: #c25400;
+  color-scheme: light;
+}
+
+:root[data-theme="dark-cb"] {
+  --bg: #17181b;
+  --bg-panel: #1e2024;
+  --bg-surface: #25272c;
+  --border: #383b42;
+  --text-primary: #ebecef;
+  --text-secondary: #b0b3ba;
+  --text-muted: #80838b;
+  --accent: #79a8f2;
+  --accent-bg: #1f2c42;
+  --good: #6fb3ef;
+  --warn: #e6c14d;
+  --bad: #f29a4a;
+  color-scheme: dark;
+}
+
+:root[data-theme="slate"] {
+  --bg: #f6f7f9;
+  --bg-panel: #eceef2;
+  --bg-surface: #ffffff;
+  --border: #d9dde5;
+  --text-primary: #1b1f24;
+  --text-secondary: #4b5563;
+  --text-muted: #7a8394;
+  --accent: #2f6fd0;
+  --accent-bg: #e5edfb;
+  --good: #2f7a4f;
+  --warn: #a86b12;
+  --bad: #b3362b;
+  color-scheme: light;
+}
+
+:root[data-theme="midnight"] {
+  --bg: #0f1419;
+  --bg-panel: #151b22;
+  --bg-surface: #1b232c;
+  --border: #2a3440;
+  --text-primary: #e6edf3;
+  --text-secondary: #a7b3c0;
+  --text-muted: #6e7b8a;
+  --accent: #5ea1ff;
+  --accent-bg: #1a2a40;
+  --good: #6cc08b;
+  --warn: #e0b04a;
+  --bad: #f07a6e;
+  color-scheme: dark;
+}
+
+:root[data-theme="contrast"] {
+  --bg: #000000;
+  --bg-panel: #0d0d0d;
+  --bg-surface: #141414;
+  --border: #7a7a7a;
+  --text-primary: #ffffff;
+  --text-secondary: #e6e6e6;
+  --text-muted: #c4c4c4;
+  --accent: #ffb000;
+  --accent-bg: #3a2a00;
+  --good: #6ee7a0;
+  --warn: #ffd24a;
+  --bad: #ff8a80;
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text-primary);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Rendered Markdown: reports, the guide, the agent's replies. */
+.prose-doc {
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.prose-doc h1 { font-size: 1.6em; font-weight: 650; margin: 1.2em 0 0.5em; }
+.prose-doc h2 { font-size: 1.3em; font-weight: 650; margin: 1.3em 0 0.5em; }
+.prose-doc h3 { font-size: 1.1em; font-weight: 600; margin: 1.1em 0 0.4em; }
+.prose-doc h4 { font-weight: 600; margin: 1em 0 0.3em; }
+.prose-doc p { margin: 0.6em 0; }
+.prose-doc ul { list-style: disc; padding-left: 1.4em; margin: 0.5em 0; }
+.prose-doc ol { list-style: decimal; padding-left: 1.4em; margin: 0.5em 0; }
+.prose-doc li { margin: 0.2em 0; }
+.prose-doc a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.prose-doc code { font-family: ui-monospace, Menlo, monospace; font-size: 0.9em; background: var(--bg-panel); padding: 0.1em 0.3em; border-radius: 4px; }
+.prose-doc pre { background: var(--bg-panel); padding: 0.8em 1em; border-radius: 8px; overflow-x: auto; margin: 0.8em 0; }
+.prose-doc pre code { background: none; padding: 0; }
+.prose-doc blockquote { border-left: 3px solid var(--border); padding-left: 1em; color: var(--text-secondary); margin: 0.8em 0; }
+.prose-doc table { border-collapse: collapse; margin: 0.8em 0; display: block; overflow-x: auto; }
+.prose-doc th, .prose-doc td { border: 1px solid var(--border); padding: 0.35em 0.6em; text-align: left; vertical-align: top; }
+.prose-doc th { background: var(--bg-panel); font-weight: 600; }
+.prose-doc hr { border: none; border-top: 1px solid var(--border); margin: 1.5em 0; }
+
+.scroll-thin::-webkit-scrollbar { width: 8px; height: 8px; }
+.scroll-thin::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+/* A running agent's swimlane bar: moving stripes, so live work reads at a glance. */
+.lane-running {
+  background-image: linear-gradient(45deg, rgba(255, 255, 255, 0.28) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, 0.28) 50%, rgba(255, 255, 255, 0.28) 75%, transparent 75%, transparent);
+  background-size: 10px 10px;
+  animation: lane-stripes 0.8s linear infinite;
+}
+@keyframes lane-stripes {
+  from { background-position: 0 0; }
+  to { background-position: 10px 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lane-running { animation: none; }
+}

@@ -1,0 +1,98 @@
+{
+  "name": "verdant",
+  "label": "Verdant",
+  "tagline": "Deep green and sand, sans headings over serif body. Warm, analytical, readable at length.",
+  "best_for": "Long-form market and sustainability work; reports people actually read end to end.",
+  "series_advice": "Strong to 6 series. Green and teal sit adjacent \u2014 separate them with a third colour between.",
+  "fonts": {
+    "heading": [
+      "Avenir Next",
+      "Helvetica Neue",
+      "Inter",
+      "sans-serif"
+    ],
+    "body": [
+      "Charter",
+      "Georgia",
+      "serif"
+    ],
+    "mono": [
+      "Menlo",
+      "SFMono-Regular",
+      "Consolas",
+      "monospace"
+    ],
+    "base_pt": 10.5,
+    "heading_weight": 600,
+    "heading_case": "none",
+    "heading_tracking": "0"
+  },
+  "color": {
+    "ink": "#12332B",
+    "body": "#22302C",
+    "muted": "#5E6F69",
+    "accent": "#0F6B52",
+    "accent_soft": "#E6F1EC",
+    "rule": "#CFDCD6",
+    "mute_fill": "#BFCEC7",
+    "surface": "#FFFFFF",
+    "surface_alt": "#F4F8F6",
+    "link": "#0F6B52",
+    "warn": "#A65E20"
+  },
+  "series": [
+    "#0F6B52",
+    "#D9A441",
+    "#2A6F8F",
+    "#A65E4E",
+    "#5FA37F",
+    "#7C6BA0",
+    "#3FA08A",
+    "#5C6E6A"
+  ],
+  "sequential": [
+    "#EDF5F1",
+    "#C7E2D5",
+    "#95C9B2",
+    "#5FAB8C",
+    "#2E8768",
+    "#12332B"
+  ],
+  "diverging": [
+    "#A65E4E",
+    "#D2A093",
+    "#EFE6DF",
+    "#9FC9B6",
+    "#4E9A7B",
+    "#12332B"
+  ],
+  "table": {
+    "header_bg": "#12332B",
+    "header_fg": "#FFFFFF",
+    "zebra": "#F4F8F6",
+    "border": "#CFDCD6",
+    "rule_weight_pt": 0.6,
+    "style": "banded"
+  },
+  "chart": {
+    "grid": "#E4EDE9",
+    "axis": "#8A9A94",
+    "spines": "left_bottom",
+    "bar_width": 0.62,
+    "line_width": 2.0,
+    "marker_size": 4.5,
+    "value_labels": true,
+    "title_case": "none"
+  },
+  "page": {
+    "size": "A4",
+    "margin_mm": [
+      20,
+      18,
+      20,
+      18
+    ],
+    "cover": "band",
+    "footer": "title-page"
+  }
+}

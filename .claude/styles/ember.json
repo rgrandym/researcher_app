@@ -1,0 +1,99 @@
+{
+  "name": "ember",
+  "label": "Ember",
+  "tagline": "Crimson on charcoal, all-sans, high contrast. Assertive; built for a recommendation you want acted on.",
+  "best_for": "Decision memos, turnaround and performance work, anything where the point is the point.",
+  "series_advice": "The red is loud \u2014 reserve it for the series the reader should look at. Comfortable to 7.",
+  "fonts": {
+    "heading": [
+      "Helvetica Neue",
+      "Inter",
+      "Arial",
+      "sans-serif"
+    ],
+    "body": [
+      "Helvetica Neue",
+      "Inter",
+      "Arial",
+      "sans-serif"
+    ],
+    "mono": [
+      "Menlo",
+      "SFMono-Regular",
+      "Consolas",
+      "monospace"
+    ],
+    "base_pt": 10.0,
+    "heading_weight": 700,
+    "heading_case": "none",
+    "heading_tracking": "-0.01em"
+  },
+  "color": {
+    "ink": "#141414",
+    "body": "#232323",
+    "muted": "#6B6B6B",
+    "accent": "#A6192E",
+    "accent_soft": "#FAEAEC",
+    "rule": "#D8D8D8",
+    "mute_fill": "#C4C4C4",
+    "surface": "#FFFFFF",
+    "surface_alt": "#F6F6F6",
+    "link": "#A6192E",
+    "warn": "#8A5A00"
+  },
+  "series": [
+    "#A6192E",
+    "#2B4C7E",
+    "#E4772E",
+    "#3F7D6E",
+    "#8C5A9E",
+    "#6B7A8F",
+    "#C9A227",
+    "#4A4A4A"
+  ],
+  "sequential": [
+    "#FBECEE",
+    "#F2C4CB",
+    "#E28E9C",
+    "#C95A6E",
+    "#A6192E",
+    "#5E0E1A"
+  ],
+  "diverging": [
+    "#2B4C7E",
+    "#7E9AC0",
+    "#E6E6E6",
+    "#E28E9C",
+    "#C95A6E",
+    "#A6192E"
+  ],
+  "table": {
+    "header_bg": "#141414",
+    "header_fg": "#FFFFFF",
+    "zebra": "#F6F6F6",
+    "border": "#D8D8D8",
+    "rule_weight_pt": 0.7,
+    "style": "banded"
+  },
+  "chart": {
+    "grid": "#E8E8E8",
+    "axis": "#8C8C8C",
+    "spines": "bottom",
+    "bar_width": 0.66,
+    "line_width": 2.2,
+    "marker_size": 4.5,
+    "value_labels": true,
+    "title_case": "none"
+  },
+  "page": {
+    "size": "A4",
+    "margin_mm": [
+      18,
+      18,
+      18,
+      18
+    ],
+    "cover": "block",
+    "footer": "title-page"
+  }
+}

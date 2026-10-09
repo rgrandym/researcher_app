@@ -1,0 +1,2 @@
+{"type": "system", "subtype": "init", "session_id": "11111111-2222-3333-4444-555555555555", "model": "claude-opus-5-5", "permissionMode": "default", "skills": ["research"], "agents": ["research-scout"], "plugins": []}
+{"type": "result", "subtype": "success", "is_error": true, "session_id": "11111111-2222-3333-4444-555555555555", "result": "Invalid API key \u00b7 Please run /login"}

@@ -1,0 +1,99 @@
+{
+  "name": "helix",
+  "label": "Helix",
+  "tagline": "Violet and magenta, geometric sans, generous white space. Modern digital-consultancy energy.",
+  "best_for": "Technology strategy, product and market-entry decks, audiences who expect the document to look current.",
+  "series_advice": "The widest gamut of the five \u2014 safe to 8 series. Violet and magenta are adjacent; keep them non-neighbouring in stacked charts.",
+  "fonts": {
+    "heading": [
+      "Avenir Next",
+      "Poppins",
+      "Helvetica Neue",
+      "sans-serif"
+    ],
+    "body": [
+      "Avenir Next",
+      "Inter",
+      "Helvetica Neue",
+      "sans-serif"
+    ],
+    "mono": [
+      "SFMono-Regular",
+      "Menlo",
+      "Consolas",
+      "monospace"
+    ],
+    "base_pt": 10.0,
+    "heading_weight": 600,
+    "heading_case": "none",
+    "heading_tracking": "-0.01em"
+  },
+  "color": {
+    "ink": "#1A0B2E",
+    "body": "#2A2440",
+    "muted": "#6E6885",
+    "accent": "#6E2CF4",
+    "accent_soft": "#F0E9FE",
+    "rule": "#DDD6EC",
+    "mute_fill": "#C9BEE0",
+    "surface": "#FFFFFF",
+    "surface_alt": "#F8F5FE",
+    "link": "#6E2CF4",
+    "warn": "#9A5B00"
+  },
+  "series": [
+    "#6E2CF4",
+    "#E0218A",
+    "#00A3BF",
+    "#F5A623",
+    "#2FA36B",
+    "#FF6B4A",
+    "#3B1F6B",
+    "#7D8AA8"
+  ],
+  "sequential": [
+    "#F3EEFE",
+    "#D9C9FB",
+    "#B79BF3",
+    "#9068E6",
+    "#6E2CF4",
+    "#3A1489"
+  ],
+  "diverging": [
+    "#00A3BF",
+    "#7FC9D8",
+    "#EFEAF6",
+    "#E39BC4",
+    "#E0218A",
+    "#8C0E56"
+  ],
+  "table": {
+    "header_bg": "#6E2CF4",
+    "header_fg": "#FFFFFF",
+    "zebra": "#F8F5FE",
+    "border": "#DDD6EC",
+    "rule_weight_pt": 0.6,
+    "style": "banded"
+  },
+  "chart": {
+    "grid": "#EEE9F7",
+    "axis": "#9990AE",
+    "spines": "none",
+    "bar_width": 0.6,
+    "line_width": 2.2,
+    "marker_size": 5.0,
+    "value_labels": true,
+    "title_case": "none"
+  },
+  "page": {
+    "size": "A4",
+    "margin_mm": [
+      22,
+      20,
+      20,
+      20
+    ],
+    "cover": "block",
+    "footer": "title-page"
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-.}/.claude/scripts/gate.py\" --hook",
+            "timeout": 120,
+            "statusMessage": "Checking the report against the gates"
+          }
+        ]
+      }
+    ]
+  },
+  "skillOverrides": {
+    "anthropic-skills:deep-research": "user-invocable-only"
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "python3 \"${CLAUDE_PROJECT_DIR:-.}/.claude/statusline.py\"",
+    "padding": 1,
+    "refreshInterval": 30
+  },
+  "enabledPlugins": {
+    "flightdeck@claude-flightdeck": true,
+    "statuspane@claude-statuspane": true,
+    "effort-cycle@anerco": true,
+    "launch-codes@claude-code-mods": true
+  },
+  "extraKnownMarketplaces": {
+    "claude-flightdeck": {
+      "source": {
+        "source": "github",
+        "repo": "scasella/claude-flightdeck"
+      }
+    },
+    "claude-statuspane": {
+      "source": {
+        "source": "github",
+        "repo": "xuanji86/claude-statuspane"
+      }
+    },
+    "anerco": {
+      "source": {
+        "source": "github",
+        "repo": "Anerco/plugins"
+      }
+    },
+    "claude-code-mods": {
+      "source": {
+        "source": "github",
+        "repo": "OneWave-AI/claude-code-mods"
+      }
+    }
+  },
+  "permissions": {
+    "allow": [
+      "Bash(python3 .claude/scripts/*)"
+    ]
+  }
+}

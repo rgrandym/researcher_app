@@ -1,0 +1,5 @@
+{"type": "system", "subtype": "init", "session_id": "11111111-2222-3333-4444-555555555555", "model": "claude-opus-5-5", "permissionMode": "default", "skills": ["research"], "agents": ["research-scout"], "plugins": []}
+{"type": "assistant", "parent_tool_use_id": null, "message": {"id": "m1", "usage": {"input_tokens": 10, "cache_read_input_tokens": 20000, "cache_creation_input_tokens": 500, "output_tokens": 120}, "content": [{"type": "tool_use", "id": "t_w", "name": "Write", "input": {"file_path": "outputs/2026-01-15-lithium-costs/evidence.jsonl", "content": "{}"}}]}}
+{"type": "user", "parent_tool_use_id": null, "message": {"content": [{"type": "tool_result", "tool_use_id": "t_w", "content": "ok"}]}}
+{"type": "rate_limit_event", "rate_limit_info": {"status": "rejected", "resetsAt": 1791549600, "rateLimitType": "five_hour", "unifiedWindows": {"five_hour": {"utilization": 1.0, "resetsAt": 1791549600}}}}
+{"type": "result", "subtype": "success", "is_error": true, "session_id": "11111111-2222-3333-4444-555555555555", "result": "You've hit your limit \u00b7 resets 3pm"}
