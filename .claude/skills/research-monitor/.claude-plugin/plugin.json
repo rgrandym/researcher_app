@@ -1,0 +1,18 @@
+{
+  "name": "research-monitor",
+  "version": "0.2.0",
+  "description": "Research workspace monitor: web-search budget across all agents (caps in .claude/monitor.json, shared with Codex), the save check before /user-edits, and a pane showing agents, pipeline stages and cost.",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "pane": {
+      "type": "string",
+      "title": "Monitor pane",
+      "description": "auto opens the pane when a session starts (wide terminals only); command opens it only on /monitor.",
+      "default": "command",
+      "options": [
+        "auto",
+        "command"
+      ]
+    }
+  }
+}
