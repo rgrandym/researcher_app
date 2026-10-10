@@ -67,8 +67,10 @@ export default function PromptBar({
   const slash = /^\/([\w:-]*)$/.exec(text);
   const matches = useMemo(() => {
     if (!slash) return [];
-    const needle = slash[1].toLowerCase();
-    return (commands.data ?? []).filter((c) => c.name.toLowerCase().includes(needle)).slice(0, 10);
+    // Every match is listed (the menu scrolls), and hyphens are optional: /useredits finds /user-edits.
+    const loose = (s: string) => s.toLowerCase().replace(/-/g, "");
+    const needle = loose(slash[1]);
+    return (commands.data ?? []).filter((c) => loose(c.name).includes(needle));
   }, [slash, commands.data]);
 
   const choose = (c: Command) => {
@@ -151,8 +153,8 @@ export default function PromptBar({
               }}
               className={clsx("block w-full rounded-lg px-3 py-2 text-left", i === pick ? "bg-accent-bg" : "hover:bg-panel")}
             >
-              <div className="text-[13px] font-medium">/{c.name}</div>
-              <div className="line-clamp-2 text-[12px] text-muted">{c.description}</div>
+              <div className="text-[0.8125rem] font-medium">/{c.name}</div>
+              <div className="line-clamp-2 text-[0.75rem] text-muted">{c.description}</div>
             </button>
           ))}
         </div>
@@ -161,10 +163,10 @@ export default function PromptBar({
         {files.length > 0 && (
           <div className="flex flex-wrap gap-1.5 px-3 pt-3">
             {files.map((f) => (
-              <span key={f.name} className="flex items-center gap-1 rounded-md bg-panel px-2 py-0.5 text-[12px] text-muted">
+              <span key={f.name} className="flex items-center gap-1 rounded-md bg-panel px-2 py-0.5 text-[0.75rem] text-muted">
                 {f.name}
                 <button onClick={() => setFiles(files.filter((x) => x !== f))}>
-                  <X size={11} />
+                  <X size="0.6875rem" />
                 </button>
               </span>
             ))}
@@ -181,11 +183,11 @@ export default function PromptBar({
           }}
           onKeyDown={onKey}
           placeholder={placeholder}
-          className="block w-full resize-none bg-transparent px-4 pt-3 text-[14px] outline-none placeholder:text-faint"
+          className="block w-full resize-none bg-transparent px-4 pt-3 text-[0.875rem] outline-none placeholder:text-faint"
         />
         <div className="flex items-center gap-2 px-2 pb-2">
           <button title="Attach files to the run's external_data/" onClick={() => fileInput.current?.click()} className="rounded-md p-1.5 text-faint hover:bg-panel hover:text-fg">
-            <Paperclip size={16} />
+            <Paperclip size="1rem" />
           </button>
           <input
             ref={fileInput}
@@ -201,17 +203,17 @@ export default function PromptBar({
           />
           <div className="flex-1" />
           {running ? (
-            <button onClick={onStop} title="Stop the turn" className="flex items-center gap-1 rounded-lg bg-fg px-3 py-1.5 text-[12px] text-bg">
-              <Square size={12} fill="currentColor" /> Stop
+            <button onClick={onStop} title="Stop the turn" className="flex items-center gap-1 rounded-lg bg-fg px-3 py-1.5 text-[0.75rem] text-bg">
+              <Square size="0.75rem" fill="currentColor" /> Stop
             </button>
           ) : (
             <button onClick={submit} disabled={!text.trim()} title="Send (Enter)" className="rounded-lg bg-accent p-1.5 text-white disabled:opacity-30">
-              <ArrowUp size={16} />
+              <ArrowUp size="1rem" />
             </button>
           )}
         </div>
       </div>
-      <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 px-2 text-[12px] text-faint">
+      <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 px-2 text-[0.75rem] text-faint">
         <select
           value={connection}
           onChange={(e) => onConnection(e.target.value)}

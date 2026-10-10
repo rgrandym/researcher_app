@@ -58,6 +58,10 @@ class Session(BaseModel):
     stale: bool = False
     # Imported Claude Code session from VS Code (read-only until continued).
     imported_from: str | None = None
+    # "Continue with the same model later": when its window resets, the app carries the task
+    # on by itself on this connection (backend/autoedits.py runs it).
+    resume_at: float | None = None
+    resume_connection: str | None = None
 
     def current(self) -> Segment | None:
         if self.segments and self.segments[-1].ended is None:

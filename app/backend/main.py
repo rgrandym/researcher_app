@@ -14,9 +14,12 @@ import asyncio
 import base64
 import contextlib
 import json
+import os
 import re
 import shutil
+import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -26,12 +29,41 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Res
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from backend import activity, config, keychain, render, sessions, workspace
+from backend import activity, autoedits, config, keychain, render, sessions, usage, workspace
 from backend.providers.base import Event, ProviderError
 from backend.turns import TurnManager
 
 app = FastAPI(title="Research", docs_url=None, redoc_url=None)
 manager = TurnManager()
+watcher = autoedits.Watcher(manager)
+
+
+@app.on_event("startup")
+async def start_watcher() -> None:
+    """Hand edits to a master start /user-edits by themselves (backend/autoedits.py)."""
+    app.state.watcher_task = asyncio.create_task(watcher.loop())
+    if os.environ.get("RESEARCH_EXIT_WHEN_IDLE") == "1":
+        app.state.idle_task = asyncio.create_task(exit_when_idle())
+
+
+async def exit_when_idle() -> None:
+    """Stop this backend once no app window has been connected for a while and no turn is
+    running: closing the app closes its backend, even if the launcher that started it is
+    gone. Only backends the launcher starts set RESEARCH_EXIT_WHEN_IDLE (not dev.sh)."""
+    grace = float(os.environ.get("RESEARCH_IDLE_EXIT_S", "30"))
+    started = last_seen = time.time()
+    while True:
+        await asyncio.sleep(2)
+        now = time.time()
+        if manager.hub.everyone or manager.any_running():
+            last_seen = now
+            continue
+        # A window that never connected (a failed launch) gets longer before the backend gives up.
+        limit = grace if last_seen > started else max(grace, 120)
+        if now - last_seen >= limit:
+            print(f"No app window for {int(now - last_seen)} s and no turn running: stopping.", flush=True)
+            os.kill(os.getpid(), signal.SIGTERM)
+            return
 LOCAL_HOSTS = {"127.0.0.1", "localhost"}
 _status_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
@@ -63,13 +95,39 @@ def _bad(exc: Exception, code: int = 400) -> HTTPException:
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     # `clients` is the number of open windows; the launcher stops the backend when it
-    # has been zero for a while.
+    # has been zero for a while. `stale`: the backend's code changed after it started, so
+    # the window may call what this process does not have yet; the header offers Restart.
     return {
         "ok": True,
         "app": "research",
         "running": manager.any_running(),
         "clients": len(manager.hub.everyone),
+        "stale": _code_stamp() > CODE_STAMP,
     }
+
+
+def _code_stamp() -> float:
+    """The newest modification time among the backend's own Python files."""
+    base = Path(__file__).resolve().parent
+    return max((p.stat().st_mtime for p in base.rglob("*.py")), default=0.0)
+
+
+CODE_STAMP = _code_stamp()
+
+
+@app.post("/api/restart")
+async def restart() -> dict[str, Any]:
+    """Restart this backend in place to load changed code: same process id, port, token and
+    arguments, so the launcher keeps watching it and the window reconnects by itself.
+    Refused while a turn runs, since the restart would cut it off."""
+    if manager.any_running():
+        raise HTTPException(409, "A turn is running. Restart when it finishes.")
+
+    def again() -> None:
+        os.execv(sys.executable, [sys.executable, "-m", "uvicorn", *sys.argv[1:]])
+
+    asyncio.get_running_loop().call_later(0.4, again)
+    return {"ok": True}
 
 
 @app.get("/api/commands")
@@ -242,6 +300,57 @@ def session_activity(sid: str) -> dict[str, Any]:
         return activity.build(sid, manager.is_running(sid), manager.providers)
     except (FileNotFoundError, ValueError) as exc:
         raise _bad(exc, 404) from exc
+
+
+@app.post("/api/sessions/{sid}/retry")
+async def retry_session(sid: str) -> dict[str, Any]:
+    """Carry the last request on after a turn that did nothing or broke off."""
+    try:
+        await manager.retry(sid)
+    except ProviderError as exc:
+        raise _bad(exc, 409) from exc
+    except (FileNotFoundError, ValueError) as exc:
+        raise _bad(exc, 404) from exc
+    return {"ok": True}
+
+
+class ResumeLater(BaseModel):
+    connection: str
+    at: float | None = None
+
+
+@app.post("/api/sessions/{sid}/resume-later")
+def resume_later(sid: str, body: ResumeLater) -> dict[str, Any]:
+    """Carry the task on with this connection when its usage window resets: at `at`, or the
+    reset its usage reports, or the reset the last limit message named, or in an hour."""
+    try:
+        session = sessions.load(sid)
+    except (FileNotFoundError, ValueError) as exc:
+        raise _bad(exc, 404) from exc
+    at = body.at
+    if at is None:
+        try:
+            u = manager.provider(body.connection).usage()
+        except Exception:  # noqa: BLE001  usage is advisory
+            u = None
+        full = [w.resets_at for w in (u.windows if u else []) if (w.used_percent or 0) >= 100 and w.resets_at]
+        last = next(
+            (e.data.get("resets_at") or usage.reset_from_text(str(e.data.get("text") or ""))
+             for e in reversed(sessions.transcript(sid)) if e.type == "error" and e.data.get("kind") == "limit"),
+            None,
+        )
+        at = max(full) if full else last or time.time() + 3600
+    session.resume_at, session.resume_connection = float(at) + 60, body.connection  # a minute's margin
+    sessions.save(session)
+    return {"resume_at": session.resume_at, "connection": body.connection}
+
+
+@app.delete("/api/sessions/{sid}/resume-later")
+def cancel_resume(sid: str) -> dict[str, Any]:
+    session = sessions.load(sid)
+    session.resume_at, session.resume_connection = None, None
+    sessions.save(session)
+    return {"ok": True}
 
 
 @app.post("/api/sessions/{sid}/raise-cap")

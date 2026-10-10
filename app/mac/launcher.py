@@ -2,6 +2,9 @@
 
     python3 app/mac/launcher.py            # what Research.app runs
     python3 app/mac/launcher.py --browser  # a tab in the default browser instead
+    python3 app/mac/launcher.py --window-pid  # the open app window's Chrome pid, or nothing
+    python3 app/mac/launcher.py --raise       # bring the open window to the front; prints
+                                              # "raised", or nothing when no window is open
 
 1. A backend from this app already running (port file in app/data/) gets a new window;
    no second backend starts.
@@ -16,6 +19,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import secrets
@@ -73,7 +77,9 @@ def free_port() -> int:
 def start_backend() -> dict[str, object]:
     DATA.mkdir(parents=True, exist_ok=True)
     port, token = free_port(), secrets.token_urlsafe(24)
-    env = {**os.environ, "RESEARCH_APP_TOKEN": token}
+    # RESEARCH_EXIT_WHEN_IDLE: the backend stops itself once no window has been connected
+    # for 30 s and no turn runs, so closing the app closes it even without this launcher.
+    env = {**os.environ, "RESEARCH_APP_TOKEN": token, "RESEARCH_EXIT_WHEN_IDLE": "1"}
     log = LOG.open("a")
     proc = subprocess.Popen(
         [
@@ -98,6 +104,7 @@ def start_backend() -> dict[str, object]:
         "pid": proc.pid,
         "token": token,
         "started": time.time(),
+        "launcher": os.getpid(),  # the launcher watching it; a later launch may stop it
     }
     for _ in range(120):
         if proc.poll() is not None:
@@ -119,9 +126,31 @@ def stop_backend(info: dict[str, object]) -> None:
     PORT_FILE.unlink(missing_ok=True)
 
 
+def reset_zoom() -> None:
+    """Clear the browser zoom kept for the app's address in its Chrome profile. The app sizes
+    itself to the window (index.css); a zoom set on one screen, carried to another, shrinks
+    the room the layout has and squeezes it. Only while no app window runs, since Chrome
+    rewrites its preferences when it quits."""
+    if window_chrome_pid():
+        return
+    prefs = DATA / "chrome" / "Default" / "Preferences"
+    try:
+        data = json.loads(prefs.read_text())
+        levels = data.get("partition", {}).get("per_host_zoom_levels", {})
+        changed = False
+        for hosts in levels.values():
+            for host in ("127.0.0.1", "localhost"):
+                changed |= hosts.pop(host, None) is not None
+        if changed:
+            prefs.write_text(json.dumps(data))
+    except (OSError, ValueError, AttributeError):
+        pass
+
+
 def open_window(url: str, browser: bool) -> subprocess.Popen[bytes] | None:
     """A Chrome app window on its own profile; the default browser when Chrome is absent."""
     if CHROME.exists() and not browser:
+        reset_zoom()
         return subprocess.Popen(
             [
                 str(CHROME),
@@ -156,7 +185,15 @@ def watch(info: dict[str, object], chrome: subprocess.Popen[bytes] | None) -> No
         time.sleep(2)
         health = _health(port)
         if health is None:
-            return  # the backend went away by itself
+            # The backend restarts itself in place to load new code (POST /api/restart):
+            # give it time to come back before treating it as gone.
+            for _ in range(15):
+                time.sleep(1)
+                health = _health(port)
+                if health is not None:
+                    break
+            if health is None:
+                return  # the backend went away by itself
         if int(str(health.get("clients", 0))) > 0:
             seen, idle_since = True, None
             continue
@@ -188,6 +225,62 @@ def status() -> str:
     return "turn" if health.get("running") else "up"
 
 
+def window_pid() -> str:
+    """The pid of the Chrome process showing the app, when a window is open: the Dock app
+    brings that window to the front instead of opening another. Empty when none is open."""
+    info = running_backend()
+    if info is None or int(str((_health(int(str(info["port"]))) or {}).get("clients", 0))) < 1:
+        return ""
+    return window_chrome_pid()
+
+
+def window_chrome_pid() -> str:
+    """The pid of the Chrome browser process running on the app's own profile, or empty."""
+    ps = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True).stdout
+    marker = f"user-data-dir={DATA / 'chrome'}"
+    for line in ps.splitlines():
+        pid, _, command = line.strip().partition(" ")
+        # The browser process itself; its helpers carry a --type= flag.
+        if marker in command and "--type=" not in command and command.startswith(str(CHROME)):
+            return pid
+    return ""
+
+
+def raise_window() -> str:
+    """Bring the open app window in front of other apps, as a Dock click does for any app
+    (the Dock app un-minimises it first). Raised twice: now, and once more just after,
+    because the Dock activates Research itself after the click and could take the front
+    back. Activation only: nothing here can open a window."""
+    pid = window_pid()
+    if not pid:
+        return ""
+    script = str(APP / "mac" / "raise.js")
+    subprocess.run(["osascript", "-l", "JavaScript", script, pid], capture_output=True, timeout=10)
+    subprocess.Popen(
+        ["/bin/sh", "-c", f'sleep 0.4; osascript -l JavaScript "{script}" {pid}'],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    return "raised"
+
+
+def stop_previous(info: dict[str, object]) -> None:
+    """Stop an idle backend left from an earlier launch, and the launcher watching it."""
+    me = os.getpid()
+    ps = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True).stdout
+    for line in ps.splitlines():
+        pid, _, command = line.strip().partition(" ")
+        if "mac/launcher.py" in command and "--" not in command.split("launcher.py", 1)[1] and int(pid) != me:
+            with contextlib.suppress(OSError):
+                os.kill(int(pid), signal.SIGTERM)
+    stop_backend(info)
+    for _ in range(20):
+        if not _alive(int(str(info["pid"]))):
+            break
+        time.sleep(0.25)
+
+
 def stop_all() -> None:
     """Stop the backend, the launcher watching it, and the app's Chrome window."""
     info = running_backend()
@@ -207,12 +300,23 @@ def main() -> None:
     if "--stop" in sys.argv:
         stop_all()
         return
+    if "--window-pid" in sys.argv:
+        print(window_pid())
+        return
+    if "--raise" in sys.argv:
+        print(raise_window())
+        return
     existing = running_backend()
-    info = existing or start_backend()
+    if existing:
+        if raise_window():
+            return  # a window is open: bring it forward, never open a second one
+        # No window: the app was closed and this backend outlived it. Never reuse it: stop it
+        # and its launcher (whose clean-up would otherwise close the new window), and start
+        # a backend with the current code.
+        stop_previous(existing)
+    info = start_backend()
     url = f"http://127.0.0.1:{info['port']}/?token={info['token']}"
     chrome = open_window(url, "--browser" in sys.argv)
-    if existing:
-        return  # the launcher that started this backend is already watching it
     try:
         watch(info, chrome)
     except KeyboardInterrupt:

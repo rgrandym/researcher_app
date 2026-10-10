@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Check, Circle, Code2, Download, FileDown, FolderSearch, PanelRight, PanelRightClose, Pencil, RefreshCw, Trash2 } from "lucide-react";
+import Panel, { CENTER, PANELS } from "./Panel";
 import { api, ApiError, fileUrl, getText, q, renderedUrl } from "../lib/api";
 import { bytes, day } from "../lib/format";
 import type { RunDetail, SessionDetail } from "../lib/types";
@@ -38,7 +39,7 @@ function FileViewer({ run, path }: { run: string; path: string }) {
   if (/\.(html|pdf)$/i.test(path)) return <iframe title={path} src={fileUrl(run, path)} className="h-[80vh] w-full rounded border border-border bg-white" />;
   if (!TEXT.test(path)) {
     return (
-      <a className="text-[13px] text-accent underline" href={fileUrl(run, path)} target="_blank" rel="noreferrer">
+      <a className="text-[0.8125rem] text-accent underline" href={fileUrl(run, path)} target="_blank" rel="noreferrer">
         Open {path}
       </a>
     );
@@ -62,7 +63,7 @@ function FileViewer({ run, path }: { run: string; path: string }) {
               bad = true;
             }
             return (
-              <pre key={i} className={clsx("whitespace-pre-wrap rounded bg-panel p-2 font-mono text-[11.5px]", bad && "border border-bad text-bad")}>
+              <pre key={i} className={clsx("whitespace-pre-wrap rounded bg-panel p-2 font-mono text-[0.7188rem]", bad && "border border-bad text-bad")}>
                 {pretty}
               </pre>
             );
@@ -70,7 +71,7 @@ function FileViewer({ run, path }: { run: string; path: string }) {
       </div>
     );
   }
-  return <pre className="whitespace-pre-wrap font-mono text-[12px]">{body}</pre>;
+  return <pre className="whitespace-pre-wrap font-mono text-[0.75rem]">{body}</pre>;
 }
 
 function EditPane({ run, path, onSaved }: { run: string; path: string; onSaved: () => void }) {
@@ -107,7 +108,7 @@ function EditPane({ run, path, onSaved }: { run: string; path: string; onSaved: 
     onSuccess: (r) => {
       setMtime(r.mtime);
       setOriginal(text);
-      setMessage("Saved. The HTML view re-renders from this file. To have an agent absorb the edit into the report, ask for /user-edits.");
+      setMessage("Saved. The HTML view re-renders from this file. A minute after your last save, an agent absorbs the edit into the report (/user-edits) by itself.");
       onSaved();
     },
     onError: (e) => {
@@ -118,7 +119,7 @@ function EditPane({ run, path, onSaved }: { run: string; path: string; onSaved: 
   const dirty = text !== original;
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center gap-2 border-b border-border px-4 py-2 text-[12.5px]">
+      <div className="flex items-center gap-2 border-b border-border px-4 py-2 text-[0.7812rem]">
         <span className="font-mono">{path}</span>
         {dirty && <span className="text-warn">unsaved</span>}
         <div className="flex-1" />
@@ -130,7 +131,7 @@ function EditPane({ run, path, onSaved }: { run: string; path: string; onSaved: 
         </button>
       </div>
       {message && (
-        <div className={clsx("border-b border-border px-4 py-1.5 text-[12px]", conflict ? "text-bad" : "text-muted")}>
+        <div className={clsx("border-b border-border px-4 py-1.5 text-[0.75rem]", conflict ? "text-bad" : "text-muted")}>
           {message}
           {conflict && (
             <button onClick={() => void load()} className="ml-2 underline">
@@ -151,7 +152,7 @@ function EditPane({ run, path, onSaved }: { run: string; path: string; onSaved: 
           }
         }}
         spellCheck
-        className="min-h-0 flex-1 resize-none bg-bg p-5 font-mono text-[13px] leading-6 outline-none"
+        className="min-h-0 flex-1 resize-none bg-bg p-5 font-mono text-[0.8125rem] leading-6 outline-none"
       />
     </div>
   );
@@ -187,6 +188,11 @@ function HtmlPane({ run, version }: { run: string; version: number }) {
     });
   };
   const [exported, setExported] = useState<Exported | null>(null);
+  const [figuresOpen, setFiguresOpenState] = useState(() => prefs().figures_open ?? true);
+  const setFiguresOpen = (open: boolean) => {
+    setFiguresOpenState(open);
+    setPref("figures_open", open);
+  };
   const [saved, setSaved] = useState("");
   const rendered = useQuery({
     queryKey: ["render", run, style, cite, version],
@@ -210,7 +216,7 @@ function HtmlPane({ run, version }: { run: string; version: number }) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2 text-[12.5px]">
+      <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2 text-[0.7812rem]">
         <label className="text-faint">Style</label>
         <select value={style} onChange={(e) => setStyle(e.target.value)} className="rounded-md border border-border bg-surface px-2 py-1">
           {(styles.data ?? [{ name: "meridian", description: "" }]).map((s) => (
@@ -225,18 +231,23 @@ function HtmlPane({ run, version }: { run: string; version: number }) {
           <option value="ids">Evidence IDs</option>
         </select>
         <button onClick={() => void rendered.refetch()} title="Render again" className="rounded-md p-1 text-faint hover:text-fg">
-          <RefreshCw size={13} className={clsx(rendered.isFetching && "animate-spin")} />
+          <RefreshCw size="0.8125rem" className={clsx(rendered.isFetching && "animate-spin")} />
         </button>
         <div className="flex-1" />
+        {data && data.figures.length > 0 && !figuresOpen && (
+          <button onClick={() => setFiguresOpen(true)} title="Show the figures panel" className="rounded-md p-1 text-faint hover:text-fg">
+            <PanelRight size="0.875rem" />
+          </button>
+        )}
         <button onClick={() => exportRun.mutate(["html"])} disabled={exportRun.isPending} className="flex items-center gap-1 rounded-md border border-border px-2.5 py-1 hover:border-accent disabled:opacity-40">
-          <FileDown size={13} /> Export HTML
+          <FileDown size="0.8125rem" /> Export HTML
         </button>
         <button onClick={() => exportRun.mutate(["html", "pdf"])} disabled={exportRun.isPending} className="flex items-center gap-1 rounded-md bg-accent px-2.5 py-1 text-white disabled:opacity-40">
-          <FileDown size={13} /> {exportRun.isPending ? "Exporting…" : "Export PDF"}
+          <FileDown size="0.8125rem" /> {exportRun.isPending ? "Exporting…" : "Export PDF"}
         </button>
       </div>
       {(exported || exportRun.isError) && (
-        <div className="border-b border-border px-4 py-2 text-[12px]">
+        <div className="border-b border-border px-4 py-2 text-[0.75rem]">
           {exportRun.isError ? (
             <pre className="whitespace-pre-wrap text-bad">{(exportRun.error as Error).message}</pre>
           ) : (
@@ -253,27 +264,31 @@ function HtmlPane({ run, version }: { run: string; version: number }) {
                     Show in Finder
                   </button>
                 </div>
-                <pre className={clsx("mt-1 whitespace-pre-wrap text-[11.5px]", exported.check.startsWith("Export check passed") ? "text-good" : "text-warn")}>{exported.check}</pre>
+                <pre className={clsx("mt-1 whitespace-pre-wrap text-[0.7188rem]", exported.check.startsWith("Export check passed") ? "text-good" : "text-warn")}>{exported.check}</pre>
               </>
             )
           )}
         </div>
       )}
-      <div className="flex min-h-0 flex-1">
-        <div className="min-w-0 flex-1 bg-white">
-          {rendered.isFetching && !data && <div className="p-6 text-[13px] text-faint">Rendering the figures and the HTML…</div>}
-          {rendered.isError && <pre className="whitespace-pre-wrap p-6 text-[12.5px] text-bad">{(rendered.error as Error).message}</pre>}
+      <div className="relative flex min-h-0 flex-1">
+        <div className={`bg-white ${CENTER}`}>
+          {rendered.isFetching && !data && <div className="p-6 text-[0.8125rem] text-faint">Rendering the figures and the HTML…</div>}
+          {rendered.isError && <pre className="whitespace-pre-wrap p-6 text-[0.7812rem] text-bad">{(rendered.error as Error).message}</pre>}
           {data && <iframe key={`${data.html}@${data.built}`} title="HTML" src={renderedUrl(run, style, cite, data.html, false, data.built)} onLoad={(e) => onFrameLoad(e.currentTarget)} className="h-full w-full border-0" />}
         </div>
-        {data && data.figures.length > 0 && (
-          <aside className="scroll-thin w-60 shrink-0 overflow-y-auto border-l border-border bg-panel/50 p-3 text-[12px]">
+        {data && data.figures.length > 0 && figuresOpen && (
+          <Panel size={PANELS.figures} side="right" overlayBelow={900} onClose={() => setFiguresOpen(false)} className="bg-panel/50">
+          <div className="scroll-thin min-h-0 flex-1 overflow-y-auto p-3 text-[0.75rem]">
             <div className="mb-2 flex items-center">
-              <span className="text-[11px] font-medium uppercase tracking-wide text-faint">Figures</span>
-              <button onClick={() => saveFigures.mutate()} className="ml-auto text-[11.5px] text-accent underline" title={`Copy every figure to export/${style}/figures/`}>
+              <span className="text-[0.6875rem] font-medium uppercase tracking-wide text-faint">Figures</span>
+              <button onClick={() => saveFigures.mutate()} className="ml-auto text-[0.7188rem] text-accent underline" title={`Copy every figure to export/${style}/figures/`}>
                 Save all
               </button>
+              <button onClick={() => setFiguresOpen(false)} title="Collapse the figures panel" className="ml-1.5 rounded-md p-0.5 text-faint hover:bg-panel hover:text-fg">
+                <PanelRightClose size="0.875rem" />
+              </button>
             </div>
-            {saved && <div className="mb-2 text-[11.5px] text-good">{saved}</div>}
+            {saved && <div className="mb-2 text-[0.7188rem] text-good">{saved}</div>}
             {data.figures.map((f) => (
               <div key={f.name} className="mb-3">
                 {f.files.png && <img src={renderedUrl(run, style, cite, f.files.png, false, data.built)} alt={f.name} className="w-full rounded border border-border bg-white" />}
@@ -281,13 +296,14 @@ function HtmlPane({ run, version }: { run: string; version: number }) {
                   <span className="font-medium">{f.name}</span>
                   {Object.entries(f.files).map(([kind, path]) => (
                     <a key={kind} href={renderedUrl(run, style, cite, path, true)} className="flex items-center gap-0.5 text-accent">
-                      <Download size={11} /> {kind.toUpperCase()}
+                      <Download size="0.6875rem" /> {kind.toUpperCase()}
                     </a>
                   ))}
                 </div>
               </div>
             ))}
-          </aside>
+          </div>
+          </Panel>
         )}
       </div>
     </div>
@@ -397,20 +413,20 @@ export default function RunView({ name, file }: { name: string; file?: string })
   ];
 
   return (
-    <div className="flex h-full">
-      <div className="flex min-w-0 flex-1 flex-col">
+    <div className="relative flex h-full">
+      <div className={`flex flex-col ${CENTER}`}>
         <div className="flex items-center gap-2 border-b border-border px-5 py-2">
           <div className="min-w-0 flex-1">
-            <div className="text-[11.5px] text-faint">
+            <div className="text-[0.7188rem] text-faint">
               Research · {data.evidence_rows} evidence rows · {data.notes} notes
             </div>
-            <div className="truncate text-[15px] font-medium">{name}</div>
+            <div className="truncate text-[0.9375rem] font-medium">{name}</div>
           </div>
-          <button onClick={() => void api.post(`/api/runs/${encodeURIComponent(name)}/vscode`)} className="flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-[12px] hover:border-accent">
-            <Code2 size={13} /> VS Code
+          <button onClick={() => void api.post(`/api/runs/${encodeURIComponent(name)}/vscode`)} className="flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-[0.75rem] hover:border-accent">
+            <Code2 size="0.8125rem" /> VS Code
           </button>
-          <button onClick={() => void api.post(`/api/runs/${encodeURIComponent(name)}/reveal`)} className="flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-[12px] hover:border-accent">
-            <FolderSearch size={13} /> Finder
+          <button onClick={() => void api.post(`/api/runs/${encodeURIComponent(name)}/reveal`)} className="flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-[0.75rem] hover:border-accent">
+            <FolderSearch size="0.8125rem" /> Finder
           </button>
           {tab !== "chat" && (
             <button
@@ -418,24 +434,24 @@ export default function RunView({ name, file }: { name: string; file?: string })
               title={panelOpen ? "Collapse the stages and files panel" : "Show the stages and files panel"}
               className={clsx("rounded-md p-1.5 hover:bg-panel hover:text-fg", panelOpen ? "text-accent" : "text-faint")}
             >
-              <PanelRight size={16} />
+              <PanelRight size="1rem" />
             </button>
           )}
           <button
             onClick={() => {
               if (window.confirm(`Remove ${name}? Its folder moves to the Trash, where you can still restore it. Its conversations and cached renders are deleted.`)) remove.mutate();
             }}
-            className="flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-[12px] text-bad hover:border-bad"
+            className="flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-[0.75rem] text-bad hover:border-bad"
           >
-            <Trash2 size={13} /> Remove
+            <Trash2 size="0.8125rem" /> Remove
           </button>
         </div>
-        {remove.isError && <div className="border-b border-border px-5 py-1.5 text-[12px] text-bad">{(remove.error as Error).message}</div>}
+        {remove.isError && <div className="border-b border-border px-5 py-1.5 text-[0.75rem] text-bad">{(remove.error as Error).message}</div>}
         <div className="flex gap-1 border-b border-border px-4 py-1.5">
           {tabs
             .filter((t) => t.show)
             .map((t) => (
-              <button key={t.id} onClick={() => setTab(t.id)} className={clsx("max-w-[16rem] truncate rounded-md px-3 py-1 text-[12.5px]", tab === t.id ? "bg-panel font-medium text-fg" : "text-muted hover:text-fg")}>
+              <button key={t.id} onClick={() => setTab(t.id)} className={clsx("max-w-[16rem] truncate rounded-md px-3 py-1 text-[0.7812rem]", tab === t.id ? "bg-panel font-medium text-fg" : "text-muted hover:text-fg")}>
                 {t.label}
               </button>
             ))}
@@ -445,9 +461,9 @@ export default function RunView({ name, file }: { name: string; file?: string })
                 setEditPath(selected);
                 setTab("edit");
               }}
-              className="ml-2 flex items-center gap-1 text-[12px] text-accent"
+              className="ml-2 flex items-center gap-1 text-[0.75rem] text-accent"
             >
-              <Pencil size={12} /> Edit this file
+              <Pencil size="0.75rem" /> Edit this file
             </button>
           )}
         </div>
@@ -456,7 +472,7 @@ export default function RunView({ name, file }: { name: string; file?: string })
             (chat ? (
               <SessionView key={chat} id={chat} embedded onNew={() => openChat.mutate(true)} />
             ) : (
-              <div className="p-6 text-[13px] text-faint">{openChat.isError ? (openChat.error as Error).message : "Opening the project's conversation…"}</div>
+              <div className="p-6 text-[0.8125rem] text-faint">{openChat.isError ? (openChat.error as Error).message : "Opening the project's conversation…"}</div>
             ))}
           {tab === "html" && <HtmlPane run={name} version={version} />}
           {tab === "edit" && editing && <EditPane run={name} path={editing} onSaved={onSaved} />}
@@ -468,7 +484,7 @@ export default function RunView({ name, file }: { name: string; file?: string })
                 ) : data.master ? (
                   <Markdown text={data.master} />
                 ) : (
-                  <div className="text-[13px] text-faint">No master document yet ({data.meta.masters.join(", ")}).</div>
+                  <div className="text-[0.8125rem] text-faint">No master document yet ({data.meta.masters.join(", ")}).</div>
                 )}
               </div>
             </div>
@@ -476,21 +492,22 @@ export default function RunView({ name, file }: { name: string; file?: string })
         </div>
       </div>
       {tab !== "chat" && panelOpen && (
-      <aside className="scroll-thin w-64 shrink-0 overflow-y-auto border-l border-border bg-panel/50 p-4 text-[12.5px]">
-        <div className="mb-1.5 flex items-center text-[11px] font-medium uppercase tracking-wide text-faint">
+      <Panel size={PANELS.runPanel} side="right" overlayBelow={1000} onClose={() => setPanelOpen(false)} className="bg-panel/50">
+      <div className="scroll-thin min-h-0 flex-1 overflow-y-auto p-4 text-[0.7812rem]">
+        <div className="mb-1.5 flex items-center text-[0.6875rem] font-medium uppercase tracking-wide text-faint">
           Stages
           <button onClick={() => setPanelOpen(false)} title="Collapse the panel" className="ml-auto rounded-md p-0.5 normal-case hover:bg-panel hover:text-fg">
-            <PanelRightClose size={14} />
+            <PanelRightClose size="0.875rem" />
           </button>
         </div>
         {data.stages.map((s) => (
           <div key={s.stage} className="flex items-center gap-1.5 py-0.5" title={s.detail}>
-            {s.ok ? <Check size={12} className="text-good" /> : <Circle size={10} className="mx-0.5 text-faint" />}
+            {s.ok ? <Check size="0.75rem" className="text-good" /> : <Circle size="0.625rem" className="mx-0.5 text-faint" />}
             <span className={s.ok ? "" : "text-faint"}>{s.stage}</span>
-            <span className="ml-auto truncate pl-2 text-[11px] text-faint">{s.detail}</span>
+            <span className="ml-auto truncate pl-2 text-[0.6875rem] text-faint">{s.detail}</span>
           </div>
         ))}
-        <div className="mb-1.5 mt-4 text-[11px] font-medium uppercase tracking-wide text-faint">Files</div>
+        <div className="mb-1.5 mt-4 text-[0.6875rem] font-medium uppercase tracking-wide text-faint">Files</div>
         <div className="space-y-0.5">
           {data.files.map((f) => (
             <button
@@ -502,13 +519,14 @@ export default function RunView({ name, file }: { name: string; file?: string })
               className={clsx("flex w-full items-center gap-2 rounded px-1.5 py-1 text-left hover:bg-panel", selected === f.path && tab === "file" && "bg-panel")}
             >
               <span className={clsx("min-w-0 flex-1 truncate", f.path === primary && "font-medium")}>{f.path}</span>
-              <span className="shrink-0 text-[10.5px] text-faint">
+              <span className="shrink-0 text-[0.6562rem] text-faint">
                 {bytes(f.size)} · {day(f.mtime)}
               </span>
             </button>
           ))}
         </div>
-      </aside>
+      </div>
+      </Panel>
       )}
     </div>
   );

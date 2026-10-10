@@ -53,6 +53,9 @@ export interface SessionDetail {
   segments: Segment[];
   stale: boolean;
   imported_from: string | null;
+  // "Continue with the same model later": when, and on which connection.
+  resume_at?: number | null;
+  resume_connection?: string | null;
   events: AppEvent[];
   running: boolean;
   open_permissions: string[];
@@ -180,8 +183,28 @@ export interface AgentRow {
 export interface Activity {
   agents: AgentRow[];
   permissions: { ts: number; tool: string; kind: string; summary: string; decision: string; provider: string | null }[];
-  progress: { run: string; kind: string; stages: Stage[]; evidence_rows: number; notes: number }[];
+  progress: {
+    run: string;
+    kind: string;
+    stages: Stage[];
+    evidence_rows: number;
+    notes: number;
+    // The latest expansion round while it is open; the stepper follows it instead of the run.
+    round: { name: string; notes: number; stages: Stage[] } | null;
+  }[];
   pipeline: { run: string; stage: string } | null;
+  // Subagents of earlier tasks in this conversation; the panel lists only the current task's.
+  agents_earlier?: number;
+  // The task the latest message started: its own steps, judged from evidence since it began.
+  task: {
+    command: string;
+    label: string;
+    text: string;
+    started: number;
+    running: boolean;
+    steps: { label: string; state: "done" | "current" | "todo" | "skipped" }[];
+    run: string | null;
+  } | null;
   project: string;
   cost: {
     total_usd: number;

@@ -66,9 +66,13 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "ui": {
         "theme": "system",
         "agents_view": "cards",
+        "sidebar_open": True,
         "activity_open": True,
         "run_panel_open": True,
     },
+    # A hand edit saved to a run's master (here or in VS Code) starts /user-edits by itself,
+    # once the file has been quiet this long and no agent is working on the run.
+    "auto_user_edits": {"enabled": True, "quiet_seconds": 60},
     # Workspace commands this app does not offer: they leave the menu, and a typed one is
     # refused. Empty by default.
     "hidden_commands": [],
@@ -84,8 +88,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
             "codex": {"frontier": "gpt-6-astra", "workhorse": "gpt-6.1-sol", "fast": "gpt-6-luna"},
         },
         "commands": {
+            # Medium effort by default (2026-10-10): good enough for the workspace's commands,
+            # and faster and cheaper than high. Raise one command in Models -> routing if needed.
             **{
-                name: ["frontier", "high"]
+                name: ["frontier", "medium"]
                 for name in (
                     "research",
                     "research-pipeline",

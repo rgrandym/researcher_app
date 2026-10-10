@@ -166,11 +166,23 @@ class CodexParser:
         if itype == "web_search":
             self.web += 1
         if "agent" in itype or "collab" in itype or "spawn" in itype:
-            self.subagents += 1
-            data["subagent"] = {
-                "type": str(item.get("agent_type") or item.get("role") or "subagent"),
-                "description": short(item.get("prompt") or item.get("description") or "", 120),
-            }
+            # Codex's agent tools are one item type for every action: spawning an agent,
+            # messaging it, waiting on it, listing them. Only a spawn starts an agent; the
+            # rest are calls the main thread makes, named after the action.
+            action = str(item.get("tool") or item.get("name") or item.get("action") or "")
+            data["input"] = _trim_item(item)
+            if "spawn" in action or (not action and "spawn" in itype):
+                self.subagents += 1
+                data["subagent"] = {
+                    "type": str(item.get("agent_type") or item.get("role") or item.get("agent_role") or "subagent"),
+                    "description": short(
+                        str(item.get("prompt") or item.get("description") or item.get("message") or item.get("agent_path") or ""),
+                        120,
+                    ),
+                }
+            else:
+                data["name"] = f"Agents: {action.replace('_', ' ')}" if action else "Agents"
+                data["summary"] = short(str(item.get("prompt") or item.get("message") or ""), 160)
         return self._event("tool_call", data)
 
     def _result(self, itype: str, iid: str, item: dict[str, Any]) -> Event:
@@ -430,3 +442,8 @@ def _run(cmd: list[str], stderr: bool = False) -> str:
     except (OSError, subprocess.TimeoutExpired):
         return ""
     return out.stdout + (out.stderr if stderr else "")
+
+
+def _trim_item(item: dict[str, Any]) -> dict[str, Any]:
+    """An agent item's fields, long values cut, so its exact shape can be read later."""
+    return {k: (short(v, 200) if isinstance(v, str) else v) for k, v in item.items() if k != "id"}

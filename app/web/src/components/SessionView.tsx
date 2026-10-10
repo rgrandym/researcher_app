@@ -8,6 +8,7 @@ import { send } from "../lib/socket";
 import type { Activity, SessionDetail } from "../lib/types";
 import { useUi } from "../stores/ui";
 import ActivityPanel from "./ActivityPanel";
+import Panel, { CENTER, PANELS } from "./Panel";
 import { attachNote } from "./Home";
 import PromptBar, { type Attached, useConnections, useSettings } from "./PromptBar";
 import Transcript from "./Transcript";
@@ -64,32 +65,32 @@ export default function SessionView({ id, embedded = false, onNew }: { id: strin
   };
 
   return (
-    <div className="flex h-full">
-      <div className="flex min-w-0 flex-1 flex-col">
+    <div className="relative flex h-full">
+      <div className={`flex flex-col ${CENTER}`}>
         {embedded && (
-          <div className="flex items-center gap-2 border-b border-border px-5 py-1.5 text-[12px] text-faint">
+          <div className="flex items-center gap-2 border-b border-border px-5 py-1.5 text-[0.75rem] text-faint">
             <span className="min-w-0 flex-1 truncate">
               Conversation about this project
               {segments.length > 0 && ` · ${segments.map((s) => label(s.provider)).join(" → ")}`}
             </span>
             {onNew && (
               <button onClick={onNew} disabled={isRunning} className="flex items-center gap-1 rounded-md border border-border px-2 py-0.5 hover:border-accent disabled:opacity-40" title="Start another conversation on this project">
-                <Plus size={12} /> New conversation
+                <Plus size="0.75rem" /> New conversation
               </button>
             )}
             <button onClick={() => setView({ kind: "session", id })} className="underline hover:text-fg" title="Open this conversation full width">
               Open full
             </button>
             <button onClick={toggleActivity} title={activityOpen ? "Collapse the activity panel" : "Show the activity panel: progress and agents"} className={clsx("rounded-md p-1 hover:bg-panel hover:text-fg", activityOpen && "text-accent")}>
-              <PanelRight size={15} />
+              <PanelRight size="0.9375rem" />
             </button>
           </div>
         )}
         {!embedded && (
         <div className="flex items-center gap-2 border-b border-border px-5 py-2">
           <div className="min-w-0 flex-1">
-            <div className="truncate text-[14px] font-medium">{detail.data?.title ?? "…"}</div>
-            <div className="flex flex-wrap gap-1.5 text-[11.5px] text-faint">
+            <div className="truncate text-[0.875rem] font-medium">{detail.data?.title ?? "…"}</div>
+            <div className="flex flex-wrap gap-1.5 text-[0.7188rem] text-faint">
               {segments.map((s, i) => (
                 <span key={i}>
                   {i > 0 && "→ "}
@@ -104,7 +105,7 @@ export default function SessionView({ id, embedded = false, onNew }: { id: strin
             </div>
           </div>
           <button onClick={toggleActivity} title={activityOpen ? "Collapse the activity panel" : "Show the activity panel"} className={clsx("rounded-md p-1.5 hover:bg-panel hover:text-fg", activityOpen ? "text-accent" : "text-faint")}>
-            <PanelRight size={16} />
+            <PanelRight size="1rem" />
           </button>
         </div>
         )}
@@ -117,23 +118,23 @@ export default function SessionView({ id, embedded = false, onNew }: { id: strin
         </div>
         <div className="mx-auto w-full max-w-3xl px-6 pb-4">
           {detail.data?.stale && !isRunning && (
-            <div className="mb-2 flex items-center gap-2 rounded-lg border border-warn/50 px-3 py-2 text-[12.5px]">
+            <div className="mb-2 flex items-center gap-2 rounded-lg border border-warn/50 px-3 py-2 text-[0.7812rem]">
               <span className="flex-1">The workspace configuration changed after this session started. The next message starts a fresh {label(last?.provider)} session with a handoff packet.</span>
-              <button onClick={() => keep.mutate()} className="text-[12px] text-muted underline">
+              <button onClick={() => keep.mutate()} className="text-[0.75rem] text-muted underline">
                 Keep the old session
               </button>
             </div>
           )}
           {errors[id] && (
-            <div className="mb-2 flex items-center gap-2 rounded-lg border border-bad/50 px-3 py-2 text-[12.5px] text-bad">
+            <div className="mb-2 flex items-center gap-2 rounded-lg border border-bad/50 px-3 py-2 text-[0.7812rem] text-bad">
               <span className="flex-1">{errors[id]}</span>
               <button onClick={() => setError(id, "")}>
-                <X size={13} />
+                <X size="0.8125rem" />
               </button>
             </div>
           )}
           {last && connection !== last.provider && !isRunning && (
-            <div className="mb-1 text-[12px] text-faint">The next message hands this session over to {label(connection)} with a handoff packet.</div>
+            <div className="mb-1 text-[0.75rem] text-faint">The next message hands this session over to {label(connection)} with a handoff packet.</div>
           )}
           <PromptBar
             onSend={onSend}
@@ -149,17 +150,17 @@ export default function SessionView({ id, embedded = false, onNew }: { id: strin
         </div>
       </div>
       {activityOpen && (
-        <aside className="flex w-[22rem] shrink-0 flex-col border-l border-border bg-panel/50">
+        <Panel size={PANELS.activity} side="right" overlayBelow={1000} onClose={toggleActivity} className="bg-panel/50">
           <div className="flex items-center border-b border-border px-4 py-1.5">
-            <span className="text-[11px] font-medium uppercase tracking-wide text-faint">Activity</span>
+            <span className="text-[0.6875rem] font-medium uppercase tracking-wide text-faint">Activity</span>
             <button onClick={toggleActivity} title="Collapse the panel" className="ml-auto rounded-md p-1 text-faint hover:bg-panel hover:text-fg">
-              <PanelRightClose size={15} />
+              <PanelRightClose size="0.9375rem" />
             </button>
           </div>
           <div className="min-h-0 flex-1">
             <ActivityPanel sid={id} data={activity.data} />
           </div>
-        </aside>
+        </Panel>
       )}
     </div>
   );

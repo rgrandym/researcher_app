@@ -5,6 +5,8 @@ import { Settings2, X } from "lucide-react";
 import { subscribe } from "./lib/socket";
 import { useUi } from "./stores/ui";
 import Sidebar from "./components/Sidebar";
+import StatusIndicator from "./components/StatusIndicator";
+import { CENTER } from "./components/Panel";
 import Home from "./components/Home";
 import SessionView from "./components/SessionView";
 import RunView from "./components/RunView";
@@ -50,16 +52,16 @@ export default function App() {
   );
 
   return (
-    <div className="flex h-full">
+    <div className="relative flex h-full">
       <Sidebar />
-      <main className="flex min-w-0 flex-1 flex-col">
+      <main className={`flex flex-col ${CENTER}`}>
         <header className="flex h-11 shrink-0 items-center gap-1 border-b border-border px-4">
           {(["research", "guide"] as const).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
               className={clsx(
-                "rounded-md px-3 py-1 text-[13px]",
+                "rounded-md px-3 py-1 text-[0.8125rem]",
                 tab === t ? "bg-panel font-medium text-fg" : "text-muted hover:text-fg",
               )}
             >
@@ -68,19 +70,20 @@ export default function App() {
           ))}
           <div className="flex-1" />
           {(view.kind === "workspace" || view.kind === "models") && tab === "research" && (
-            <button onClick={close} title="Close (Esc)" className="flex items-center gap-1 rounded-md px-2.5 py-1 text-[13px] text-muted hover:bg-panel hover:text-fg">
-              <X size={14} /> Close
+            <button onClick={close} title="Close (Esc)" className="flex items-center gap-1 rounded-md px-2.5 py-1 text-[0.8125rem] text-muted hover:bg-panel hover:text-fg">
+              <X size="0.875rem" /> Close
             </button>
           )}
+          <StatusIndicator />
           <button
             onClick={() => (view.kind === "models" && tab === "research" ? close() : setView({ kind: "models" }))}
             title="Models: connections, sign-in and settings"
             className={clsx(
-              "flex items-center gap-1.5 rounded-md px-3 py-1 text-[13px]",
+              "flex items-center gap-1.5 rounded-md px-3 py-1 text-[0.8125rem]",
               view.kind === "models" && tab === "research" ? "bg-panel font-medium text-fg" : "text-muted hover:text-fg",
             )}
           >
-            <Settings2 size={14} /> Models
+            <Settings2 size="0.875rem" /> Models
           </button>
         </header>
         <div className="min-h-0 flex-1">

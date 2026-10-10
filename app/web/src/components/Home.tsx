@@ -32,7 +32,7 @@ export default function Home() {
 
   return (
     <div className="flex h-full flex-col items-center justify-center px-6 pb-24">
-      <h1 className="mb-6 text-[26px] font-medium tracking-tight text-fg">What do you want to find out?</h1>
+      <h1 className="mb-6 text-[1.625rem] font-medium tracking-tight text-fg">What do you want to find out?</h1>
       <div className="w-full max-w-2xl">
         <PromptBar onSend={start} connection={connection} onConnection={(c) => setNextConnection("new", c)} autoFocus />
       </div>

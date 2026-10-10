@@ -8,11 +8,15 @@ import { api } from "./api";
 export interface Prefs {
   theme: string;
   agents_view: "cards" | "lanes" | "list";
+  sidebar_open: boolean;
   activity_open: boolean;
   run_panel_open: boolean;
+  // Side panels' widths, as shares of the window (components/Panel.tsx).
+  panel_widths?: Record<string, number>;
+  figures_open?: boolean;
 }
 
-const DEFAULTS: Prefs = { theme: "system", agents_view: "cards", activity_open: true, run_panel_open: true };
+const DEFAULTS: Prefs = { theme: "system", agents_view: "cards", sidebar_open: true, activity_open: true, run_panel_open: true };
 let current: Prefs = { ...DEFAULTS };
 
 export async function loadPrefs(): Promise<Prefs> {

@@ -1,0 +1,6 @@
+{
+  "name": "research-live",
+  "version": "0.1.0",
+  "description": "Live research pane: the active run's progress and agents; absorbs hand edits and re-exports HTML by itself",
+  "types": "./types/index.d.ts"
+}

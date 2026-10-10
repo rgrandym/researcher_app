@@ -29,9 +29,9 @@ def _settings(**routing: Any) -> dict[str, Any]:
 def test_command_picks_tier_per_runtime(data: Path) -> None:
     s = _settings()
     r = router.route("/research lithium prices", "claude-sub", s)
-    assert (r.model, r.effort, r.tier, r.key) == ("opus", "high", "frontier", "research")
+    assert (r.model, r.effort, r.tier, r.key) == ("opus", "medium", "frontier", "research")
     r = router.route("/research lithium prices", "codex-plan", s)
-    assert (r.model, r.effort) == ("gpt-6-astra", "high")
+    assert (r.model, r.effort) == ("gpt-6-astra", "medium")
     r = router.route("/verify outputs/x E42", "codex-api", s)
     assert (r.model, r.effort, r.tier) == ("gpt-6.1-sol", "medium", "workhorse")
 
@@ -82,7 +82,7 @@ def test_stored_routing_overrides_entry_by_entry(data: Path) -> None:
         "fast": "gpt-5.6-luna",
     }
     assert s["commands"]["export"] == ["fast", "low"]
-    assert s["commands"]["research"] == ["frontier", "high"] and s["enabled"] is True
+    assert s["commands"]["research"] == ["frontier", "medium"] and s["enabled"] is True
 
 
 def test_reply_keeps_the_route_of_the_command_that_started_it(root: Path) -> None:
@@ -95,15 +95,15 @@ def test_reply_keeps_the_route_of_the_command_that_started_it(root: Path) -> Non
         await _settle(m, s.id)
         await m.send(s.id, "only list prices, please", "claude-sub")
         await _settle(m, s.id)
-        assert [(o.model, o.effort) for o in claude.options] == [("opus", "high")] * 2
+        assert [(o.model, o.effort) for o in claude.options] == [("opus", "medium")] * 2
         seg = sessions.load(s.id).segments[0]
         assert (seg.model, seg.route_key) == ("opus", "research")
         routes = [
             e.data["text"] for e in sessions.transcript(s.id) if e.data.get("kind") == "route"
         ]
         assert routes == [
-            "/research: frontier tier, opus at high effort",
-            "/research (continued): frontier tier, opus at high effort",
+            "/research: frontier tier, opus at medium effort",
+            "/research (continued): frontier tier, opus at medium effort",
         ]
 
     asyncio.run(go())

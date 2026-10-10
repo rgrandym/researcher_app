@@ -13,10 +13,12 @@ No function here makes a model call. Claude Code reports its windows in the
 from __future__ import annotations
 
 import json
+import os
 import re
 import select
 import subprocess
 import time
+from pathlib import Path
 from typing import Any
 
 from backend import config
@@ -57,10 +59,26 @@ def classify(text: str) -> ErrorKind:
     return "other"
 
 
-def reset_from_text(text: str) -> float | None:
-    """A reset time named in a limit message: an epoch after `|` (older Claude Code)."""
+def reset_from_text(text: str, now: float | None = None) -> float | None:
+    """A reset time named in a limit message: an epoch after `|` (older Claude Code), or a
+    clock time ("try again at 10:21 PM", "resets 22:21"), the next time it comes round."""
     m = re.search(r"\|(\d{10})\b", text)
-    return float(m.group(1)) if m else None
+    if m:
+        return float(m.group(1))
+    m = re.search(r"\b(?:at|resets?(?: at)?)\s+(\d{1,2})(?::(\d{2}))?\s*([ap]\.?m\.?)?", text, re.I)
+    if not m:
+        return None
+    hour, minute = int(m.group(1)), int(m.group(2) or 0)
+    half = (m.group(3) or "").lower().replace(".", "")
+    if half == "pm" and hour < 12:
+        hour += 12
+    elif half == "am" and hour == 12:
+        hour = 0
+    if hour > 23 or minute > 59 or (not half and not m.group(2)):
+        return None  # a bare number is not a clock time
+    base = time.localtime(now if now is not None else time.time())
+    target = time.mktime((base.tm_year, base.tm_mon, base.tm_mday, hour, minute, 0, 0, 0, -1))
+    return target + 86400 if target <= (now if now is not None else time.time()) else target
 
 
 # ------------------------------------------------------------------ Claude Code
@@ -231,3 +249,65 @@ def over_threshold(usage: UsageWindows | None, threshold: float) -> UsageWindow 
         if win.used_percent is not None and win.used_percent >= threshold:
             return win
     return None
+
+
+# ------------------------------------------------------------------ Codex threads' own record
+
+_rollout_cache: dict[str, tuple[float, dict[str, int]]] = {}
+
+
+def _codex_sessions_dir() -> Path:
+    return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "sessions"
+
+
+def codex_thread_usage(thread_id: str | None) -> dict[str, int] | None:
+    """Tokens and web searches of one Codex thread and every subagent thread it spawned, from
+    the rollout files Codex writes as it works (~/.codex/sessions/.../rollout-*-<id>.jsonl).
+
+    The stream's `turn.completed` carries usage only for a turn that completes, and only the
+    main thread's: a turn stopped by a usage limit, and the subagents' work, never reach it.
+    The rollouts hold both, so the activity panel reads them. None when no rollout is found."""
+    if not thread_id:
+        return None
+    base = _codex_sessions_dir()
+    main = next(iter(base.glob(f"*/*/*/rollout-*-{thread_id}.jsonl")), None)
+    if main is None:
+        return None
+    # Subagent threads start after their parent: rollout names begin with the start time
+    # ("rollout-2026-10-09T17-20-57-"), so only later rollouts can be its children.
+    started = main.name[: len("rollout-2026-10-09T17-20-57")]
+    files = [main] + [
+        p for p in sorted(base.glob("*/*/*/rollout-*.jsonl")) if p != main and p.name >= started
+    ]
+    child = re.compile(r'"parent_thread_id"\s*:\s*"' + re.escape(thread_id) + '"')
+    newest = max(p.stat().st_mtime for p in files)
+    hit = _rollout_cache.get(thread_id)
+    if hit and hit[0] >= newest:
+        return hit[1]
+    totals = {"tokens_in": 0, "tokens_out": 0, "searches": 0, "threads": 0}
+    for path in files:
+        try:
+            text = path.read_text(errors="replace")
+        except OSError:
+            continue
+        if path != main and not child.search(text[:20000]):
+            continue  # another thread's rollout
+        last: dict[str, Any] | None = None
+        for line in text.splitlines():
+            if '"token_count"' not in line and '"web_search' not in line:
+                continue
+            try:
+                payload = json.loads(line).get("payload") or {}
+            except ValueError:
+                continue
+            kind = payload.get("type")
+            if kind == "token_count" and payload.get("info"):
+                last = payload["info"].get("total_token_usage") or last
+            elif kind in ("web_search_call", "web_search"):
+                totals["searches"] += 1
+        totals["threads"] += 1
+        if last:
+            totals["tokens_in"] += int(last.get("input_tokens") or 0)
+            totals["tokens_out"] += int(last.get("output_tokens") or 0)
+    _rollout_cache[thread_id] = (newest, totals)
+    return totals

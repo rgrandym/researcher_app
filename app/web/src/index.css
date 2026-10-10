@@ -142,10 +142,17 @@ body,
   height: 100%;
 }
 
+/* One base size for the whole interface, set by the window's width: every text size, icon,
+   gap and panel is in rem, so moving between a laptop and a large monitor scales them all
+   together. 16px at a 1512px-wide window (a 14" MacBook), 14px at the smallest, 20px at most. */
+html {
+  font-size: clamp(14px, calc(0.5vw + 8.5px), 20px);
+}
+
 body {
   background: var(--bg);
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: 0.875rem;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -175,7 +182,9 @@ body {
 .scroll-thin::-webkit-scrollbar { width: 8px; height: 8px; }
 .scroll-thin::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 
-/* A running agent's swimlane bar: moving stripes, so live work reads at a glance. */
+/* A running agent's swimlane bar: moving stripes, so live work reads at a glance.
+   The bar's colour must be set as background-color: the `background` shorthand would
+   reset this background-image. */
 .lane-running {
   background-image: linear-gradient(45deg, rgba(255, 255, 255, 0.28) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, 0.28) 50%, rgba(255, 255, 255, 0.28) 75%, transparent 75%, transparent);
   background-size: 10px 10px;
@@ -185,6 +194,43 @@ body {
   from { background-position: 0 0; }
   to { background-position: 10px 0; }
 }
+/* An agent walking along a track (the stepper's next leg, a running agent's card): it paces
+   from one end to the other and back while the work goes on. */
+.walker {
+  left: 0;
+  animation: walker 2.6s ease-in-out infinite alternate;
+}
+@keyframes walker {
+  from { left: 0; transform: translateX(0); }
+  to { left: 100%; transform: translateX(-100%); }
+}
+/* An agent riding its swimlane bar's leading edge: the edge moves as the work goes on (the
+   bar grows with time), and the rider bobs while it works. */
+.rider {
+  transform: translateX(-50%);
+  transition: left 1.2s cubic-bezier(0.22, 1, 0.36, 1);
+}
+/* A finished agent: it holds at the end of its track for a moment, then fades away
+   (the panel drops the row after LINGER_S in ActivityPanel.tsx). */
+.agent-leaving {
+  animation: agent-leaving 5s ease-in forwards;
+}
+@keyframes agent-leaving {
+  0%, 55% { opacity: 1; }
+  100% { opacity: 0; }
+}
+/* A progress fill glides to its new length as the agent works. */
+.track-fill {
+  transition: width 1.2s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.rider-live {
+  animation: rider-bob 0.7s ease-in-out infinite alternate;
+}
+@keyframes rider-bob {
+  from { transform: translate(-50%, 0); }
+  to { transform: translate(-50%, -2px); }
+}
 @media (prefers-reduced-motion: reduce) {
-  .lane-running { animation: none; }
+  .lane-running, .walker, .rider-live, .agent-leaving { animation: none; }
+  .rider, .track-fill { transition: none; }
 }

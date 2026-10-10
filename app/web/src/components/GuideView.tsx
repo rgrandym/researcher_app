@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import Markdown, { slug } from "./Markdown";
+import Panel, { CENTER, PANELS } from "./Panel";
 
 export default function GuideView() {
   // Read on every open, so edits to USERGUIDE.md show without a rebuild.
@@ -10,8 +11,9 @@ export default function GuideView() {
 
   return (
     <div className="flex h-full">
-      <nav className="scroll-thin w-64 shrink-0 overflow-y-auto border-r border-border p-4 text-[12.5px]">
-        <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-faint">Contents</div>
+      <Panel size={PANELS.nav} side="left">
+      <nav className="scroll-thin min-h-0 flex-1 overflow-y-auto p-4 text-[0.7812rem]">
+        <div className="mb-2 text-[0.6875rem] font-medium uppercase tracking-wide text-faint">Contents</div>
         {headings.map((h, i) => (
           <button
             key={i}
@@ -23,7 +25,8 @@ export default function GuideView() {
           </button>
         ))}
       </nav>
-      <div className="scroll-thin min-w-0 flex-1 overflow-y-auto">
+      </Panel>
+      <div className={`scroll-thin overflow-y-auto ${CENTER}`}>
         <div className="mx-auto max-w-3xl px-8 py-6">
           {guide.isLoading ? <div className="text-faint">Loading…</div> : <Markdown text={text} />}
         </div>

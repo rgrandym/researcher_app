@@ -5,11 +5,12 @@ import { ChevronDown, ChevronRight, History, Plus, Sparkles } from "lucide-react
 import { api, q } from "../lib/api";
 import type { Commit, WorkspaceGroup } from "../lib/types";
 import Markdown from "./Markdown";
+import Panel, { CENTER, PANELS } from "./Panel";
 
 function DiffView({ text }: { text: string }) {
-  if (!text.trim()) return <div className="text-[12px] text-faint">No change.</div>;
+  if (!text.trim()) return <div className="text-[0.75rem] text-faint">No change.</div>;
   return (
-    <pre className="scroll-thin max-h-[50vh] overflow-auto rounded-md bg-panel p-2 font-mono text-[11.5px] leading-5">
+    <pre className="scroll-thin max-h-[50vh] overflow-auto rounded-md bg-panel p-2 font-mono text-[0.7188rem] leading-5">
       {text.split("\n").map((line, i) => (
         <div
           key={i}
@@ -145,14 +146,15 @@ export default function WorkspaceView({ initialPath }: { initialPath?: string })
 
   return (
     <div className="flex h-full">
-      <nav className="scroll-thin w-64 shrink-0 overflow-y-auto border-r border-border p-3 text-[12.5px]">
+      <Panel size={PANELS.nav} side="left">
+      <nav className="scroll-thin min-h-0 flex-1 overflow-y-auto p-3 text-[0.7812rem]">
         <button onClick={() => setCreating(true)} className="mb-2 flex w-full items-center gap-1.5 rounded-md border border-border px-2 py-1.5 hover:border-accent">
-          <Plus size={13} /> New skill, command or agent
+          <Plus size="0.8125rem" /> New skill, command or agent
         </button>
         {(files.data ?? []).map((g) => (
           <div key={g.group} className="mb-1">
-            <button onClick={() => setClosed((c) => ({ ...c, [g.group]: !c[g.group] }))} className="flex w-full items-center gap-1 py-1 text-[11.5px] font-medium uppercase tracking-wide text-faint hover:text-muted">
-              {closed[g.group] ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
+            <button onClick={() => setClosed((c) => ({ ...c, [g.group]: !c[g.group] }))} className="flex w-full items-center gap-1 py-1 text-[0.7188rem] font-medium uppercase tracking-wide text-faint hover:text-muted">
+              {closed[g.group] ? <ChevronRight size="0.6875rem" /> : <ChevronDown size="0.6875rem" />}
               {g.group}
               <span className="ml-auto font-normal">{g.files.length}</span>
             </button>
@@ -162,21 +164,22 @@ export default function WorkspaceView({ initialPath }: { initialPath?: string })
                   {f.name}
                 </button>
               ))}
-            {!closed[g.group] && g.files.length === 0 && <div className="px-2 text-[11.5px] text-faint">None</div>}
+            {!closed[g.group] && g.files.length === 0 && <div className="px-2 text-[0.7188rem] text-faint">None</div>}
           </div>
         ))}
       </nav>
+      </Panel>
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className={`flex flex-col ${CENTER}`}>
         {!path ? (
-          <div className="p-8 text-[13px] text-muted">
-            <h1 className="mb-1 text-[18px] font-medium text-fg">Workspace</h1>
+          <div className="p-8 text-[0.8125rem] text-muted">
+            <h1 className="mb-1 text-[1.125rem] font-medium text-fg">Workspace</h1>
             The skills, commands, agents, doctrine and scripts that define how the agents behave. A change here applies to VS Code and the app alike. Every save is checked, then committed alone to the local repository.
           </div>
         ) : (
           <>
             <div className="flex items-center gap-2 border-b border-border px-4 py-2">
-              <div className="min-w-0 flex-1 truncate font-mono text-[12.5px]">
+              <div className="min-w-0 flex-1 truncate font-mono text-[0.7812rem]">
                 {path}
                 {isNew && <span className="ml-2 text-accent">new</span>}
                 {content !== original && <span className="ml-2 text-warn">unsaved</span>}
@@ -184,21 +187,21 @@ export default function WorkspaceView({ initialPath }: { initialPath?: string })
               {(["edit", "preview", "history"] as Tab[])
                 .filter((t) => (t === "preview" ? path.endsWith(".md") : t === "history" ? !isNew : true))
                 .map((t) => (
-                  <button key={t} onClick={() => setTab(t)} className={clsx("rounded-md px-2.5 py-1 text-[12px]", tab === t ? "bg-panel text-fg" : "text-muted hover:text-fg")}>
+                  <button key={t} onClick={() => setTab(t)} className={clsx("rounded-md px-2.5 py-1 text-[0.75rem]", tab === t ? "bg-panel text-fg" : "text-muted hover:text-fg")}>
                     {t === "edit" ? "Edit" : t === "preview" ? "Preview" : "History"}
                   </button>
                 ))}
-              <button onClick={() => setContent(original)} disabled={content === original} className="rounded-md border border-border px-2.5 py-1 text-[12px] disabled:opacity-40">
+              <button onClick={() => setContent(original)} disabled={content === original} className="rounded-md border border-border px-2.5 py-1 text-[0.75rem] disabled:opacity-40">
                 Revert
               </button>
-              <button onClick={() => prepare.mutate()} disabled={content === original && !isNew} className="rounded-md bg-accent px-3 py-1 text-[12px] text-white disabled:opacity-40">
+              <button onClick={() => prepare.mutate()} disabled={content === original && !isNew} className="rounded-md bg-accent px-3 py-1 text-[0.75rem] text-white disabled:opacity-40">
                 Save…
               </button>
             </div>
-            {notice && <div className="border-b border-border bg-panel px-4 py-1.5 text-[12px] text-muted">{notice}</div>}
+            {notice && <div className="border-b border-border bg-panel px-4 py-1.5 text-[0.75rem] text-muted">{notice}</div>}
             <div className="min-h-0 flex-1">
               {tab === "edit" && (
-                <textarea value={content} onChange={(e) => setContent(e.target.value)} spellCheck={path.endsWith(".md")} className="h-full w-full resize-none bg-bg p-4 font-mono text-[12.5px] leading-5 outline-none" />
+                <textarea value={content} onChange={(e) => setContent(e.target.value)} spellCheck={path.endsWith(".md")} className="h-full w-full resize-none bg-bg p-4 font-mono text-[0.7812rem] leading-5 outline-none" />
               )}
               {tab === "preview" && (
                 <div className="scroll-thin h-full overflow-y-auto">
@@ -207,10 +210,10 @@ export default function WorkspaceView({ initialPath }: { initialPath?: string })
               )}
               {tab === "history" && (
                 <div className="scroll-thin h-full overflow-y-auto p-4">
-                  {history.data?.length === 0 && <div className="text-[12.5px] text-faint">No commits for this file.</div>}
+                  {history.data?.length === 0 && <div className="text-[0.7812rem] text-faint">No commits for this file.</div>}
                   {(history.data ?? []).map((c) => (
-                    <div key={c.rev} className="flex items-center gap-2 border-b border-border py-1.5 text-[12.5px]">
-                      <History size={13} className="text-faint" />
+                    <div key={c.rev} className="flex items-center gap-2 border-b border-border py-1.5 text-[0.7812rem]">
+                      <History size="0.8125rem" className="text-faint" />
                       <button onClick={() => void showCommit(c.rev)} className="font-mono text-accent">
                         {c.short}
                       </button>
@@ -224,15 +227,15 @@ export default function WorkspaceView({ initialPath }: { initialPath?: string })
             {!isNew && (
               <div className="border-t border-border p-3">
                 <div className="flex items-start gap-2">
-                  <Sparkles size={15} className="mt-1.5 text-accent" />
+                  <Sparkles size="0.9375rem" className="mt-1.5 text-accent" />
                   <textarea
                     value={improve}
                     onChange={(e) => setImprove(e.target.value)}
                     rows={2}
                     placeholder="Improve with an agent: describe the change in plain words. It reads .claude/ and edits a copy of this file only, with no web access."
-                    className="flex-1 resize-none rounded-md border border-border bg-surface px-2 py-1.5 text-[12.5px] outline-none"
+                    className="flex-1 resize-none rounded-md border border-border bg-surface px-2 py-1.5 text-[0.7812rem] outline-none"
                   />
-                  <button onClick={() => ask.mutate()} disabled={!improve.trim() || ask.isPending} className="rounded-md border border-border px-3 py-1.5 text-[12px] hover:border-accent disabled:opacity-40">
+                  <button onClick={() => ask.mutate()} disabled={!improve.trim() || ask.isPending} className="rounded-md border border-border px-3 py-1.5 text-[0.75rem] hover:border-accent disabled:opacity-40">
                     {ask.isPending ? "Working…" : "Propose"}
                   </button>
                 </div>
@@ -244,9 +247,9 @@ export default function WorkspaceView({ initialPath }: { initialPath?: string })
 
       {review && (
         <Modal onClose={() => setReview(null)}>
-          <h2 className="mb-2 text-[15px] font-medium">Save {path}</h2>
+          <h2 className="mb-2 text-[0.9375rem] font-medium">Save {path}</h2>
           {review.problems.length > 0 && (
-            <div className="mb-3 rounded-md border border-bad/50 p-2 text-[12.5px] text-bad">
+            <div className="mb-3 rounded-md border border-bad/50 p-2 text-[0.7812rem] text-bad">
               <div className="font-medium">The checks block this save:</div>
               {review.problems.map((p, i) => (
                 <div key={i} className="whitespace-pre-wrap">
@@ -256,13 +259,13 @@ export default function WorkspaceView({ initialPath }: { initialPath?: string })
             </div>
           )}
           <DiffView text={review.diff} />
-          <label className="mt-3 block text-[12px] text-muted">Commit message</label>
-          <input value={message} onChange={(e) => setMessage(e.target.value)} className="mt-1 w-full rounded-md border border-border bg-surface px-2 py-1.5 text-[13px]" />
+          <label className="mt-3 block text-[0.75rem] text-muted">Commit message</label>
+          <input value={message} onChange={(e) => setMessage(e.target.value)} className="mt-1 w-full rounded-md border border-border bg-surface px-2 py-1.5 text-[0.8125rem]" />
           <div className="mt-3 flex justify-end gap-2">
-            <button onClick={() => setReview(null)} className="rounded-md border border-border px-3 py-1.5 text-[12.5px]">
+            <button onClick={() => setReview(null)} className="rounded-md border border-border px-3 py-1.5 text-[0.7812rem]">
               Cancel
             </button>
-            <button onClick={() => save.mutate()} disabled={review.problems.length > 0 || save.isPending} className="rounded-md bg-accent px-3 py-1.5 text-[12.5px] text-white disabled:opacity-40">
+            <button onClick={() => save.mutate()} disabled={review.problems.length > 0 || save.isPending} className="rounded-md bg-accent px-3 py-1.5 text-[0.7812rem] text-white disabled:opacity-40">
               {save.isPending ? "Checking…" : "Save and commit"}
             </button>
           </div>
@@ -271,12 +274,12 @@ export default function WorkspaceView({ initialPath }: { initialPath?: string })
 
       {proposal && (
         <Modal onClose={() => setProposal(null)}>
-          <h2 className="mb-2 text-[15px] font-medium">Proposed change</h2>
-          {proposal.error && <div className="mb-2 text-[12.5px] text-bad">{proposal.error}</div>}
-          {proposal.reply && <Markdown text={proposal.reply} className="mb-3 text-[13px]" />}
+          <h2 className="mb-2 text-[0.9375rem] font-medium">Proposed change</h2>
+          {proposal.error && <div className="mb-2 text-[0.7812rem] text-bad">{proposal.error}</div>}
+          {proposal.reply && <Markdown text={proposal.reply} className="mb-3 text-[0.8125rem]" />}
           <DiffView text={proposal.diff} />
           <div className="mt-3 flex justify-end gap-2">
-            <button onClick={() => setProposal(null)} className="rounded-md border border-border px-3 py-1.5 text-[12.5px]">
+            <button onClick={() => setProposal(null)} className="rounded-md border border-border px-3 py-1.5 text-[0.7812rem]">
               Reject
             </button>
             <button
@@ -287,7 +290,7 @@ export default function WorkspaceView({ initialPath }: { initialPath?: string })
                 setTab("edit");
                 setNotice("The proposal is in the editor. Edit it if you like, then Save.");
               }}
-              className="rounded-md bg-accent px-3 py-1.5 text-[12.5px] text-white disabled:opacity-40"
+              className="rounded-md bg-accent px-3 py-1.5 text-[0.7812rem] text-white disabled:opacity-40"
             >
               Accept into the editor
             </button>
@@ -299,14 +302,14 @@ export default function WorkspaceView({ initialPath }: { initialPath?: string })
         <Modal onClose={() => setCommit(null)}>
           <DiffView text={commit.text} />
           <div className="mt-3 flex justify-end gap-2">
-            <button onClick={() => setCommit(null)} className="rounded-md border border-border px-3 py-1.5 text-[12.5px]">
+            <button onClick={() => setCommit(null)} className="rounded-md border border-border px-3 py-1.5 text-[0.7812rem]">
               Close
             </button>
             <button
               onClick={() => {
                 if (window.confirm(`Restore ${path} to ${commit.rev.slice(0, 7)}? The restore is itself a new commit.`)) restore.mutate(commit.rev);
               }}
-              className="rounded-md bg-accent px-3 py-1.5 text-[12.5px] text-white"
+              className="rounded-md bg-accent px-3 py-1.5 text-[0.7812rem] text-white"
             >
               Restore this version
             </button>
@@ -328,8 +331,8 @@ function NewFileForm({ onCreate, onCancel }: { onCreate: (b: { kind: string; nam
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   return (
-    <div className="space-y-3 text-[13px]">
-      <h2 className="text-[15px] font-medium">New file from a template</h2>
+    <div className="space-y-3 text-[0.8125rem]">
+      <h2 className="text-[0.9375rem] font-medium">New file from a template</h2>
       <div className="flex gap-2">
         {["skill", "command", "agent"].map((k) => (
           <button key={k} onClick={() => setKind(k)} className={clsx("rounded-md border px-3 py-1", kind === k ? "border-accent bg-accent-bg" : "border-border")}>

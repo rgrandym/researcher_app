@@ -4,6 +4,8 @@
 #   start.sh             sync the conda env, update the CLIs, run the launcher
 #   start.sh --status    print "turn" (an agent turn is running), "up" or "down"
 #   start.sh --stop      stop the backend and close the app window
+#   start.sh --window-pid  the open app window's Chrome pid, or nothing
+#   start.sh --raise     bring the open window to the front; "raised", or nothing if none
 #
 # Output goes to app/data/launcher.log.
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -14,7 +16,7 @@ PY="$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).g
 [[ -x "$PY" ]] || PY=/usr/bin/python3
 
 case "${1:-}" in
-  --status|--stop)
+  --status|--stop|--window-pid|--raise)
     exec "$PY" "$APP_DIR/mac/launcher.py" "$1"
     ;;
 esac

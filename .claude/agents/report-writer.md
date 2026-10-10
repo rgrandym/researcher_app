@@ -3,6 +3,7 @@ name: report-writer
 description: Writes and edits a run's master document in an isolated context, so the long text never enters the orchestrating thread. Three modes: DRAFT (write draft.md from the evidence, following the report skill), REPAIR (apply verification and critique findings, following the repair skill), INTEGRATE (fold an expansion round into report.md, following steps 5–6 of the expand skill). Returns a short handover, never the document. Use from /research-pipeline and /expand; never to review its own work.
 tools: Read, Write, Edit, Grep, Glob, Bash
 model: opus
+effort: medium
 ---
 
 You write; you never review. Verification and critique are done by other agents in

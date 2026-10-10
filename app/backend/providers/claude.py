@@ -44,6 +44,10 @@ from backend.providers.base import (
 
 STREAM_LIMIT = 64 * 1024 * 1024  # one JSON line can carry a whole tool result
 TURN_TIMEOUT_S = 6 * 3600  # a full pipeline run is long; Stop is the real control
+# A `result` that comes before the model has said anything for this prompt is not this
+# turn's end: a resumed session first drains what it had queued (notices of tasks a closed
+# process left behind) and reports a result for that. The real reply gets this long to start.
+EARLY_RESULT_GRACE_S = 120
 AGENT_TOOLS = ("Agent", "Task")
 MONITOR_MOD = config.ROOT / ".claude" / "skills" / "research-monitor"
 STRIP_FOR_PLAN = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
@@ -303,6 +307,13 @@ class ClaudeProvider:
         if (MONITOR_MOD / ".claude-plugin" / "plugin.json").exists():
             env["CLAUDE_CODE_PLUGIN_DIRS"] = str(MONITOR_MOD)
         env["CLAUDE_PROJECT_DIR"] = str(config.ROOT)
+        # A turn ends when the main thread's result arrives, and the process is then closed:
+        # a background subagent would be killed mid-task and show as done at launch. With
+        # this set, the Agent tool has no background option and the turn waits for its agents.
+        env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
+        # The research-live mod (.claude/skills/research-live) loads here too; the app does
+        # its jobs itself (backend/autoedits.py, the HTML tab), so the mod stands aside.
+        env["RESEARCH_APP"] = "1"
         return env
 
     def command(self, binary: str, native_session: str | None, options: TurnOptions) -> list[str]:
@@ -559,7 +570,19 @@ class _ControlSession:
     async def loop(self, prompt: str) -> None:
         assert self.proc.stdout
         sent = False
-        while line := await self.proc.stdout.readline():
+        answered = False  # the model has replied on the main thread since the prompt went in
+        early = False  # a result came before any reply: wait a while for the real one
+        while True:
+            try:
+                line = await (
+                    asyncio.wait_for(self.proc.stdout.readline(), EARLY_RESULT_GRACE_S)
+                    if early
+                    else self.proc.stdout.readline()
+                )
+            except TimeoutError:
+                break  # nothing followed the early result: the turn really did nothing
+            if not line:
+                break
             try:
                 msg = json.loads(line)
             except ValueError:
@@ -584,9 +607,15 @@ class _ControlSession:
                 if task:
                     task.cancel()
             else:
+                if sent and kind == "assistant" and not msg.get("parent_tool_use_id"):
+                    answered, early = True, False
                 for event in self.parser.feed(msg):
                     await self.on_event(event)
                 if kind == "result":
+                    failed = msg.get("is_error") or msg.get("subtype") not in (None, "success")
+                    if not answered and not failed:
+                        early = True  # the drain of a resumed session's queue, not our turn
+                        continue
                     if self.proc.stdin and not self.proc.stdin.is_closing():
                         self.proc.stdin.close()
                     break

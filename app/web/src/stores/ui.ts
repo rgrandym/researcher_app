@@ -16,6 +16,7 @@ interface UiState {
   events: Record<string, AppEvent[]>;
   running: Record<string, boolean>;
   errors: Record<string, string>;
+  sidebarOpen: boolean;
   activityOpen: boolean;
   // The connection the next message goes to, per session (or "new" for the home bar).
   nextConnection: Record<string, string>;
@@ -28,6 +29,7 @@ interface UiState {
   addEvent: (sid: string, event: AppEvent) => void;
   setRunning: (sid: string, running: boolean) => void;
   setError: (sid: string, text: string) => void;
+  toggleSidebar: () => void;
   toggleActivity: () => void;
   setNextConnection: (sid: string, conn: string) => void;
 }
@@ -39,6 +41,7 @@ export const useUi = create<UiState>((set) => ({
   events: {},
   running: {},
   errors: {},
+  sidebarOpen: prefs().sidebar_open,
   activityOpen: prefs().activity_open,
   nextConnection: {},
   setView: (view) =>
@@ -60,6 +63,11 @@ export const useUi = create<UiState>((set) => ({
   addEvent: (sid, event) => set((s) => ({ events: { ...s.events, [sid]: [...(s.events[sid] ?? []), event] } })),
   setRunning: (sid, running) => set((s) => ({ running: { ...s.running, [sid]: running } })),
   setError: (sid, text) => set((s) => ({ errors: { ...s.errors, [sid]: text } })),
+  toggleSidebar: () =>
+    set((s) => {
+      setPref("sidebar_open", !s.sidebarOpen);
+      return { sidebarOpen: !s.sidebarOpen };
+    }),
   toggleActivity: () =>
     set((s) => {
       setPref("activity_open", !s.activityOpen);

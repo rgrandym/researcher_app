@@ -5,6 +5,7 @@
     python3 .claude/scripts/cost_report.py --run <slug>     # sessions that worked on a run
     python3 .claude/scripts/cost_report.py --last 3         # the three most recent
     python3 .claude/scripts/cost_report.py --json           # machine-readable
+    python3 .claude/scripts/cost_report.py --last 1 --by-agent   # each agent type's share
 
 Reads the Claude Code transcripts for this workspace
 (~/.claude/projects/<workspace>/<session>.jsonl and <session>/subagents/*.jsonl),
@@ -15,6 +16,16 @@ The figure to watch is "mean context per call" on the main thread. It is re-read
 full on every call, so it drives cost far more than the scouts do. Baseline, the
 five research sessions run before 2026-10-09: the main thread took 65–81% of all
 input, at a mean of 216k–339k tokens per call.
+
+`--by-agent` splits the subagents by type (scout, writer, verifier, critic): how
+many ran, their calls, their input, and their mean context per call. It is how a
+change to one agent is measured, e.g. report-writer at effort medium (2026-10-10)
+against the 2026-10-09 /expand baseline: 1 writer, 49 calls, 5.0M input, ~100k
+context per call, at effort high.
+
+Output tokens are under-counted: a streamed message's transcript line carries the
+usage seen when it was written, before the output finished. Input, cache writes and
+cache reads are complete, and they dominate.
 
 Codex sessions are not covered; their transcripts live under ~/.codex/.
 """
@@ -85,10 +96,21 @@ def session(path: Path) -> dict:
     sub_models: dict = defaultdict(lambda: {"calls": 0, "input": 0, "cache_write": 0,
                                              "cache_read": 0, "output": 0})
     subs = sorted((path.parent / path.stem / "subagents").glob("*.jsonl"))
+    by_type: dict = defaultdict(lambda: {"agents": 0, "calls": 0, "input_all": 0, "contexts": []})
     for s in subs:
-        for model, m in scan(s)["models"].items():
+        scanned = scan(s)
+        for model, m in scanned["models"].items():
             for k, v in m.items():
                 sub_models[model][k] += v
+        try:
+            kind = json.loads(s.with_suffix(".meta.json").read_text()).get("agentType") or "?"
+        except (OSError, ValueError):
+            kind = "?"
+        t = by_type[kind]
+        t["agents"] += 1
+        t["calls"] += len(scanned["contexts"])
+        t["input_all"] += sum(scanned["contexts"])
+        t["contexts"] += scanned["contexts"]
     main_t, sub_t = total(head["models"]), total(dict(sub_models))
     ctx = head["contexts"]
     both = main_t["input_all"] + sub_t["input_all"]
@@ -101,6 +123,11 @@ def session(path: Path) -> dict:
                  "mean_context": sum(ctx) // len(ctx) if ctx else 0,
                  "peak_context": max(ctx) if ctx else 0},
         "sub": {**sub_t, "models": dict(sub_models)},
+        "by_agent": {
+            k: {"agents": v["agents"], "calls": v["calls"], "input_all": v["input_all"],
+                "mean_context": sum(v["contexts"]) // len(v["contexts"]) if v["contexts"] else 0}
+            for k, v in by_type.items()
+        },
         "main_share": round(main_t["input_all"] / both, 3) if both else 0.0,
     }
 
@@ -120,6 +147,8 @@ def main() -> int:
     ap.add_argument("--min-calls", type=int, default=5,
                     help="skip sessions with fewer main-thread calls (default 5)")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--by-agent", action="store_true",
+                    help="split each session's subagents by type")
     args = ap.parse_args()
 
     folder = transcripts_dir()
@@ -146,6 +175,10 @@ def main() -> int:
               f"{fmt(m['input_all']):>8} {fmt(m['output']):>8} {fmt(s['input_all']):>7} "
               f"{r['subagents']:>6} {r['main_share'] * 100:>5.0f}%  "
               f"{r['runs'][0] if r['runs'] else '-'}")
+        if args.by_agent:
+            for kind, a in sorted(r["by_agent"].items(), key=lambda x: -x[1]["input_all"]):
+                print(f"{'':9} {kind:16} {a['calls']:>5} {fmt(a['mean_context']):>8} {'':>6} "
+                      f"{fmt(a['input_all']):>8} {'':>8} {'':>7} {a['agents']:>6}")
     print("\nin = fresh input + cache writes + cache reads. main % = the orchestrating "
           "thread's share of all input.")
     return 0

@@ -113,6 +113,13 @@ class Hub:
             q.put_nowait({**message, "session": session_id})
 
 
+# Resuming a model's own earlier conversation is cheap only while its prompt cache is warm.
+# After that, the first call re-writes the whole history into the cache (66k tokens on
+# 2026-10-09, resuming after two hours) and every later call carries it. Past this age the
+# app starts a fresh conversation with the handover packet instead: a few thousand tokens.
+RESUME_WARM_S = 3600
+
+
 class TurnManager:
     def __init__(self, providers: dict[str, Any] | None = None, hub: Hub | None = None) -> None:
         self.providers: dict[str, Any] = providers if providers is not None else make_providers()
@@ -190,11 +197,22 @@ class TurnManager:
         packet = ""
         if last is None:
             packet, files = "", []
-        elif last.provider == target and last.native_session_id and reason != "config":
+        elif (
+            last.provider == target
+            and last.native_session_id
+            and reason != "config"
+            and time.time() - (last.ended or time.time()) < RESUME_WARM_S
+        ):
             # The same provider after its window reset: its own session remembers everything.
             packet, files = "", []
             resume = last.native_session_id
-        elif prior and prior is not last and prior.native_session_id and reason != "config":
+        elif (
+            prior
+            and prior is not last
+            and prior.native_session_id
+            and reason != "config"
+            and time.time() - (prior.ended or time.time()) < RESUME_WARM_S
+        ):
             other = last.provider if last else "another agent"
             packet, files = handoff.build_return(
                 session,
@@ -381,6 +399,27 @@ class TurnManager:
             )
         await self._finish(session_id, result, started, running)
 
+    @staticmethod
+    def _did_nothing(session_id: str, started: float) -> bool:
+        events = [e for e in sessions.transcript(session_id) if e.ts >= started]
+        return not any(e.type in ("assistant_text", "tool_call") for e in events)
+
+    async def retry(self, session_id: str, connection: str | None = None) -> None:
+        """Carry the last request on after a turn that did nothing or broke off. It is phrased
+        as a continuation, not the original command again: re-sending /expand would open a
+        new round, while the run folder already holds whatever the last attempt finished."""
+        if self.is_running(session_id):
+            raise ProviderError("A turn is already running in this session.")
+        events = sessions.transcript(session_id)
+        last = next((e for e in reversed(events) if e.type == "user"), None)
+        request = str(last.data.get("text") or "") if last else ""
+        text = (
+            "Carry on with the task from before; its last attempt ended before it finished. "
+            "Check the run folder for what is already done and continue from there."
+            + (f"\n\nThe request was:\n{request}" if request else "")
+        )
+        await self.send(session_id, text, connection)
+
     async def _finish(
         self, session_id: str, result: TurnResult, started: float, running: Running
     ) -> None:
@@ -411,6 +450,21 @@ class TurnManager:
                 data["next_bills_per_token"] = (data["next"] or "").endswith("-api")
             await self._emit(
                 session_id, Event(type="error", data=data, provider=seg.provider if seg else None)
+            )
+        if result.end_reason == "done" and self._did_nothing(session_id, started):
+            # A turn that ended without a word or a tool call did not run the request: say
+            # so, and offer Retry (POST /api/sessions/{id}/retry) instead of a silent "done".
+            await self._emit(
+                session_id,
+                Event(
+                    type="notice",
+                    data={
+                        "kind": "empty",
+                        "text": "The model ended this turn without doing anything, so the "
+                        "request did not run. Retry to carry on from where the task stands.",
+                    },
+                    provider=seg.provider if seg else None,
+                ),
             )
         await self._emit(
             session_id,
