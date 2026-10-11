@@ -28,23 +28,44 @@ install each came from when a newer release exists. The app opens as a Chrome ap
 window; closing it stops the backend and the front end about 15 seconds later (if an
 agent turn is running, you are asked first). Ctrl-C also stops both.
 
-The macOS app:
+The macOS app, `Research.app`:
 
 ```bash
-bash app/mac/build_app.sh          # writes ~/Applications/Research.app
+bash app/mac/build_app.sh          # installs Research.app (/Applications if it is there, else ~/Applications)
 ```
 
-Or double-click `Build Research App.command`. Then drag Research to the Dock. The first time it opens, macOS asks whether Research may access your Desktop folder, where this workspace lives: click OK. If you clicked Don't Allow, turn it on in System Settings > Privacy & Security > Files and Folders > Research. It opens as a Chrome app window
-on its own profile (no tabs, your usual Chrome untouched), and the backend stops about
-20 seconds after you close the window, unless a turn is running, when it asks first.
+Or double-click `Build Research App.command`, which builds the app and opens it. To keep
+it, right-click its Dock icon > Options > Keep in Dock. It is a native app
+(`mac/main.swift`, compiled with `swiftc`, so it needs the Xcode command line tools:
+`xcode-select --install`), with its own window, Dock icon and menus; its icon is drawn by
+`mac/make_icon.swift` at build time. The first time it opens, macOS asks whether Research
+may access your Desktop folder, where this workspace lives: click OK. If you clicked Don't
+Allow, turn it on in System Settings > Privacy & Security > Files and Folders > Research.
+The app runs `mac/start.sh --serve` to start the backend, or attaches to one already
+running. Closing the window hides it and clicking the Dock icon brings it back. Quitting
+(Cmd-Q) stops the backend; if a turn is running, it asks whether to stop it or keep it
+running in the background, and the next launch attaches to it. The build signs the app
+with a local certificate kept in your login keychain, so the permissions you grant survive
+rebuilds, and leaves an unchanged app as it is.
 The build records the absolute paths of `python3`, `claude`, `node`, `code` and
-`pandoc` in `app/data/paths.json`, because an app
-started from the Dock does not get the shell's `PATH`; rebuild after moving any of them.
-Codex is found at each start instead, since its folder moves with every VS Code
-extension update.
+`pandoc` in `app/data/paths.json`, and the app keeps the `PATH` of the shell that built
+it, because an app started from the Dock does not get the shell's `PATH`; rebuild after
+moving any of them, or after moving this folder. Codex is found at each start instead,
+since its folder moves with every VS Code extension update.
+
+The Chrome version, for Linux, Windows (under Git Bash or WSL), or a Mac without the app:
+
+```bash
+bash app/mac/start.sh              # syncs the env, builds the front end if needed, opens a Chrome window
+```
+
+It opens as a Chrome app window on its own profile (no tabs, your usual Chrome untouched),
+or in the default browser when Chrome is not installed, and the backend stops about 20
+seconds after you close the window, unless a turn is running, when it asks first.
+Output goes to `app/data/launcher.log`.
 
 Outside the env, the app needs conda, Node 20+ and pandoc (Homebrew's), and Chrome for
-the app window. The Dock app runs the same env step at every launch.
+the Chrome version. Both run the same env step at every launch.
 
 ## Test it
 
@@ -76,7 +97,7 @@ app/
     keychain.py        API keys in the macOS Keychain
   prompts/             the Codex preamble, the handoff templates, the "Improve" instructions
   web/                 React 18, TypeScript, Vite, Tailwind, Zustand, TanStack Query
-  mac/                 launcher.py, build_app.sh, icon.png
+  mac/                 main.swift and make_icon.swift (the Mac app), build_app.sh, start.sh, launcher.py
   tests/               fixtures/ and the offline suite
   docs/spike.md        what was confirmed on the installed versions, and what is still open
 ```

@@ -1,7 +1,9 @@
 """Start the Research app: one backend, opened as a Chrome app window.
 
-    python3 app/mac/launcher.py            # what Research.app runs
+    python3 app/mac/launcher.py            # the Chrome version (any system with Chrome)
     python3 app/mac/launcher.py --browser  # a tab in the default browser instead
+    python3 app/mac/launcher.py --serve    # what Research.app runs: start the backend (or
+                                           # keep the running one), print its URL, exit
     python3 app/mac/launcher.py --window-pid  # the open app window's Chrome pid, or nothing
     python3 app/mac/launcher.py --raise       # bring the open window to the front; prints
                                               # "raised", or nothing when no window is open
@@ -15,6 +17,9 @@
 3. The backend counts open windows. When none has been open for 20 seconds, the
    launcher stops the backend, unless a turn is running: then it asks whether to stop
    it or leave it running in the background.
+
+With --serve, the Mac app (main.swift) shows the window itself and stops the backend when
+it quits; the backend still stops itself once no window is connected (RESEARCH_EXIT_WHEN_IDLE).
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ import contextlib
 import json
 import os
 import secrets
+import shutil
 import signal
 import socket
 import subprocess
@@ -36,8 +42,30 @@ APP = Path(__file__).resolve().parents[1]
 DATA = APP / "data"
 PORT_FILE = DATA / "app.json"
 LOG = DATA / "backend.log"
-CHROME = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
 IDLE_S = 20
+
+
+def find_chrome() -> Path:
+    """Chrome (or Chromium) on macOS, Linux or Windows; a path that does not exist if none."""
+    mac = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+    if sys.platform == "darwin":
+        return mac
+    for name in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "chrome"):
+        found = shutil.which(name)
+        if found:
+            return Path(found)
+    for base in (
+        os.environ.get("PROGRAMFILES"),
+        os.environ.get("PROGRAMFILES(X86)"),
+        os.environ.get("LOCALAPPDATA"),
+    ):
+        exe = Path(base or "-") / "Google" / "Chrome" / "Application" / "chrome.exe"
+        if exe.exists():
+            return exe
+    return mac
+
+
+CHROME = find_chrome()
 
 
 def _alive(pid: int) -> bool:
@@ -305,6 +333,16 @@ def main() -> None:
         return
     if "--raise" in sys.argv:
         print(raise_window())
+        return
+    if "--serve" in sys.argv:
+        # The Mac app's window attaches to a running backend (perhaps one kept running for a
+        # turn when the app last quit), or to a new one.
+        info = running_backend() or start_backend()
+        print(f"http://127.0.0.1:{info['port']}/?token={info['token']}")
+        # start.sh's pid file names this process; once it exits the pid may be reused.
+        with contextlib.suppress(OSError, ValueError):
+            if int((DATA / "start.pid").read_text().strip()) == os.getpid():
+                (DATA / "start.pid").unlink()
         return
     existing = running_backend()
     if existing:

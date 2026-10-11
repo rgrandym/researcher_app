@@ -1,7 +1,9 @@
 #!/bin/bash
-# What Research.app runs (the Dock app is a thin AppleScript shell around this file).
+# Starts the Research app. Research.app (main.swift) runs it with --serve; run it bare for
+# the Chrome version, on any system with bash, conda and Chrome.
 #
-#   start.sh             sync the conda env, update the CLIs, run the launcher
+#   start.sh             sync the conda env, update the CLIs, open the app in a Chrome window
+#   start.sh --serve     the same, but only start the backend (the Mac app shows the window)
 #   start.sh --status    print "turn" (an agent turn is running), "up" or "down"
 #   start.sh --stop      stop the backend and close the app window
 #   start.sh --window-pid  the open app window's Chrome pid, or nothing
@@ -26,4 +28,9 @@ echo "--- $(date)"
 echo $$ > "$APP_DIR/data/start.pid"
 # shellcheck disable=SC1091
 source "$APP_DIR/scripts/env.sh" || { echo "env.sh failed"; exit 1; }
-exec python "$APP_DIR/mac/launcher.py"
+if [[ ! -f "$APP_DIR/web/dist/index.html" ]]; then
+  echo "Building the front end"
+  (cd "$APP_DIR/web" && { [[ -d node_modules ]] || npm install --no-audit --no-fund; } && npm run build) \
+    || { echo "The front end could not be built (needs Node 20+)"; exit 1; }
+fi
+exec python "$APP_DIR/mac/launcher.py" "$@"
