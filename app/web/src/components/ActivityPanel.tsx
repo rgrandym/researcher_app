@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Bot, Check, Circle, Globe, LayoutGrid, List, Rows3 } from "lucide-react";
+import { Check, Circle, Globe, LayoutGrid, Rows3 } from "lucide-react";
 import { api } from "../lib/api";
 import { prefs, setPref } from "../lib/prefs";
 import { clock, elapsed, resetLabel, tokens } from "../lib/format";
-import type { Activity, AgentRow } from "../lib/types";
+import type { Activity, AgentRow, AppEvent, Usage, UsageWindow } from "../lib/types";
+import { PermissionRequestCard } from "./Transcript";
 
 // ------------------------------------------------------------------ the current task's stepper
 
@@ -21,21 +22,7 @@ function Stepper({ data, walker }: { data: Activity; walker: string }) {
   const stages = run ? (run.round ? run.round.stages : run.stages) : [];
   return (
     <div>
-      {task && !task.running && (
-        <div className="flex items-center gap-1.5 text-[0.7188rem] text-faint" title={task.text}>
-          <Check size="0.75rem" className="shrink-0 text-good" />
-          <span className="text-muted">{task.label}</span>
-          <span>finished · {clock(task.started)}</span>
-          <span className="ml-auto shrink-0">
-            {steps.map((st) => (
-              <span key={st.label} className={clsx("ml-1.5", st.state === "skipped" && "line-through opacity-60")}>
-                {st.label}
-              </span>
-            ))}
-          </span>
-        </div>
-      )}
-      {task && task.running && (
+      {task && (
         <>
           <div className="flex items-baseline gap-1.5">
             <span className="font-medium text-fg">{task.label}</span>
@@ -75,7 +62,7 @@ function Stepper({ data, walker }: { data: Activity; walker: string }) {
                       )}
                     </div>
                   </div>
-                  <span className={clsx("mt-1 text-[0.6875rem]", isNow ? "font-medium text-accent" : isDone ? "text-fg" : "text-faint", skipped && "line-through")}>
+                  <span className={clsx("mt-1 text-[0.6875rem]", isNow ? "font-medium text-accent" : isDone ? "text-fg" : "text-faint", skipped && "line-through")} title={st.label}>
                     {st.label}
                   </span>
                 </div>
@@ -129,7 +116,7 @@ function kind(a: AgentRow) {
   return KINDS.find((k) => k.match.test(a.type)) ?? { label: a.type, color: "#7a8394", emoji: "🛠️" };
 }
 
-type Mode = "cards" | "lanes" | "list";
+type Mode = "cards" | "lanes";
 
 function useNow(active: boolean): number {
   const [now, setNow] = useState(Date.now() / 1000);
@@ -163,20 +150,21 @@ function Cards({ agents, now, task }: { agents: AgentRow[]; now: number; task: A
             <div className="flex items-center gap-1.5">
               <StatusDot status={a.status} color={k.color} />
               <span className="font-medium" style={{ color: k.color }}>
-                {k.label}
+                {k.emoji} {k.label}
               </span>
               <span className={clsx("ml-auto text-[0.6875rem]", a.status === "running" ? "text-accent" : a.status === "failed" ? "text-bad" : "text-faint")}>{a.status}</span>
             </div>
             {a.type !== "main" && <div className="mt-0.5 line-clamp-2 text-[0.7188rem] text-fg">{a.description}</div>}
             <div className="mt-1 flex flex-wrap gap-x-2 text-[0.6875rem] text-faint">
               {a.started && <span>{elapsed(a.started, a.ended ?? now)}</span>}
-              <span>
-                {tokens(a.tokens_in)} in / {tokens(a.tokens_out)} out
+              <span title={`${a.tokens_in.toLocaleString()} input, ${a.tokens_out.toLocaleString()} output tokens`}>
+                {a.tokens_in + a.tokens_out ? `${tokens(a.tokens_in)} in / ${tokens(a.tokens_out)} out` : "tokens pending"}
               </span>
               <span className="flex items-center gap-0.5">
                 <Globe size="0.625rem" /> {a.web}
               </span>
-              <span>{a.calls.length} calls</span>
+              <span>{a.calls_total} action{a.calls_total === 1 ? "" : "s"}</span>
+              {a.type === "main" && task?.steps.length ? <span>{task.steps.filter((step) => step.state === "done").length} of {task.steps.length} steps</span> : null}
             </div>
             {last && a.status === "running" && (
               <div className="mt-1 truncate text-[0.6875rem] text-muted" title={last.summary}>
@@ -191,21 +179,18 @@ function Cards({ agents, now, task }: { agents: AgentRow[]; now: number; task: A
   );
 }
 
-// How far an agent has got. Nobody knows an agent's total work in advance, so a running
-// agent's track advances with each tool call it makes and eases toward the end without
-// reaching it; finishing puts it at the flag. The main thread follows the task's steps.
+// A known task fraction takes priority. With no known total, each action moves the
+// track toward its end, as in the job search app.
 function progressOf(a: AgentRow, task: Activity["task"]): number {
-  if (a.status === "done" || a.status === "failed") return 1;
-  const calls = a.calls.length;
+  if (a.status !== "running") return 1;
   if (a.type === "main") {
     const steps = task?.steps ?? [];
-    if (!steps.length) return a.status === "running" ? 0.05 + 0.85 * (1 - Math.exp(-calls / 15)) : 1;
-    if (!task?.running && a.status !== "running") return 1;
-    const done = steps.filter((s) => s.state === "done" || s.state === "skipped").length;
-    return Math.min(0.97, (done + 0.85 * (1 - Math.exp(-calls / 15))) / steps.length);
+    if (steps.length) {
+      const done = steps.filter((s) => s.state === "done" || s.state === "skipped").length;
+      return Math.min(0.97, Math.max(0.04, done / steps.length));
+    }
   }
-  if (a.status !== "running") return 1;
-  return 0.05 + 0.87 * (1 - Math.exp(-calls / 12));
+  return 0.05 + 0.87 * (1 - Math.exp(-a.calls_total / 12));
 }
 
 function ProgressTrack({ a, task, thin }: { a: AgentRow; task: Activity["task"]; thin?: boolean }) {
@@ -249,8 +234,11 @@ function Tracks({ agents, now, task }: { agents: AgentRow[]; now: number; task: 
               <span className="min-w-0 flex-1 truncate text-faint">
                 {a.type === "main" ? (a.status === "running" && last ? `${last.name} ${last.summary ?? ""}` : "") : a.description}
               </span>
+              <span className="shrink-0 tabular-nums text-faint" title={`${a.tokens_in.toLocaleString()} input, ${a.tokens_out.toLocaleString()} output tokens`}>
+                {a.tokens_in + a.tokens_out ? `${tokens(a.tokens_in + a.tokens_out)} tokens` : "tokens pending"}
+              </span>
               <span className={clsx("shrink-0", a.status === "running" ? "text-accent" : a.status === "failed" ? "text-bad" : "text-faint")}>
-                {a.status === "running" ? `${a.calls.length} calls · ${a.started ? elapsed(a.started, end) : ""}` : a.status === "idle" ? "idle" : `${a.status} · ${a.started ? elapsed(a.started, end) : ""}`}
+                {a.status === "running" ? `${a.calls_total} actions · ${a.started ? elapsed(a.started, end) : ""}` : a.status === "idle" ? "idle" : `${a.status} · ${a.started ? elapsed(a.started, end) : ""}`}
               </span>
             </div>
             <ProgressTrack a={a} task={task} />
@@ -261,7 +249,7 @@ function Tracks({ agents, now, task }: { agents: AgentRow[]; now: number; task: 
   );
 }
 
-function Agents({ agents, task, earlier, openAgent, setOpenAgent }: { agents: AgentRow[]; task: Activity["task"]; earlier: number; openAgent: string | null; setOpenAgent: (id: string | null) => void }) {
+function Agents({ agents, task, earlier }: { agents: AgentRow[]; task: Activity["task"]; earlier: number }) {
   const [mode, setModeState] = useState<Mode>(() => prefs().agents_view);
   const setMode = (m: Mode) => {
     setModeState(m);
@@ -275,12 +263,11 @@ function Agents({ agents, task, earlier, openAgent, setOpenAgent }: { agents: Ag
   // Only what is happening: running agents, and the main thread while it works. A finished
   // agent stays a few seconds with its emoji at the right end of the track, then leaves.
   const recent = subs.filter((a) => a.status === "running" || (a.ended !== null && now - a.ended < LINGER_S));
-  const shown = [...(main && main.status === "running" ? [main] : []), ...recent];
+  const shown = [...(main && (main.status === "running" || (main.ended !== null && now - main.ended < LINGER_S)) ? [main] : []), ...recent];
   const counts = { running: subs.filter((a) => a.status === "running").length, done: subs.filter((a) => a.status === "done").length };
   const modes: { id: Mode; icon: React.ReactNode; title: string }[] = [
-    { id: "cards", icon: <LayoutGrid size="0.75rem" />, title: "Cards" },
     { id: "lanes", icon: <Rows3 size="0.75rem" />, title: "Progress tracks" },
-    { id: "list", icon: <List size="0.75rem" />, title: "List" },
+    { id: "cards", icon: <LayoutGrid size="0.75rem" />, title: "Cards" },
   ];
   return (
     <div>
@@ -302,36 +289,6 @@ function Agents({ agents, task, earlier, openAgent, setOpenAgent }: { agents: Ag
       {mode === "cards" && <Cards agents={shown} now={now} task={task} />}
       {mode === "lanes" && <Tracks agents={shown} now={now} task={task} />}
       {!shown.length && <div className="text-[0.75rem] text-faint">No agents at work. They appear here while a task runs.</div>}
-      {mode === "list" && (
-        <div className="space-y-1">
-          {shown.map((a) => (
-            <div key={a.id}>
-              <button onClick={() => setOpenAgent(openAgent === a.id ? null : a.id)} className="w-full rounded-md px-2 py-1.5 text-left hover:bg-panel">
-                <div className="flex items-center gap-1.5">
-                  <Bot size="0.75rem" className={a.type === "main" ? "text-muted" : "text-accent"} />
-                  <span className="font-medium">{a.type === "main" ? "Main thread" : a.type}</span>
-                  <span className={clsx("ml-auto text-[0.6875rem]", a.status === "running" ? "text-accent" : a.status === "failed" ? "text-bad" : "text-faint")}>{a.status}</span>
-                </div>
-                {a.type !== "main" && <div className="truncate text-[0.7188rem] text-muted">{a.description}</div>}
-                <div className="text-[0.6875rem] text-faint">
-                  {a.type !== "main" && `${elapsed(a.started, a.ended)} · `}
-                  {tokens(a.tokens_in)} in / {tokens(a.tokens_out)} out · {a.web} web
-                </div>
-              </button>
-              {openAgent === a.id && (
-                <div className="mb-1 ml-5 space-y-0.5 border-l border-border pl-2">
-                  {a.calls.length === 0 && <div className="text-[0.6875rem] text-faint">No tool calls.</div>}
-                  {a.calls.map((c, i) => (
-                    <div key={i} className="truncate text-[0.6875rem] text-muted">
-                      <span className="text-fg">{c.name}</span> {c.summary}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
@@ -340,14 +297,99 @@ function Heading({ children }: { children: React.ReactNode }) {
   return <div className="mb-1.5 mt-4 text-[0.6875rem] font-medium uppercase tracking-wide text-faint first:mt-0">{children}</div>;
 }
 
-export default function ActivityPanel({ sid, data }: { sid: string; data: Activity | undefined }) {
-  const [openAgent, setOpenAgent] = useState<string | null>(null);
+const WINDOW_LABEL: Record<string, string> = { "5h": "Session", "7d": "Week" };
+
+function until(seconds: number): string {
+  const minutes = Math.max(0, Math.round(seconds / 60));
+  if (minutes < 60) return `${minutes} min`;
+  if (minutes < 1440) return `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, "0")} min`;
+  return `${Math.floor(minutes / 1440)} d ${Math.floor((minutes % 1440) / 60)} h`;
+}
+
+function WindowLine({ window, now }: { window: UsageWindow; now: number }) {
+  const rejected = window.status === "rejected";
+  const exhausted = window.used_percent != null && window.used_percent >= 100;
+  const used = window.used_percent;
+  const left = used == null ? null : Math.max(0, 100 - used);
+  const low = left != null && left <= 15;
+  const label = rejected ? (left != null ? `limit reached · ${Math.round(left)}% reported left` : "limit reached") : exhausted ? "No tokens left" : left != null ? `${Math.round(left)}% left` : window.status === "allowed_warning" ? "nearing limit" : "within limit";
+  return (
+    <div className="flex items-center gap-2 text-[0.6875rem]">
+      <span className="w-14 shrink-0 text-faint">{WINDOW_LABEL[window.name] ?? window.name}</span>
+      <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-panel" title={used == null ? "The plan has not reported a usage share" : `${Math.round(used)}% used`}>
+        <div className={clsx("h-full rounded-full", rejected || exhausted ? "bg-bad" : low ? "bg-warn" : used == null ? "bg-border" : "bg-good")} style={{ width: `${used ?? 100}%` }} />
+      </div>
+      <span className={clsx("w-44 shrink-0 text-right tabular-nums", rejected || exhausted ? "text-bad" : low ? "text-warn" : "text-faint")}>
+        {label}
+        {window.resets_at != null && window.resets_at > now && <span title={`Resets ${resetLabel(window.resets_at)}`}> · {until(window.resets_at - now)}</span>}
+      </span>
+    </div>
+  );
+}
+
+const PLAN_CONNECTIONS = [
+  { id: "claude-sub", label: "Claude" },
+  { id: "codex-plan", label: "Codex" },
+] as const;
+
+function UsageSummary({ data }: { data: Activity }) {
+  const now = useNow(true);
+  const segments = data.cost.segments;
+  const busy = data.agents.some((agent) => agent.status === "running");
+  const plans = useQueries({
+    queries: PLAN_CONNECTIONS.map((connection) => ({
+      queryKey: ["usage", connection.id],
+      queryFn: () => api.get<Usage>(`/api/usage/${connection.id}`),
+      refetchInterval: busy ? 10_000 : 60_000,
+      retry: false,
+    })),
+  });
+  const input = segments.reduce((sum, segment) => sum + segment.tokens_in, 0);
+  const output = segments.reduce((sum, segment) => sum + segment.tokens_out, 0);
+  return (
+    <div className="space-y-2">
+      <div className="text-[0.7188rem]">
+        <span className="font-medium">This conversation</span>
+        <span className="text-faint"> · {tokens(input)} input / {tokens(output)} output tokens</span>
+        {data.cost.context_percent != null && <span className="text-faint"> · context {Math.max(0, Math.round(100 - data.cost.context_percent))}% left</span>}
+      </div>
+      {PLAN_CONNECTIONS.map((connection, i) => {
+        const plan = plans[i];
+        return (
+          <div key={connection.id} className="space-y-1">
+            <div className="flex items-baseline gap-1.5 text-[0.7188rem]">
+              <span className="font-medium">{connection.label}</span>
+              {plan.data?.updated_at && <span className="text-[0.6875rem] text-faint">last reported {elapsed(plan.data.updated_at, now)} ago</span>}
+            </div>
+            {plan.isPending && <div className="text-[0.6875rem] text-faint">Reading plan usage…</div>}
+            {plan.isError && <div className="text-[0.6875rem] text-bad">Usage unavailable: {(plan.error as Error).message}</div>}
+            {plan.data?.windows.map((window) => <WindowLine key={window.name} window={window} now={now} />)}
+            {plan.data && !plan.data.windows.length && <div className="text-[0.6875rem] text-faint">{plan.data.note || "Plan allowance unavailable."}</div>}
+          </div>
+        );
+      })}
+      {segments.map((segment, i) => (
+        <div key={i} className="flex items-center gap-2 rounded-md bg-panel px-2 py-1.5 text-[0.6875rem]">
+          <span className="font-medium">{segment.label}{segment.model ? ` · ${segment.model}` : ""}{segment.open ? " · current" : ""}</span>
+          <span className="ml-auto tabular-nums text-faint">{tokens(segment.tokens_in)} in / {tokens(segment.tokens_out)} out</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export default function ActivityPanel({ sid, data, events, openPermissions }: { sid: string; data: Activity | undefined; events: AppEvent[]; openPermissions: string[] }) {
   const client = useQueryClient();
   const raise = useMutation({
     mutationFn: () => api.post(`/api/sessions/${sid}/raise-cap`),
     onSuccess: () => void client.invalidateQueries({ queryKey: ["activity", sid] }),
   });
+  const answered = new Set(events.filter((e) => e.type === "permission_answer").map((e) => String(e.data.id)));
+  const open = new Set(openPermissions);
+  const pending = events.filter((e) => e.type === "permission_request" && open.has(String(e.data.id)) && !answered.has(String(e.data.id)));
   if (!data) return <div className="p-4 text-[0.75rem] text-faint">Loading…</div>;
+  const pendingTimes = new Set(pending.map((e) => e.ts));
+  const history = data.permissions.filter((p) => !pendingTimes.has(p.ts)).slice(0, 12);
   const capped = data.cost.segments.some((s) => s.open && (s.searches >= s.search_cap || s.fetches >= s.fetch_cap)) || data.cost.notices.length > 0;
 
   return (
@@ -356,20 +398,29 @@ export default function ActivityPanel({ sid, data }: { sid: string; data: Activi
       <Stepper data={data} walker={[...data.agents].reverse().map((a) => (a.status === "running" ? kind(a).emoji : "")).find(Boolean) ?? "🤖"} />
 
       <Heading>Agents</Heading>
-      <Agents agents={data.agents} task={data.task} earlier={data.agents_earlier ?? 0} openAgent={openAgent} setOpenAgent={setOpenAgent} />
+      <Agents agents={data.agents} task={data.task} earlier={data.agents_earlier ?? 0} />
+
+      <Heading>Usage</Heading>
+      <UsageSummary data={data} />
 
       <Heading>Permissions</Heading>
-      {data.permissions.length === 0 && <div className="text-faint">No requests yet.</div>}
+      {pending.length > 0 && (
+        <div className="mb-2 space-y-2">
+          {pending.map((ev) => <PermissionRequestCard key={String(ev.data.id)} ev={ev} sid={sid} running />)}
+        </div>
+      )}
+      {history.length === 0 && pending.length === 0 && <div className="text-faint">No requests yet.</div>}
+      {history.length > 0 && pending.length === 0 && <div className="mb-1 text-faint">No approval is currently waiting. Earlier requests are listed below.</div>}
       <div className="space-y-0.5">
-        {data.permissions.slice(0, 12).map((p, i) => (
+        {history.map((p, i) => (
           <div key={i} className="flex items-center gap-1.5" title={p.summary}>
             <span
               className={clsx(
                 "w-16 shrink-0 text-[0.6875rem]",
-                p.decision === "deny" || p.decision === "blocked" ? "text-bad" : p.decision === "waiting" ? "text-accent" : p.decision === "unanswered" || p.decision === "withdrawn" ? "text-faint" : "text-good",
+                p.decision === "deny" || p.decision === "blocked" ? "text-bad" : p.decision === "waiting" || p.decision === "unanswered" || p.decision === "withdrawn" ? "text-faint" : "text-good",
               )}
             >
-              {p.decision}
+              {p.decision === "waiting" ? "unanswered" : p.decision}
             </span>
             <span className="shrink-0 font-medium">{p.kind === "question" ? "Question" : p.tool}</span>
             <span className="min-w-0 flex-1 truncate text-[0.7188rem] text-muted">{p.summary}</span>
@@ -378,36 +429,12 @@ export default function ActivityPanel({ sid, data }: { sid: string; data: Activi
         ))}
       </div>
 
-      <Heading>Cost</Heading>
+      <Heading>Search limits</Heading>
       <div className="space-y-1">
-        <div>
-          Session ${data.cost.total_usd.toFixed(2)}
-          {data.cost.context_percent != null && <span className="text-faint"> · context {Math.round(data.cost.context_percent)}%</span>}
-        </div>
-        {(data.windows?.windows ?? []).map((w) => (
-          <div key={w.name} className="flex items-center gap-2">
-            <span className="w-12 text-faint">{w.name}</span>
-            <div className="h-1.5 flex-1 rounded bg-panel">
-              <div className={clsx("h-1.5 rounded", (w.used_percent ?? 0) >= 85 ? "bg-warn" : "bg-good")} style={{ width: `${Math.min(100, w.used_percent ?? 0)}%` }} />
-            </div>
-            <span className="w-24 text-right text-[0.6875rem] text-faint">
-              {w.used_percent != null ? `${Math.round(w.used_percent)}%` : ""} {w.resets_at ? resetLabel(w.resets_at) : ""}
-            </span>
-          </div>
-        ))}
-        {data.windows?.note && <div className="text-[0.6875rem] text-faint">{data.windows.note}</div>}
         {data.cost.segments.map((s, i) => (
           <div key={i} className="rounded-md bg-panel px-2 py-1.5">
-            <div className="flex items-center gap-1">
-              <span className="font-medium">{s.label}</span>
-              {s.open && <span className="text-[0.6875rem] text-accent">current</span>}
-              <span className="ml-auto">{s.cost_usd ? `$${s.cost_usd.toFixed(2)}` : ""}</span>
-            </div>
-            <div className="text-[0.6875rem] text-faint">
-              {tokens(s.tokens_in)} in / {tokens(s.tokens_out)} out
-            </div>
             <div className="flex items-center gap-1 text-[0.6875rem] text-faint">
-              <Globe size="0.6875rem" /> {s.searches}/{s.search_cap} searches · {s.fetches}/{s.fetch_cap} fetches
+              <Globe size="0.6875rem" /> {s.label}: {s.searches}/{s.search_cap} searches · {s.fetches}/{s.fetch_cap} fetches
             </div>
           </div>
         ))}

@@ -14,9 +14,8 @@
    window opens once /api/health answers. The window is Chrome in app mode with its own
    profile in app/data/chrome/, so it has no tabs or address bar and leaves your usual
    Chrome profile alone. Without Chrome it opens in the default browser.
-3. The backend counts open windows. When none has been open for 20 seconds, the
-   launcher stops the backend, unless a turn is running: then it asks whether to stop
-   it or leave it running in the background.
+3. Reopening the window attaches to the same backend while a turn runs. When no window
+   remains and no turn runs, the backend stops after its idle grace period.
 
 With --serve, the Mac app (main.swift) shows the window itself and stops the backend when
 it quits; the backend still stops itself once no window is connected (RESEARCH_EXIT_WHEN_IDLE).
@@ -147,6 +146,19 @@ def start_backend() -> dict[str, object]:
 
 
 def stop_backend(info: dict[str, object]) -> None:
+    if (_health(int(str(info["port"]))) or {}).get("running"):
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{info['port']}/api/stop-all",
+            data=b"{}",
+            headers={"X-App-Token": str(info["token"]), "Content-Type": "application/json"},
+            method="POST",
+        )
+        with contextlib.suppress(OSError, ValueError):
+            urllib.request.urlopen(request, timeout=2).close()
+        for _ in range(20):
+            if not (_health(int(str(info["port"]))) or {}).get("running"):
+                break
+            time.sleep(0.1)
     try:
         os.killpg(int(str(info["pid"])), signal.SIGTERM)
     except OSError:
@@ -196,16 +208,7 @@ def open_window(url: str, browser: bool) -> subprocess.Popen[bytes] | None:
     return None
 
 
-def ask_keep_running() -> bool:
-    script = (
-        'display dialog "A turn is still running. Keep it running in the background, or stop it?" '
-        'buttons {"Stop it", "Keep running"} default button "Keep running" with title "Research"'
-    )
-    out = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
-    return "Keep running" in out.stdout
-
-
-def watch(info: dict[str, object], chrome: subprocess.Popen[bytes] | None) -> None:
+def watch(info: dict[str, object]) -> None:
     """Stop the backend once no window has been connected for IDLE_S seconds."""
     port = int(str(info["port"]))
     seen, idle_since = False, None
@@ -230,13 +233,10 @@ def watch(info: dict[str, object], chrome: subprocess.Popen[bytes] | None) -> No
         idle_since = idle_since or time.time()
         if time.time() - idle_since < IDLE_S:
             continue
-        if health.get("running") and ask_keep_running():
+        if health.get("running"):
             break
         stop_backend(info)
         break
-    if chrome and chrome.poll() is None:
-        chrome.terminate()  # Chrome keeps running after its last window closes on macOS
-    subprocess.run(["pkill", "-f", f"user-data-dir={DATA / 'chrome'}"], capture_output=True)
 
 
 def status() -> str:
@@ -293,22 +293,6 @@ def raise_window() -> str:
     return "raised"
 
 
-def stop_previous(info: dict[str, object]) -> None:
-    """Stop an idle backend left from an earlier launch, and the launcher watching it."""
-    me = os.getpid()
-    ps = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True).stdout
-    for line in ps.splitlines():
-        pid, _, command = line.strip().partition(" ")
-        if "mac/launcher.py" in command and "--" not in command.split("launcher.py", 1)[1] and int(pid) != me:
-            with contextlib.suppress(OSError):
-                os.kill(int(pid), signal.SIGTERM)
-    stop_backend(info)
-    for _ in range(20):
-        if not _alive(int(str(info["pid"]))):
-            break
-        time.sleep(0.25)
-
-
 def stop_all() -> None:
     """Stop the backend, the launcher watching it, and the app's Chrome window."""
     info = running_backend()
@@ -345,18 +329,14 @@ def main() -> None:
                 (DATA / "start.pid").unlink()
         return
     existing = running_backend()
-    if existing:
-        if raise_window():
-            return  # a window is open: bring it forward, never open a second one
-        # No window: the app was closed and this backend outlived it. Never reuse it: stop it
-        # and its launcher (whose clean-up would otherwise close the new window), and start
-        # a backend with the current code.
-        stop_previous(existing)
-    info = start_backend()
+    if existing and raise_window():
+        return  # a window is open: bring it forward, never open a second one
+    # A detached backend still owns its live turns. Reattach the new window to it.
+    info = existing or start_backend()
     url = f"http://127.0.0.1:{info['port']}/?token={info['token']}"
-    chrome = open_window(url, "--browser" in sys.argv)
+    open_window(url, "--browser" in sys.argv)
     try:
-        watch(info, chrome)
+        watch(info)
     except KeyboardInterrupt:
         stop_backend(info)
 

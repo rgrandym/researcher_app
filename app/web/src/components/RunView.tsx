@@ -1,7 +1,7 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Check, Circle, Code2, Download, FileDown, FolderSearch, PanelRight, PanelRightClose, Pencil, RefreshCw, Trash2 } from "lucide-react";
+import { Check, Circle, Code2, Download, FileDown, FolderSearch, Palette, PanelRight, PanelRightClose, Pencil, RefreshCw, Trash2, Upload } from "lucide-react";
 import Panel, { CENTER, PANELS } from "./Panel";
 import { api, ApiError, fileUrl, getText, q, renderedUrl } from "../lib/api";
 import { bytes, day } from "../lib/format";
@@ -10,7 +10,11 @@ import { place, remember, rememberDraft, rememberScroll } from "../lib/places";
 import { prefs, setPref } from "../lib/prefs";
 import { useUi } from "../stores/ui";
 import Markdown from "./Markdown";
+import AppearancePanel from "./AppearancePanel";
+import type { AppearanceResponse, AppearanceValues } from "./AppearancePanel";
 import SessionView from "./SessionView";
+
+const MarkdownEditor = lazy(() => import("./MarkdownEditor"));
 
 const TEXT = /\.(md|txt|jsonl|json|csv|tsv|py|ya?ml|bib)$/i;
 type Tab = "document" | "chat" | "html" | "edit" | "file";
@@ -79,7 +83,6 @@ function EditPane({ run, path, onSaved }: { run: string; path: string; onSaved: 
   const [text, setText] = useState(kept?.text ?? "");
   const [original, setOriginal] = useState(kept?.original ?? "");
   const [mtime, setMtime] = useState<number | null>(kept?.mtime ?? null);
-  const area = useRef<HTMLTextAreaElement>(null);
   const [message, setMessage] = useState("");
   const [conflict, setConflict] = useState(false);
   const load = async () => {
@@ -98,11 +101,6 @@ function EditPane({ run, path, onSaved }: { run: string; path: string; onSaved: 
   useEffect(() => {
     rememberDraft(run, path, { text, original, mtime });
   }, [run, path, text, original, mtime]);
-  useLayoutEffect(() => {
-    const el = area.current;
-    const top = place(run).scroll[`edit:${path}`];
-    if (el && top && original) el.scrollTop = top;
-  }, [run, path, original]);
   const save = useMutation({
     mutationFn: () => api.put<{ mtime: number }>(`/api/runs/${encodeURIComponent(run)}/file`, { path, content: text, mtime }),
     onSuccess: (r) => {
@@ -140,27 +138,44 @@ function EditPane({ run, path, onSaved }: { run: string; path: string; onSaved: 
           )}
         </div>
       )}
-      <textarea
-        ref={area}
-        onScroll={(e) => rememberScroll(run, `edit:${path}`, e.currentTarget.scrollTop)}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if ((e.metaKey || e.ctrlKey) && e.key === "s") {
-            e.preventDefault();
-            if (dirty) save.mutate();
-          }
-        }}
-        spellCheck
-        className="min-h-0 flex-1 resize-none bg-bg p-5 font-mono text-[0.8125rem] leading-6 outline-none"
-      />
+      <div className="min-h-0 flex-1">
+        {path.endsWith(".md") ? (
+          <Suspense fallback={<div className="p-5 text-muted">Loading editor…</div>}>
+            <MarkdownEditor
+              key={path}
+              value={text}
+              onChange={setText}
+              onSave={() => { if (dirty) save.mutate(); }}
+              onScroll={(top) => rememberScroll(run, `edit:${path}`, top)}
+              initialScrollTop={place(run).scroll[`edit:${path}`]}
+            />
+          </Suspense>
+        ) : (
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+                e.preventDefault();
+                if (dirty) save.mutate();
+              }
+            }}
+            spellCheck
+            className="h-full w-full resize-none bg-bg p-5 font-mono text-[0.8125rem] leading-6 outline-none"
+          />
+        )}
+      </div>
     </div>
   );
 }
 
 function HtmlPane({ run, version }: { run: string; version: number }) {
+  const client = useQueryClient();
   const styles = useQuery({ queryKey: ["styles"], queryFn: () => api.get<{ name: string; description: string }[]>("/api/styles"), staleTime: Infinity });
   const [style, setStyleState] = useState(() => place(run).style ?? "meridian");
+  const [appearanceOpen, setAppearanceOpen] = useState(false);
+  const [appearanceNotice, setAppearanceNotice] = useState("");
+  const appearanceLoaded = useRef(false);
   const [cite, setCiteState] = useState(() => place(run).cite ?? true);
   const setStyle = (v: string) => {
     setStyleState(v);
@@ -170,6 +185,19 @@ function HtmlPane({ run, version }: { run: string; version: number }) {
     setCiteState(v);
     remember(run, { cite: v });
   };
+  const appearance = useQuery({
+    queryKey: ["appearance", run, style, version],
+    queryFn: () => api.get<AppearanceResponse>(`/api/runs/${encodeURIComponent(run)}/appearance?${q({ style })}`),
+    retry: false,
+  });
+  useEffect(() => {
+    if (appearanceLoaded.current || !appearance.data) return;
+    appearanceLoaded.current = true;
+    if (!place(run).style && appearance.data.saved_style) {
+      setStyleState(appearance.data.saved_style);
+      remember(run, { style: appearance.data.saved_style });
+    }
+  }, [appearance.data, run]);
   // The rendered page is served from this app's own address, so its scroll can be read
   // and put back: the author returns to the paragraph they were reading.
   const onFrameLoad = (frame: HTMLIFrameElement) => {
@@ -204,6 +232,24 @@ function HtmlPane({ run, version }: { run: string; version: number }) {
     refetchInterval: (query) => (query.state.status === "error" ? false : 3_000),
     retry: false,
   });
+  const saveAppearance = useMutation({
+    mutationFn: (values: AppearanceValues) => api.put<AppearanceResponse>(`/api/runs/${encodeURIComponent(run)}/appearance`, { style, values }),
+    onSuccess: () => {
+      setAppearanceNotice("Appearance saved for this report.");
+      setExported(null);
+      void client.invalidateQueries({ queryKey: ["appearance", run, style] });
+      void rendered.refetch();
+    },
+  });
+  const resetAppearance = useMutation({
+    mutationFn: () => api.del(`/api/runs/${encodeURIComponent(run)}/appearance`),
+    onSuccess: () => {
+      setAppearanceNotice("Preset restored for this report.");
+      setExported(null);
+      void client.invalidateQueries({ queryKey: ["appearance", run, style] });
+      void rendered.refetch();
+    },
+  });
   const exportRun = useMutation({
     mutationFn: (formats: string[]) => api.post<Exported>(`/api/runs/${encodeURIComponent(run)}/export`, { style, cite, formats }),
     onSuccess: setExported,
@@ -230,12 +276,15 @@ function HtmlPane({ run, version }: { run: string; version: number }) {
           <option value="cited">Author and year</option>
           <option value="ids">Evidence IDs</option>
         </select>
+        <button onClick={() => { if (!appearanceOpen) void appearance.refetch(); setAppearanceOpen((open) => !open); setFiguresOpen(false); }} className={clsx("ml-2 flex items-center gap-1 rounded-md border border-border px-2.5 py-1 hover:border-accent", appearanceOpen && "border-accent text-accent")}>
+          <Palette size="0.8125rem" /> Palette and layout
+        </button>
         <button onClick={() => void rendered.refetch()} title="Render again" className="rounded-md p-1 text-faint hover:text-fg">
           <RefreshCw size="0.8125rem" className={clsx(rendered.isFetching && "animate-spin")} />
         </button>
         <div className="flex-1" />
         {data && data.figures.length > 0 && !figuresOpen && (
-          <button onClick={() => setFiguresOpen(true)} title="Show the figures panel" className="rounded-md p-1 text-faint hover:text-fg">
+          <button onClick={() => { setAppearanceOpen(false); setFiguresOpen(true); }} title="Show the figures panel" className="rounded-md p-1 text-faint hover:text-fg">
             <PanelRight size="0.875rem" />
           </button>
         )}
@@ -246,6 +295,7 @@ function HtmlPane({ run, version }: { run: string; version: number }) {
           <FileDown size="0.8125rem" /> {exportRun.isPending ? "Exporting…" : "Export PDF"}
         </button>
       </div>
+      {appearanceNotice && <div className="border-b border-border px-4 py-1 text-[0.75rem] text-good">{appearanceNotice}</div>}
       {(exported || exportRun.isError) && (
         <div className="border-b border-border px-4 py-2 text-[0.75rem]">
           {exportRun.isError ? (
@@ -276,6 +326,20 @@ function HtmlPane({ run, version }: { run: string; version: number }) {
           {rendered.isError && <pre className="whitespace-pre-wrap p-6 text-[0.7812rem] text-bad">{(rendered.error as Error).message}</pre>}
           {data && <iframe key={`${data.html}@${data.built}`} title="HTML" src={renderedUrl(run, style, cite, data.html, false, data.built)} onLoad={(e) => onFrameLoad(e.currentTarget)} className="h-full w-full border-0" />}
         </div>
+        {appearanceOpen && (
+          <Panel size={PANELS.appearance} side="right" overlayBelow={740} onClose={() => setAppearanceOpen(false)} className="bg-panel">
+            <AppearancePanel
+              key={style}
+              data={appearance.data}
+              onApply={(values) => saveAppearance.mutate(values)}
+              onReset={() => resetAppearance.mutate()}
+              onRetry={() => void appearance.refetch()}
+              busy={saveAppearance.isPending || resetAppearance.isPending}
+              loading={appearance.isPending || appearance.isFetching}
+              error={(saveAppearance.error as Error | null)?.message || (resetAppearance.error as Error | null)?.message || (appearance.error as Error | null)?.message}
+            />
+          </Panel>
+        )}
         {data && data.figures.length > 0 && figuresOpen && (
           <Panel size={PANELS.figures} side="right" overlayBelow={900} onClose={() => setFiguresOpen(false)} className="bg-panel/50">
           <div className="scroll-thin min-h-0 flex-1 overflow-y-auto p-3 text-[0.75rem]">
@@ -332,6 +396,9 @@ export default function RunView({ name, file }: { name: string; file?: string })
     remember(name, { editPath: f });
   };
   const reader = useRef<HTMLDivElement>(null);
+  const importInput = useRef<HTMLInputElement>(null);
+  const [aiImport, setAiImport] = useState(false);
+  const [fileMessage, setFileMessage] = useState("");
   const readerKey = tab === "file" ? `file:${selected ?? ""}` : "document";
   const [version, setVersion] = useState(0);
   const [panelOpen, setPanelOpenState] = useState(() => prefs().run_panel_open);
@@ -370,6 +437,46 @@ export default function RunView({ name, file }: { name: string; file?: string })
       void client.invalidateQueries({ queryKey: ["sessions"] });
       setView({ kind: "home" });
     },
+  });
+  const importFiles = useMutation({
+    mutationFn: async (files: File[]) => {
+      const saved: string[] = [];
+      for (const file of files) {
+        try {
+          if (file.size > 25_000_000) throw new Error(`${file.name} is larger than 25 MB.`);
+          const data = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
+            reader.onload = () => resolve(String(reader.result).split(",", 2)[1] ?? "");
+            reader.readAsDataURL(file);
+          });
+          const path = `${aiImport ? "ai_reports/" : ""}${file.name}`;
+          const result = await api.post<{ path: string }>(`/api/runs/${encodeURIComponent(name)}/external-data`, { path, data });
+          saved.push(result.path);
+        } catch (e) {
+          throw new Error(`${saved.length} file${saved.length === 1 ? "" : "s"} imported. ${String((e as Error).message)}`);
+        }
+      }
+      return saved;
+    },
+    onSuccess: (saved) => {
+      setFileMessage(`Imported ${saved.length} file${saved.length === 1 ? "" : "s"} into external_data/. Agents will find them on the next source scan.`);
+      void client.invalidateQueries({ queryKey: ["run", name] });
+    },
+    onError: (e) => {
+      setFileMessage((e as Error).message);
+      void client.invalidateQueries({ queryKey: ["run", name] });
+    },
+  });
+  const removeFile = useMutation({
+    mutationFn: (path: string) => api.del<{ trash: string }>(`/api/runs/${encodeURIComponent(name)}/external-data?${q({ path: path.slice("external_data/".length) })}`),
+    onSuccess: (result) => {
+      setFileMessage(`Moved to ${result.trash}.`);
+      setSelected(undefined);
+      if (tab === "file") setTab("document");
+      void client.invalidateQueries({ queryKey: ["run", name] });
+    },
+    onError: (e) => setFileMessage((e as Error).message),
   });
   const data = run.data;
   const hasContent = Boolean(data);
@@ -507,22 +614,38 @@ export default function RunView({ name, file }: { name: string; file?: string })
             <span className="ml-auto truncate pl-2 text-[0.6875rem] text-faint">{s.detail}</span>
           </div>
         ))}
-        <div className="mb-1.5 mt-4 text-[0.6875rem] font-medium uppercase tracking-wide text-faint">Files</div>
+        <div className="mb-1.5 mt-4 flex items-center gap-2 text-[0.6875rem] font-medium uppercase tracking-wide text-faint">
+          <span>Files</span>
+          <button onClick={() => importInput.current?.click()} disabled={importFiles.isPending} className="ml-auto flex items-center gap-1 rounded border border-border px-1.5 py-0.5 normal-case hover:border-accent disabled:opacity-40" title="Add source files to this project">
+            <Upload size="0.6875rem" /> Import
+          </button>
+          <input ref={importInput} type="file" multiple className="hidden" onChange={(e) => { const files = Array.from(e.target.files ?? []); e.target.value = ""; if (files.length) importFiles.mutate(files); }} />
+        </div>
+        <label className="mb-1.5 flex items-center gap-1.5 text-[0.6875rem] text-faint">
+          <input type="checkbox" checked={aiImport} onChange={(e) => setAiImport(e.target.checked)} /> AI generated material (leads only)
+        </label>
+        {fileMessage && <div className="mb-2 text-[0.6875rem] text-muted">{fileMessage}</div>}
         <div className="space-y-0.5">
           {data.files.map((f) => (
+            <div key={f.path} className="flex items-center gap-1">
             <button
-              key={f.path}
               onClick={() => {
                 setSelected(f.path);
                 setTab("file");
               }}
-              className={clsx("flex w-full items-center gap-2 rounded px-1.5 py-1 text-left hover:bg-panel", selected === f.path && tab === "file" && "bg-panel")}
+              className={clsx("flex min-w-0 flex-1 items-center gap-2 rounded px-1.5 py-1 text-left hover:bg-panel", selected === f.path && tab === "file" && "bg-panel")}
             >
               <span className={clsx("min-w-0 flex-1 truncate", f.path === primary && "font-medium")}>{f.path}</span>
               <span className="shrink-0 text-[0.6562rem] text-faint">
                 {bytes(f.size)} · {day(f.mtime)}
               </span>
             </button>
+            {f.path.startsWith("external_data/") && !["README.md", "WANTED.md", "ai_reports/README.md"].includes(f.path.slice("external_data/".length)) && (
+              <button title={`Remove ${f.path}`} className="shrink-0 rounded p-1 text-faint hover:text-bad" disabled={removeFile.isPending} onClick={() => { if (window.confirm(`Move ${f.path} to this project's recoverable .trash folder? Any evidence already drawn from it will need checking.`)) removeFile.mutate(f.path); }}>
+                <Trash2 size="0.75rem" />
+              </button>
+            )}
+            </div>
           ))}
         </div>
       </div>

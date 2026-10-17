@@ -17,6 +17,7 @@ import os
 import re
 import select
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -89,7 +90,7 @@ _WINDOW_NAMES = {
     "seven_day_opus": "7d opus",
     "seven_day_sonnet": "7d sonnet",
 }
-
+_claude_file_lock = threading.Lock()
 
 def _claude_file() -> Any:
     return config.data_dir() / "usage-claude.json"
@@ -97,25 +98,26 @@ def _claude_file() -> Any:
 
 def record_claude_limit(info: dict[str, Any]) -> UsageWindows:
     """Store one `rate_limit_info` from a stream-json `rate_limit_event`."""
-    try:
-        stored = json.loads(_claude_file().read_text())
-    except (OSError, ValueError):
-        stored = {}
-    unified = info.get("unifiedWindows")
-    if isinstance(unified, dict):
-        for key, win in unified.items():
-            if isinstance(win, dict):
-                stored[key] = {**stored.get(key, {}), **win}
-    kind = info.get("rateLimitType")
-    if kind:
-        stored[str(kind)] = {
-            **stored.get(str(kind), {}),
-            "status": info.get("status"),
-            "resetsAt": info.get("resetsAt"),
-            **({"utilization": info["utilization"]} if info.get("utilization") is not None else {}),
-        }
-    stored["observed_at"] = time.time()
-    _claude_file().write_text(json.dumps(stored))
+    with _claude_file_lock:
+        try:
+            stored = json.loads(_claude_file().read_text())
+        except (OSError, ValueError):
+            stored = {}
+        unified = info.get("unifiedWindows")
+        if isinstance(unified, dict):
+            for key, win in unified.items():
+                if isinstance(win, dict):
+                    stored[key] = {**stored.get(key, {}), **win}
+        kind = info.get("rateLimitType")
+        if kind:
+            stored[str(kind)] = {
+                **stored.get(str(kind), {}),
+                "status": info.get("status"),
+                "resetsAt": info.get("resetsAt"),
+                **({"utilization": info["utilization"]} if info.get("utilization") is not None else {}),
+            }
+        stored["observed_at"] = time.time()
+        _claude_file().write_text(json.dumps(stored))
     return claude_usage()
 
 
@@ -131,14 +133,15 @@ def claude_usage() -> UsageWindows:
             continue
         util = win.get("utilization")
         resets = win.get("resetsAt")
+        status = win.get("status")
         if resets and float(resets) < time.time():
-            util = 0.0  # the window has reset since it was observed
+            util, status = 0.0, "allowed"
         windows.append(
             UsageWindow(
                 name=name,
-                used_percent=round(float(util) * 100, 1) if util is not None else None,
+                used_percent=round(float(util) * (100 if float(util) <= 1 else 1), 1) if util is not None else None,
                 resets_at=float(resets) if resets else None,
-                status=win.get("status"),
+                status=status,
             )
         )
     return UsageWindows(windows=windows, updated_at=stored.get("observed_at"))
@@ -147,23 +150,34 @@ def claude_usage() -> UsageWindows:
 # ------------------------------------------------------------------ Codex
 
 _codex_cache: dict[str, Any] = {}
+_codex_cache_lock = threading.Lock()
 USAGE_TIMEOUT_S = 20
 
 
-def codex_usage(binary: str | None, ttl: float = 60) -> UsageWindows:
+def codex_usage(binary: str | None, ttl: float = 10) -> UsageWindows:
     """ChatGPT plan windows through `codex app-server`. Cached
-    for a minute: the call starts a process but no model turn."""
+    briefly while Activity is open; the call starts a process but no model turn."""
     if binary is None:
         return UsageWindows(note="Codex not found.")
     hit = _codex_cache.get("value")
     if hit and time.time() - _codex_cache.get("at", 0) < ttl:
         return hit  # type: ignore[no-any-return]
+    if not _codex_cache_lock.acquire(blocking=False):
+        return hit or UsageWindows(note="Reading Codex usage…")
     try:
-        value = _read_codex_usage(binary)
-    except (OSError, ValueError, RuntimeError) as exc:
-        return UsageWindows(note=f"Could not read Codex usage: {exc}")
-    _codex_cache.update(value=value, at=time.time())
-    return value
+        hit = _codex_cache.get("value")
+        if hit and time.time() - _codex_cache.get("at", 0) < ttl:
+            return hit  # type: ignore[no-any-return]
+        try:
+            value = _read_codex_usage(binary)
+        except (OSError, ValueError, RuntimeError) as exc:
+            value = hit or UsageWindows(note=f"Could not read Codex usage: {exc}")
+            _codex_cache.update(value=value, at=time.time())
+            return value
+        _codex_cache.update(value=value, at=time.time())
+        return value
+    finally:
+        _codex_cache_lock.release()
 
 
 def _read_codex_usage(binary: str) -> UsageWindows:

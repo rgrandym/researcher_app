@@ -9,7 +9,7 @@ One JSON object per ```figure block. Run
 |---|---|
 | `id` | `F1`, `F2`, … unique in the document. Used by `[[F2]]` cross-references |
 | `type` | one of the types below |
-| `title` | the **message**, as a sentence. Becomes the exhibit caption |
+| `title` | the **message**, as a sentence. Becomes the figure caption |
 | `source` | must contain at least one `[E#]` |
 
 ## Common optional fields
@@ -29,8 +29,19 @@ One JSON object per ```figure block. Run
 | `baseline` | Draw a dashed reference line at this value |
 | `annotate` | `[{"category": "Spain", "text": "rule in force", "y": 112}]` |
 | `size` | `[width, height]` in inches. Default width 6.5 |
+| `font_scale` | Scale all chart text together; check effective point size at final page width |
+| `tick_every` | Show every nth category tick on crowded time axes |
 | `wide` | `true` → 9in wide; pair with a `.wide` class for a landscape page |
 | `chart_title` | `true` bakes the title into the image too (for slides). Default `false` — the title lives in the caption as real text |
+
+## Page-size check
+
+Render and inspect each chart at the width it will occupy in the report.
+Keep axis ticks, legend, and annotations comfortably readable, normally at least
+8 pt at final print size. Name the unit on the axis or in the subtitle. Use
+enough ticks to orient the reader without overlapping labels. One-series charts
+usually need no legend; multi-series charts need a clear legend or direct labels.
+Captions and prose call the result a Figure and use `[[F#]]` cross-references.
 
 ## Types and their data
 
@@ -62,12 +73,12 @@ unobtained.
 ## Colour assignment
 
 Series are coloured **by name, once per document**. "2024" is the same colour in
-every exhibit that mentions it. That consistency is free and is the single
+every figure or table that mentions it. That consistency is free and is the single
 cheapest thing you can do for a reader comparing two charts — so name your series
 identically across figures when they mean the same thing.
 
 `highlight` overrides this: named series or categories take the accent, everything
-else takes `mute_fill`. Use it whenever the exhibit has a subject rather than a
+else takes `mute_fill`. Use it whenever the figure or table has a subject rather than a
 set — one highlighted bar among greys communicates faster than eight colours.
 
 ## Worked examples

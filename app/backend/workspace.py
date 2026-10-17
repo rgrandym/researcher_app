@@ -12,9 +12,12 @@ checked by script, written, and committed alone to the local repository.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import difflib
 import importlib.util
 import json
+import os
 import re
 import shlex
 import shutil
@@ -249,7 +252,7 @@ def run_detail(name: str) -> dict[str, Any]:
     meta = run_meta(path)
     files = []
     for p in sorted(path.rglob("*")):
-        if p.is_file() and ".history" not in p.parts and not p.name.startswith(".voice-mirror"):
+        if p.is_file() and ".history" not in p.parts and ".trash" not in p.parts and not p.name.startswith(".voice-mirror"):
             st = p.stat()
             files.append(
                 {"path": str(p.relative_to(path)), "size": st.st_size, "mtime": st.st_mtime}
@@ -275,6 +278,59 @@ def run_file(name: str, rel: str) -> Path:
     if not target.is_file():
         raise FileNotFoundError(rel)
     return target
+
+
+def external_path(name: str, rel: str) -> Path:
+    """A supplied file path, never a run document or a link out of the run."""
+    base = (run_dir(name) / "external_data").resolve()
+    parts = Path(rel).parts
+    if not parts or any(p in ("", ".", "..") or p.startswith(".") for p in parts):
+        raise ValueError("Choose a file under external_data.")
+    target = base.joinpath(*parts).resolve()
+    if base not in target.parents:
+        raise ValueError("Choose a file under external_data.")
+    return target
+
+
+def import_external(name: str, rel: str, data: str) -> str:
+    target = external_path(name, rel)
+    if target.name in {"README.md", "WANTED.md"}:
+        raise ValueError("This name is reserved for project guidance.")
+    if len(data) > 33_333_336:
+        raise ValueError("Each imported file must be 25 MB or smaller.")
+    try:
+        raw = base64.b64decode(data, validate=True)
+    except binascii.Error as exc:
+        raise ValueError("The file data is not valid base64.") from exc
+    if len(raw) > 25_000_000:
+        raise ValueError("Each imported file must be 25 MB or smaller.")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    # The indexer skips hidden names. Link a complete temporary file into place so
+    # an agent scanning during import cannot read a partial source or overwrite one.
+    with tempfile.NamedTemporaryFile(prefix=".upload-", dir=target.parent, delete=False) as fh:
+        temp = Path(fh.name)
+        fh.write(raw)
+    try:
+        os.link(temp, target)
+    finally:
+        temp.unlink(missing_ok=True)
+    return str(target.relative_to(run_dir(name).resolve()))
+
+
+def remove_external(name: str, rel: str) -> str:
+    target = external_path(name, rel)
+    if not target.is_file():
+        raise FileNotFoundError(rel)
+    if target.name in {"README.md", "WANTED.md"}:
+        raise ValueError("This project guidance file cannot be removed here.")
+    run = run_dir(name)
+    trash = run / ".trash" / "external_data"
+    dest = trash / rel
+    if dest.exists():
+        dest = dest.with_name(f"{dest.stem}-{int(time.time())}{dest.suffix}")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    target.rename(dest)
+    return str(dest.relative_to(run))
 
 
 class Conflict(Exception):

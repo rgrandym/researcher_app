@@ -7,7 +7,7 @@ import { api } from "./api";
 
 export interface Prefs {
   theme: string;
-  agents_view: "cards" | "lanes" | "list";
+  agents_view: "cards" | "lanes";
   sidebar_open: boolean;
   activity_open: boolean;
   run_panel_open: boolean;
@@ -16,7 +16,7 @@ export interface Prefs {
   figures_open?: boolean;
 }
 
-const DEFAULTS: Prefs = { theme: "system", agents_view: "cards", sidebar_open: true, activity_open: true, run_panel_open: true };
+const DEFAULTS: Prefs = { theme: "system", agents_view: "lanes", sidebar_open: true, activity_open: true, run_panel_open: true };
 let current: Prefs = { ...DEFAULTS };
 
 export async function loadPrefs(): Promise<Prefs> {
@@ -26,6 +26,7 @@ export async function loadPrefs(): Promise<Prefs> {
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 1500)),
     ]);
     current = { ...DEFAULTS, ...(s.ui ?? {}) };
+    if (current.agents_view !== "cards") current.agents_view = "lanes";
   } catch {
     current = { ...DEFAULTS };
   }

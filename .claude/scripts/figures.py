@@ -23,6 +23,7 @@ anywhere else.
 """
 
 import argparse
+import copy
 import json
 import re
 import sys
@@ -46,7 +47,7 @@ BLOCK = re.compile(r"^```figure[ \t]*\n(.*?)^```[ \t]*$", re.S | re.M)
 # which is the wrong base once the styled copy is written into export/<style>/.
 MD_IMAGE = re.compile(r"!\[([^\]]*)\]\(([^)\s]+)\)")
 
-TABLE_CAP = re.compile(r"^\*\*Exhibit:\*\*[ \t]*(.+?)[ \t]*\{#(T\w+)\}[ \t]*$", re.M)
+TABLE_CAP = re.compile(r"^\*\*(?:Table|Exhibit):\*\*[ \t]*(.+?)[ \t]*\{#(T\w+)\}[ \t]*$", re.M)
 XREF = re.compile(r"\[\[([FT]\w+)\]\]")
 CITE = re.compile(r"\[E\d+\]")
 
@@ -85,7 +86,7 @@ class Ctx:
         self.seq = st["sequential"]
         self.div = st["diverging"]
         self.assigned = {}          # series name -> colour, stable across the document
-        self.base = f.get("base_pt", 10.5)
+        self.base = f.get("base_pt", 10.5) * ch.get("font_scale", 1.0)
 
     def color_for(self, name, index):
         """One colour per series *name*, consistent across every figure."""
@@ -246,12 +247,36 @@ def value_label(ax, x, y, v, ctx, spec, ha="center", va="bottom", inside=False):
                 color="#FFFFFF" if inside else ctx.c["body"])
 
 
+def soften_bars(ax, bars, radius_px):
+    """Give ordinary bars subtle rounded corners without moving their exact ends."""
+    if not radius_px:
+        return
+    origin = ax.transData.transform((0, 0))
+    px_x = abs(ax.transData.transform((1, 0))[0] - origin[0])
+    px_y = abs(ax.transData.transform((0, 1))[1] - origin[1])
+    if not px_x or not px_y:
+        return
+    for bar in bars:
+        width, height = abs(bar.get_width()), abs(bar.get_height())
+        if not width or not height:
+            continue
+        radius = min(radius_px, width * px_x / 4, height * px_y / 4) / px_x
+        rounded = FancyBboxPatch(
+            (min(bar.get_x(), bar.get_x() + bar.get_width()),
+             min(bar.get_y(), bar.get_y() + bar.get_height())),
+            width, height, boxstyle=f"round,pad=0,rounding_size={radius}",
+            mutation_aspect=px_x / px_y, transform=ax.transData,
+        )
+        bar.set_clip_path(rounded)
+
+
 # ---------------------------------------------------------------- draw functions
 
 def _draw_bar(ax, spec, ctx, horizontal=False):
     cats, ser = spec["categories"], series_of(spec)
     n, w = len(ser), ctx.ch.get("bar_width", 0.62)
     idx = range(len(cats))
+    bars = []
     for i, s in enumerate(ser):
         col = ctx.color_for(s.get("name", f"s{i}"), i)
         cols = bar_colors(spec, ctx, cats, col) if n == 1 else col
@@ -260,12 +285,12 @@ def _draw_bar(ax, spec, ctx, horizontal=False):
         vals = s["values"]
         plot = [0 if v is None else v for v in vals]
         if horizontal:
-            ax.barh(pos, plot, height=w / n, color=cols, label=s.get("name"), zorder=3)
+            bars.extend(ax.barh(pos, plot, height=w / n, color=cols, label=s.get("name"), zorder=3))
             for p, v in zip(pos, vals):
                 if v is not None:
                     value_label(ax, v, p, v, ctx, spec, ha="left", va="center")
         else:
-            ax.bar(pos, plot, width=w / n, color=cols, label=s.get("name"), zorder=3)
+            bars.extend(ax.bar(pos, plot, width=w / n, color=cols, label=s.get("name"), zorder=3))
             for p, v in zip(pos, vals):
                 if v is not None:
                     value_label(ax, p, v, v, ctx, spec)
@@ -278,6 +303,7 @@ def _draw_bar(ax, spec, ctx, horizontal=False):
         ax.set_xticks(list(idx), [wrap(c, 14) for c in cats])
         frame(ax, ctx, spec, axis="y")
         ax.margins(y=0.16)
+    soften_bars(ax, bars, ctx.ch.get("bar_corner_radius_px", 0))
     draw_placeholders(ax, spec, ctx, missing_idx(spec), horizontal)
     if n > 1:
         legend(ax, ctx, spec, n=min(n, 4))
@@ -358,7 +384,8 @@ def _draw_line(ax, spec, ctx, fill=False, stack=False):
             ax.fill_between(xs, base, top, color=col, label=name, zorder=3, linewidth=0)
             base = top
             continue
-        ax.plot(xs, vals, color=col, linewidth=lw, label=name, zorder=3,
+        ax.plot(xs, vals, color=col, linewidth=lw,
+                linestyle=ctx.ch.get("line_style", "solid"), label=name, zorder=3,
                 marker="o" if spec.get("markers", len(xs) <= 12) else None,
                 markersize=ctx.ch.get("marker_size", 4.5), markeredgewidth=0,
                 solid_capstyle="round")
@@ -1196,17 +1223,29 @@ def build(md_path, style_name, outdir, out_md=None, formats=("png", "svg"),
             print(p)
         sys.exit(1)
 
-    # one Exhibit sequence over figures and captioned tables, in document order
+    # Figures and tables have separate sequences in document order.
     order = sorted([(s["_span"][0], "F", s) for s in specs] +
                    [(m.start(), "T", m) for m in TABLE_CAP.finditer(md)],
                    key=lambda x: x[0])
     numbers = {}
-    for i, (_, kind, obj) in enumerate(order, 1):
-        numbers[obj["id"] if kind == "F" else obj.group(2)] = i
+    counts = {"F": 0, "T": 0}
+    for _, kind, obj in order:
+        counts[kind] += 1
+        numbers[obj["id"] if kind == "F" else obj.group(2)] = counts[kind]
 
     rendered = {}
     for spec in specs:
-        paths = render(spec, ctx, outdir, formats)
+        override = st.get("item_overrides", {}).get("figures", {}).get(spec["id"]) if st else None
+        fig_ctx = ctx
+        if override:
+            fig_style = copy.deepcopy(ctx.st)
+            fig_style["series"] = override["series"]
+            fig_style["color"]["surface"] = override["background"]
+            fig_style["fonts"]["heading"] = [override["heading_font"], *ctx.st["fonts"]["heading"][1:]]
+            fig_style["fonts"]["body"] = [override["body_font"], *ctx.st["fonts"]["body"][1:]]
+            fig_style["chart"].update({k: v for k, v in override.items() if k not in ("series", "background", "heading_font", "body_font")})
+            fig_ctx = Ctx(fig_style)
+        paths = render(spec, fig_ctx, outdir, formats)
         rendered[spec["id"]] = paths
 
     # rewrite, back to front so spans stay valid
@@ -1220,7 +1259,7 @@ def build(md_path, style_name, outdir, out_md=None, formats=("png", "svg"),
                 rel = Path(img).resolve().relative_to(Path(rel_from).resolve())
             except ValueError:
                 rel = Path(img).resolve()
-        cap = f"**Exhibit {n}.** {spec['title']}"
+        cap = f"**Figure {n}.** {spec['title']}"
         if spec.get("subtitle") and spec.get("chart_title"):
             cap += f" {spec['subtitle']}"
         cap += f" *Source: {spec['source']}.*"
@@ -1232,16 +1271,15 @@ def build(md_path, style_name, outdir, out_md=None, formats=("png", "svg"),
         a, b = spec["_span"]
         out = out[:a] + f"![{cap}]({rel})" + out[b:]
 
-    out = TABLE_CAP.sub(lambda m: f"**Exhibit {numbers[m.group(2)]}.** {m.group(1)}", out)
-    # A reference already preceded by "Exhibit"/"Exhibits" (or joined to one by
-    # "and"/","/"–") takes the number alone, so "Exhibit [[F3]]" reads "Exhibit 5".
+    out = TABLE_CAP.sub(lambda m: f"**Table {numbers[m.group(2)]}.** {m.group(1)}", out)
+    # A reference already preceded by its type takes the number alone.
     def _xref(m):
         if m.group(1) not in numbers:
             return m.group(0)
         before = out[max(0, m.start() - 40):m.start()]
-        bare = re.search(r"Exhibits?\s+$", before) or re.search(
-            r"Exhibits?\s+(?:\d+|\[\[[FT]\w+\]\])(?:\s*(?:,|and|–|-|to)\s*(?:\d+|\[\[[FT]\w+\]\]))*\s*(?:,|and|–|-|to)\s*$", before)
-        return f"{numbers[m.group(1)]}" if bare else f"Exhibit {numbers[m.group(1)]}"
+        label = "Figure" if m.group(1).startswith("F") else "Table"
+        bare = re.search(rf"{label}s?\s+$", before)
+        return f"{numbers[m.group(1)]}" if bare else f"{label} {numbers[m.group(1)]}"
     out = XREF.sub(_xref, out)
 
     for p in problems:
@@ -1249,7 +1287,7 @@ def build(md_path, style_name, outdir, out_md=None, formats=("png", "svg"),
     if out_md:
         Path(out_md).parent.mkdir(parents=True, exist_ok=True)
         Path(out_md).write_text(out)
-        print(f"{len(specs)} figures rendered · {len(order)} exhibits numbered · {out_md}")
+        print(f"{counts['F']} figures and {counts['T']} tables numbered · {out_md}")
     else:
         sys.stdout.write(out)
     return out

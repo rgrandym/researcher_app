@@ -35,7 +35,6 @@ export default function PromptBar({
   connection,
   onConnection,
   contextPercent,
-  costUsd,
   placeholder = "Ask a question, or type / for a command",
   autoFocus = false,
 }: {
@@ -45,7 +44,6 @@ export default function PromptBar({
   connection: string;
   onConnection: (conn: string) => void;
   contextPercent?: number | null;
-  costUsd?: number | null;
   placeholder?: string;
   autoFocus?: boolean;
 }) {
@@ -254,7 +252,6 @@ export default function PromptBar({
           </>
         )}
         {contextPercent != null && <span>· context {Math.round(contextPercent)}%</span>}
-        {costUsd ? <span>· ${costUsd.toFixed(2)}</span> : null}
         {(usage.data?.windows ?? []).map((w) => (
           <span key={w.name} title={w.resets_at ? `resets ${resetLabel(w.resets_at)}` : undefined} className={clsx((w.used_percent ?? 0) >= 85 && "text-warn")}>
             · {w.name} {w.used_percent != null ? `${Math.round(w.used_percent)}%` : w.status ?? ""}

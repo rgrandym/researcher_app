@@ -744,6 +744,8 @@ bold_share              0.34      ← a third of lines open in bold
 
 Drop files into `outputs/<run>/external_data/`: datasheets, PDFs you bought or were sent, certificates of analysis, spreadsheets, scans, internal memos. Any folder structure you like; subfolders per vendor or per topic work well. Nothing in the pipeline ever modifies or deletes what you put there.
 
+In the app, open a project and use **Import** above its file list. Select one or more files; they go into that project's `external_data/` without replacing an existing file. You can import while an agent is working, including when it asks you to obtain a source. Tick **AI generated material** first to put those files in `ai_reports/`, where they can supply leads but not evidence. The file list also lets you remove a supplied file; the app moves it to the project's hidden `.trash/external_data/` folder so it can be recovered. Removal waits until any agent working on the project has finished its turn.
+
 They are treated as sources, not as background reading: verbatim quote, evidence row, citation in the report, Admiralty grade like anything else. A fact from a PDF on your disk carries exactly the weight of the same fact from a URL, no more and no less. A vendor datasheet stays a vendor source because you were the one who supplied it.
 
 **Add files whenever you like, including after the report is finished.** The folder is indexed by content hash, so the agents can answer one question cheaply: which files has nobody read yet? Unread files get read; already-mined files are never re-opened. That is what keeps a run with forty PDFs in it affordable.
@@ -935,10 +937,12 @@ python3 .claude/scripts/figures.py gaps  <report.md>    # what's still missing
 | **Meridian** | Navy, serif throughout, thin rules | Board papers, policy and regulatory work; it should look like an institution wrote it |
 | **Verdant** | Deep green and sand, sans headings over serif body | Long-form market or sustainability work someone reads end to end |
 | **Ember** | Crimson on charcoal, all sans, high contrast | A recommendation you want acted on this week |
-| **Graphite** | Near-monochrome plus one orange accent | Technical work for readers who resent decoration |
+| **Graphite** | Near-monochrome with slate references and dark charts | Technical work for readers who resent decoration |
 | **Helix** | Violet and magenta, geometric sans, airy | Technology strategy, for audiences who expect current |
 
 Plus `none` for unstyled pandoc output. A style sets the palette, fonts, table treatment, page margins, chart colours and cover — the same across PDF, Word, HTML and slides, because all four are generated from one JSON file.
+
+In the app, open a report's **HTML** tab and select **Palette and layout**. The controls open beside the report; drag their left edge to change the width. Select **Entire report** for the page palette, fonts, chart defaults, and table rules, or select a named Figure or Table to adjust that item alone. Individual Figures have their own colours, line and bar settings, and fonts. Individual Tables have their own colours, font, text size, spacing, and width. Select **Apply changes** to save the choices with that report in `.report-style.json`. The app uses them for its preview, PDF export, and saved figures. **Reset report** restores the selected style's defaults; **Reset this item** clears one item's overrides when you apply the change.
 
 ### Just say it
 

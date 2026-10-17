@@ -6,21 +6,19 @@ disable-model-invocation: true
 
 Improve the figures in a report, as the author asks: $ARGUMENTS
 
-The author may name a run, one or more exhibits (`F3`, `F2 F5`), or `all`, and says
+The author may name a run, figures (`F3`, `F2 F5`), tables (`T1`), or `all`, and says
 what is wrong or what they want: "F4 is unreadable", "make the bars horizontal",
 "the colours are too similar", "add the 2025 value as an annotation". If no run is
 named and the conversation is inside a project, it is that project's run. If no
-exhibit is named, ask which, unless the request plainly covers them all.
+figure or table is named, ask which, unless the request plainly covers them all.
 
 ## Read first
 
 1. `.claude/skills/visualize/SKILL.md` and its `references/figure-spec.md`: the
-   spec fields, the chart types, and the exhibit conventions. Load the `dataviz`
+   spec fields, the chart types, and the figure conventions. Load the `dataviz`
    skill for design judgment (form, colour, labelling, emphasis).
-2. The figures themselves, not the report: `grep -n '^```figure' <master>` lists
-   them, and `python3 .claude/scripts/section_map.py <run> --find F3` names the
-   section that refers to one. Read only the blocks in scope and the sentence that
-   cites each.
+2. Read the figure blocks and captioned tables in scope, with the prose that
+   refers to each. `rg -n '^```figure|^\*\*Table:' <master>` locates them.
 
 ## What may change, and what may not
 
@@ -35,12 +33,14 @@ change; the claim is not.**
   carries a figure. It must come from a row in `evidence.jsonl` with its `[E#]` in
   `source`; a number with no row is not drawn. If the data is not in the ledger,
   say what is missing and offer `/expand` to get it.
-- **Never silently**: the `title`, which is the exhibit's message, and the data
+- **Never silently**: the `title`, which is the figure's message, and the data
   values. If the author's request changes what the figure claims, make the change
   and list it at the end as needing `/verify`, because a changed message is a new
   claim.
 - A `null` value stays a visible gap with its `data_gaps` note. Never interpolate
   or drop it to make a chart look complete.
+- Rework wide tables into narrow or long form tables, or split by period. Retain
+  every value, qualification, evidence ID, and source. Keep print type at least 8 pt.
 
 Edit the master (`report.md`, or the piece named in `.run.json`) in place, one
 figure block at a time. Change the prose only where a sentence describes the chart
@@ -55,7 +55,8 @@ python3 .claude/scripts/figures.py build <master> --style <style> \
 ```
 
 `<style>` is the one the run exports in (the folder name under `<run>/export/`),
-or `meridian` if it has none. Then look at each changed figure's PNG in
+or `meridian` if it has none. Check every changed table at final page width and
+look at each changed figure's PNG in
 `figures/preview/`. **Look at each figure at most twice**: once after the change
 and once after any fix it needed. Every image opened stays in the conversation, and
 re-opening one chart to nudge it is the most expensive habit this command can have.

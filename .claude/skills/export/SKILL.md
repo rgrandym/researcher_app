@@ -1,6 +1,6 @@
 ---
 name: export
-description: Convert a finished report into a distributable document — Word (.docx), PDF, HTML, slides, or spreadsheet — in one of five professional styles, rendering its charts and preserving citations, tables, exhibits and the sources list. Use when the user asks to export, convert, or "give me a Word/PDF version", to produce a deliverable file, to restyle or rebrand a report, or to package it for sharing. Runs only on verified content; never the final quality gate.
+description: Convert a finished report into a distributable document — Word (.docx), PDF, HTML, slides, or spreadsheet — in one of five professional styles, rendering its charts and preserving citations, figures, tables, and the sources list. Use when the user asks to export, convert, or "give me a Word/PDF version", to produce a deliverable file, to restyle or rebrand a report, or to package it for sharing. Runs only on verified content; never the final quality gate.
 disable-model-invocation: true
 ---
 
@@ -147,7 +147,7 @@ sources render as ordinary paragraphs.
 weasyprint 69.0 and pango are installed. weasyprint **fails to import unless
 Homebrew's libs are on the loader path**, so the env var is not optional. Pass
 `base_url` or the embedded figures resolve to nothing and you get a PDF with
-silent blank gaps where the exhibits were.
+silent blank gaps where the figures and tables were.
 
 ```bash
 export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib:$DYLD_FALLBACK_LIBRARY_PATH
@@ -171,7 +171,7 @@ font size all reproduced the identical loss.
 Never silently substitute one format for another. If a target is unavailable, say
 so, name the one-line install, and offer the alternative.
 
-## Preserving citations and exhibits
+## Preserving citations, figures, and tables
 
 - Citations are rendered by `references.py`, never by hand, and evidence IDs are
   never renumbered. Each reference entry ends with the IDs drawn from it, so the
@@ -184,7 +184,7 @@ so, name the one-line install, and offer the alternative.
   without its reference list is not exportable.
 - The `## Data still to obtain` section ships too. It is the most actionable part
   of a partial report and the first thing a well-meaning conversion drops.
-- Exhibit numbers are assigned at build time in document order. Never edit them by
+- Figure and Table numbers are assigned separately at build time in document order. Never edit them by
   hand; re-run `figures.py build`.
 - Include the confidence statement. It travels with the document; it is not a
   chat-only artifact.
@@ -202,7 +202,7 @@ python3 .claude/scripts/check_export.py --citemap "$out/citations.json" \
         "$out/report.md" "$out/report.pdf" "$out/report.docx" "$out/report.html"
 ```
 
-It compares the **set** of citations, the exhibit count, and the placeholder
+It compares the **set** of citations, the figure and table counts, and the placeholder
 count in each artifact against the styled source, and exits non-zero on any loss.
 
 **`--citemap` is required once references have been rendered.** Without it the
@@ -242,7 +242,7 @@ Choosing a style is permission to style; it is not permission to brand.
 ## Slides
 
 Markdown built for reading makes bad slides. When asked for a deck, restructure
-explicitly: one claim per slide as the heading, ≤5 supporting lines, one exhibit
+explicitly: one claim per slide as the heading, ≤5 supporting lines, one figure or table
 per slide where it carries the point, evidence IDs retained, and a final sources
 slide. Set `"chart_title": true` on figures headed for a deck so each chart states
 its own message when it appears without surrounding prose. State that you

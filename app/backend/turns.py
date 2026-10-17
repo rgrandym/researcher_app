@@ -274,6 +274,13 @@ class TurnManager:
                         PermissionDecision(allow=False, message="The author stopped the turn.")
                     )
 
+    async def stop_all(self) -> int:
+        """Request cancellation of every active turn, including turns in other sessions."""
+        active = [sid for sid in self.running if self.is_running(sid)]
+        for sid in active:
+            await self.stop(sid)
+        return len(active)
+
     async def answer(
         self, session_id: str, request_id: str, decision: str, answers: dict[str, str] | None = None
     ) -> None:

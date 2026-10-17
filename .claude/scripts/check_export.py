@@ -28,7 +28,7 @@ import zipfile
 from pathlib import Path
 
 CITE = re.compile(r"\[E\d+\]")
-EXHIBIT = re.compile(r"Exhibit\s+\d+")
+EXHIBIT = re.compile(r"(?:Figure|Table|Exhibit)\s+\d+")
 # pandoc hard-wraps its HTML output, so the space inside the marker can
 # arrive as a newline. A checker that reports present content as missing
 # trains people to ignore it, which is the one failure it cannot afford.

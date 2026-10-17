@@ -111,17 +111,20 @@ def agents(events: list[Event], running: bool) -> list[dict[str, Any]]:
     """The current task's main thread and subagents: what is working now, not the whole
     conversation's history (earlier_agents counts those)."""
     events = events[task_start(events) :]
+    finished = next((e for e in reversed(events) if e.type == "done"), None) if not running else None
+    failed = bool(finished and finished.data.get("end_reason") not in (None, "done", "stopped"))
     main: dict[str, Any] = {
         "id": "main",
         "type": "main",
         "description": "Main thread",
-        "status": "running" if running else "idle",
+        "status": "running" if running else ("failed" if failed else "done") if finished else "idle",
         "started": events[0].ts if events else None,
-        "ended": None,
+        "ended": finished.ts if finished else None,
         "tokens_in": 0,
         "tokens_out": 0,
         "web": 0,
         "calls": [],
+        "calls_total": 0,
     }
     subs: dict[str, dict[str, Any]] = {}
     for e in events:
@@ -138,6 +141,7 @@ def agents(events: list[Event], running: bool) -> list[dict[str, Any]]:
                 "tokens_out": 0,
                 "web": 0,
                 "calls": [],
+                "calls_total": 0,
             }
     for e in events:
         owner = subs.get(str(e.agent)) if e.agent else main
@@ -149,6 +153,7 @@ def agents(events: list[Event], running: bool) -> list[dict[str, Any]]:
         elif e.type == "tool_call":
             if e.data.get("name") in WEB_TOOLS:
                 owner["web"] += 1
+            owner["calls_total"] += 1
             owner["calls"].append(
                 {"name": e.data.get("name"), "summary": e.data.get("summary"), "ts": e.ts}
             )
@@ -407,7 +412,7 @@ def cost(
     }
 
 
-def permissions(events: list[Event]) -> list[dict[str, Any]]:
+def permissions(events: list[Event], open_permissions: set[str]) -> list[dict[str, Any]]:
     """Every permission request and question this session raised, newest first, with the
     answer it got. Denials and refusals the provider reported come in as tool errors."""
     answers = {str(e.data.get("id")): e.data for e in events if e.type == "permission_answer"}
@@ -418,13 +423,14 @@ def permissions(events: list[Event]) -> list[dict[str, Any]]:
         a = answers.get(str(e.data.get("id")), {})
         out.append(
             {
+                "id": str(e.data.get("id")),
                 "ts": e.ts,
                 "tool": e.data.get("tool"),
                 "kind": e.data.get("kind", "permission"),
                 "summary": e.data.get("summary")
                 or next((q.get("header") for q in e.data.get("questions") or []), ""),
                 "decision": a.get("decision")
-                or ("waiting" if running_of(events) else "unanswered"),
+                or ("waiting" if str(e.data.get("id")) in open_permissions else "unanswered"),
                 "provider": e.provider,
             }
         )
@@ -445,17 +451,7 @@ def permissions(events: list[Event]) -> list[dict[str, Any]]:
     return sorted(out + blocked, key=lambda r: r["ts"], reverse=True)[:40]
 
 
-def running_of(events: list[Event]) -> bool:
-    """Whether the last turn in the transcript has not finished."""
-    for e in reversed(events):
-        if e.type == "done":
-            return False
-        if e.type == "user":
-            return True
-    return False
-
-
-def build(session_id: str, running: bool, providers: dict[str, Any]) -> dict[str, Any]:
+def build(session_id: str, running: bool, providers: dict[str, Any], open_permissions: set[str] | None = None) -> dict[str, Any]:
     session = sessions.load(session_id)
     events = sessions.transcript(session_id)
     current = session.current() or (session.segments[-1] if session.segments else None)
@@ -469,7 +465,7 @@ def build(session_id: str, running: bool, providers: dict[str, Any]) -> dict[str
     return {
         "agents": agents(events, running),
         "agents_earlier": earlier_agents(events),
-        "permissions": permissions(events),
+        "permissions": permissions(events, open_permissions or set()),
         "progress": progress(session.runs, running),
         # The task the latest message started, with its own steps (TASK_STEPS).
         "task": task(session, events, running),

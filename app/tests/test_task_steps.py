@@ -64,3 +64,21 @@ def test_retry_keeps_the_command_it_continues(tmp_path, monkeypatch):
     ]
     t = activity.task(S(), events, running=True)
     assert t["label"] == "Expansion"
+
+
+def test_agent_progress_keeps_total_calls_and_finishes_with_turn():
+    start = time.time() - 3
+    events = [Event(type="user", data={"text": "Check this"}, ts=start)]
+    events.extend(Event(type="tool_call", data={"name": "Bash"}, ts=start + i / 100) for i in range(45))
+    events.append(Event(type="done", ts=start + 2))
+
+    row = activity.agents(events, running=False)[0]
+    assert row["status"] == "done"
+    assert row["ended"] == start + 2
+    assert row["calls_total"] == 45
+    assert len(row["calls"]) == 40
+
+
+def test_failed_turn_marks_main_agent_failed():
+    events = [Event(type="user", data={"text": "Check this"}), Event(type="done", data={"end_reason": "error"})]
+    assert activity.agents(events, running=False)[0]["status"] == "failed"

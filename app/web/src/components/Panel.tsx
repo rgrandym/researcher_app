@@ -25,6 +25,7 @@ export const PANELS = {
   activity: { id: "activity", share: 0.22, min: 260, max: 0.26, maxPx: 500 },
   runPanel: { id: "runPanel", share: 0.18, min: 200, max: 0.24, maxPx: 400 },
   figures: { id: "figures", share: 0.15, min: 170, max: 0.22, maxPx: 360 },
+  appearance: { id: "appearance", share: 0.26, min: 280, max: 0.34, maxPx: 600 },
   nav: { id: "nav", share: 0.15, min: 180, max: 0.2, maxPx: 320 },
 } satisfies Record<string, PanelSize>;
 

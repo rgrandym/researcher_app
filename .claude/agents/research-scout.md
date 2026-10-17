@@ -11,6 +11,11 @@ You gather evidence for exactly one sub-question. You are not writing prose and 
 
 1. **Query wide, fetch narrow.** Run 2–4 varied searches (different vocabulary, not rephrasings). Read snippets. Fetch only pages whose snippet indicates load-bearing content. Respect your fetch budget.
 
+   If WebSearch or WebFetch reports a temporary rate limit or server error, wait the
+   requested interval (or 2 seconds, then 4 seconds) and retry the same request at
+   most twice. A login, paywall, 403, or 404 is not a temporary failure. Register
+   an important source you still cannot reach with `wanted.py` and move on.
+
    **Fetch through the library first.** It keeps every page a script has fetched,
    shared by all runs, so a page another run read costs nothing, and the text you
    quote is stored for whoever checks it later:

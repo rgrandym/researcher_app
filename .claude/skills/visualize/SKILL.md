@@ -1,22 +1,22 @@
 ---
 name: visualize
-description: Put tables and charts inside a research report — decide which findings earn an exhibit, write the ```figure specs that render into styled charts, caption and number them, and handle data that could not be obtained. Use when drafting or revising a report that has quantities in it, when the user asks for charts/graphs/tables/exhibits/visuals in a report, or when a finding is a comparison, a trend, or a distribution rather than a fact.
+description: Put tables and charts inside a research report, write figure specs, caption and number figures and tables, and handle data that could not be obtained.
 ---
 
 # Visualize
 
 A chart in this workspace is **a claim, not an illustration.** It carries evidence
 IDs, it is validated by a script, and its numbers live in the report source as
-data rather than in a picture. That is what makes an exhibit as auditable as a
+data rather than in a picture. That is what makes a figure or table as auditable as a
 sentence — and what stops the failure mode where a chart says something the text
 never claimed and no reviewer ever checked.
 
 Read `references/figure-spec.md` for the full field reference before writing your
 first block. Design judgment for charts generally lives in the global `dataviz`
 skill; this skill owns the mechanics, the citation discipline, and the workspace's
-exhibit conventions.
+figure and table conventions.
 
-## Does this finding earn an exhibit?
+## Does this finding earn a figure or table?
 
 Charts cost the reader attention. Spend it only where the shape of the data *is*
 the finding:
@@ -38,18 +38,18 @@ the finding:
 every export intact. Reach for a chart only when the reader needs to see a shape —
 a gap, a crossing, a cluster, an outlier — that a table hides.
 
-Three exhibits in a ten-page report is normal. Ten is a deck pretending to be a
+Three figures or tables in a ten-page report is normal. Ten is a deck pretending to be a
 report.
 
-**The necessity test, applied to every exhibit before it ships:** delete it and
-read the surrounding prose. If the argument survives intact, the exhibit was
-decoration and stays deleted. An exhibit earns its place only when the reader
+**The necessity test, applied to every figure or table before it ships:** delete it and
+read the surrounding prose. If the argument survives intact, the figure or table was
+decoration and stays deleted. A figure or table earns its place only when the reader
 would have to reconstruct a shape — a gap, a crossing, a cluster, an outlier —
 from a sentence that cannot carry it. Visuals here prove a point or they go.
 
 ## Writing a figure
 
-A fenced ```figure block holding one JSON object, placed where the exhibit belongs:
+A fenced ```figure block holding one JSON object, placed where the figure belongs:
 
 ````markdown
 ```figure
@@ -84,23 +84,30 @@ fabricated number wearing a chart's authority.
 
 ### Cross-references
 
-Write `[[F2]]` in prose; it resolves to "Exhibit 4" at build time. Never hard-code
-an exhibit number — insertions renumber everything.
+Write `[[F2]]` or `[[T1]]` in prose; these resolve to "Figure 2" and "Table 1"
+at build time. Never hard-code a number because insertions renumber the report.
 
 ### Captioning a table
 
-Put this line directly under the table:
+Put this line directly above the table so its caption stays with the first rows:
 
 ```markdown
-**Exhibit:** Published vendor pricing across the five shortlisted suppliers [E22][E23] {#T1}
+**Table:** Published vendor pricing across the five shortlisted suppliers [E22][E23] {#T1}
 ```
 
-Tables and charts share **one** Exhibit sequence, numbered in document order, so
-"Exhibit 3" is unambiguous whichever it is.
+Figures and tables have separate sequences, each numbered in document order.
+Use "Figure" and "Table" in captions and prose. Never use "Exhibit".
+
+Before delivery, inspect the rendered page. Keep every table within its page width
+with readable type. Rework wide tables into long form, split them by period, or
+use a landscape page; do not solve overflow by shrinking type below 8 pt.
+Check chart axes, units, tick spacing, legends, labels, captions, and references
+at final display size. Remove a redundant legend for one series, and keep
+multi-series legends close to the plot. Make every figure readable without zoom.
 
 ## Data you could not obtain
 
-**Build the exhibit anyway**, with its holes visible. Doctrine and syntax:
+**Build the figure anyway**, with its holes visible. Doctrine and syntax:
 `.claude/references/gaps.md`. The mechanics here: the value is `null`, the spec
 carries a `data_gaps` note, and the renderer draws a hatched slot labelled "to
 obtain" where the bar would be, appending the note to the caption.
@@ -148,11 +155,11 @@ sees the numbers rather than a picture of them.
 ## What not to do
 
 - **No chart whose title restates the axes.** If the message won't fit in a title,
-  you have not decided what the exhibit is for.
+  you have not decided what the figure is for.
 - **No truncated value axis on a bar chart.** Bars encode length; a non-zero
   baseline lies. Lines may start where the data lives.
 - **No third dimension, no gradients, no drop shadows, no pie beyond three slices.**
-- **No chart the text does not discuss.** Every exhibit is referenced from prose,
+- **No chart the text does not discuss.** Every figure is referenced from prose,
   and the prose states the finding — a reader skipping figures must lose nothing.
 - **No re-plotting a source's chart from pixels.** If you cannot get the numbers,
   cite the source's figure in prose and mark the data as unobtained.

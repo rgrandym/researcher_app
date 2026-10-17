@@ -65,7 +65,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # port at every launch, and a browser's storage is per port, so it would forget them.
     "ui": {
         "theme": "system",
-        "agents_view": "cards",
+        "agents_view": "lanes",
         "sidebar_open": True,
         "activity_open": True,
         "run_panel_open": True,

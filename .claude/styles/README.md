@@ -17,7 +17,7 @@ python3 .claude/scripts/figures.py demo --style verdant -o /tmp/v  # see real ch
 | **Meridian** | Navy, serif throughout, thin rules | Board papers, policy and regulatory work; the document should look like an institution wrote it |
 | **Verdant** | Deep green and sand, sans headings over a serif body | Long-form market or sustainability work someone will actually read end to end |
 | **Ember** | Crimson on charcoal, all sans, high contrast | A recommendation you want acted on this week |
-| **Graphite** | Near-monochrome plus one orange accent, rules-only tables | Technical and quantitative work for readers who resent decoration |
+| **Graphite** | Cool graphite, slate charts, grey references, rules-only tables | Technical and quantitative work for readers who resent decoration |
 | **Helix** | Violet and magenta, geometric sans, airy | Technology strategy and market entry, for audiences who expect current |
 
 Plus `none` — pandoc defaults, no styling at all.
@@ -68,6 +68,7 @@ caught before a report is built on it.
 | `chart.grid`, `.axis` | Gridline and axis colours |
 | `chart.spines` | `left_bottom`, `bottom`, `left`, or `none` |
 | `chart.bar_width`, `.line_width`, `.marker_size` | Mark weights |
+| `chart.bar_corner_radius_px` | Optional subtle corner radius for grouped and single bars, measured in rendered pixels |
 | `chart.value_labels` | Whether bars and points carry their numbers by default |
 | `page.size`, `.margin_mm` | `A4`/`Letter`, and `[top, right, bottom, left]` |
 | `page.cover` | Title-block treatment: `rule`, `band`, `block`, `minimal`, `off` |

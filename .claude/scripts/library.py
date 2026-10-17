@@ -36,6 +36,8 @@ It makes no model call. The library lives in `library/` at the workspace root an
 excluded from git with the rest of the research material.
 """
 import argparse
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 import hashlib
 import html
 import html.parser
@@ -146,12 +148,40 @@ class Text(html.parser.HTMLParser):
         return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
-def download(url):
+RETRY_HTTP = {429, 500, 502, 503, 504}
+
+
+def retry_delay(attempt, retry_after=""):
+    """Bound a server's Retry-After or exponential wait to 60 seconds."""
+    try:
+        delay = float(retry_after)
+    except ValueError:
+        try:
+            delay = (parsedate_to_datetime(retry_after) - datetime.now(timezone.utc)).total_seconds()
+        except (TypeError, ValueError, OverflowError):
+            delay = 2 ** (attempt + 1)
+    return min(60, max(0, delay))
+
+
+def download(url, retries=2):
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*"})
-    with urllib.request.urlopen(req, timeout=40) as res:
-        ctype = res.headers.get("Content-Type", "")
-        body = res.read(MAX_BYTES + 1)
-        final = res.geturl()
+    for attempt in range(retries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=40) as res:
+                ctype = res.headers.get("Content-Type", "")
+                body = res.read(MAX_BYTES + 1)
+                final = res.geturl()
+            break
+        except urllib.error.HTTPError as exc:
+            if exc.code not in RETRY_HTTP or attempt >= retries:
+                raise
+            delay = retry_delay(attempt, exc.headers.get("Retry-After", "") if exc.headers else "")
+        except (urllib.error.URLError, TimeoutError):
+            if attempt >= retries:
+                raise
+            delay = retry_delay(attempt)
+        print(f"Temporary fetch failure; retrying in {delay:g} seconds ({attempt + 1}/{retries}).", file=sys.stderr)
+        time.sleep(delay)
     if len(body) > MAX_BYTES:
         raise ValueError("larger than 25 MB")
     return ctype, body, final

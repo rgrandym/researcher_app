@@ -154,6 +154,27 @@ def test_stop_denies_waiting_permission(root: Path) -> None:
     asyncio.run(go())
 
 
+def test_stop_all_denies_permissions_in_every_session(root: Path) -> None:
+    m, _, _ = _manager(["claude_permission.jsonl"], ["codex_turn.jsonl"])
+
+    async def go() -> None:
+        first, second = sessions.create(), sessions.create()
+        await m.send(first.id, "clean up one", "claude-sub")
+        await m.send(second.id, "clean up two", "claude-sub")
+        for _ in range(200):
+            if all(m.running[sid].permissions for sid in (first.id, second.id)):
+                break
+            await asyncio.sleep(0.01)
+        assert await m.stop_all() == 2
+        await asyncio.gather(_settle(m, first.id), _settle(m, second.id))
+        for sid in (first.id, second.id):
+            answers = [e for e in sessions.transcript(sid) if e.type == "permission_answer"]
+            assert answers[-1].data["decision"] == "deny"
+        assert await m.stop_all() == 0
+
+    asyncio.run(go())
+
+
 def test_runs_detected_and_locked(root: Path) -> None:
     (root / "outputs" / "2026-01-15-lithium-costs").mkdir(exist_ok=True)
     m, _, _ = _manager(["claude_subagent.jsonl"], ["codex_turn.jsonl"])

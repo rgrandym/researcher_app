@@ -7,6 +7,9 @@ the workspace root; the app feeds it prompts and watches it work.
 
 from __future__ import annotations
 
+import asyncio
+import os
+import signal
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal, Protocol
@@ -138,6 +141,24 @@ class Provider(Protocol):
 
 class ProviderError(Exception):
     pass
+
+
+def kill_process_tree(proc: asyncio.subprocess.Process) -> None:
+    """End a CLI and its tool children. Providers launch each CLI in its own process group."""
+    if proc.returncode is not None:
+        return
+    if os.name == "posix":
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+            return
+        except ProcessLookupError:
+            return
+        except OSError:
+            pass
+    try:
+        proc.kill()
+    except ProcessLookupError:
+        pass
 
 
 Billing = Literal["plan", "key"]

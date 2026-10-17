@@ -29,7 +29,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Res
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from backend import activity, autoedits, config, keychain, render, sessions, usage, workspace
+from backend import activity, appearance, autoedits, config, keychain, render, sessions, usage, workspace
 from backend.providers.base import Event, ProviderError
 from backend.turns import TurnManager
 
@@ -128,6 +128,12 @@ async def restart() -> dict[str, Any]:
 
     asyncio.get_running_loop().call_later(0.4, again)
     return {"ok": True}
+
+
+@app.post("/api/stop-all")
+async def stop_all_turns() -> dict[str, Any]:
+    """Stop all active turns while leaving the app available to inspect their results."""
+    return {"stopping": await manager.stop_all()}
 
 
 @app.get("/api/commands")
@@ -297,7 +303,8 @@ def keep_session(sid: str) -> dict[str, Any]:
 @app.get("/api/sessions/{sid}/activity")
 def session_activity(sid: str) -> dict[str, Any]:
     try:
-        return activity.build(sid, manager.is_running(sid), manager.providers)
+        pending = manager.running.get(sid)
+        return activity.build(sid, manager.is_running(sid), manager.providers, set(pending.permissions) if pending else set())
     except (FileNotFoundError, ValueError) as exc:
         raise _bad(exc, 404) from exc
 
@@ -481,6 +488,33 @@ def save_run_file(name: str, body: RunFileBody) -> dict[str, Any]:
     return {"ok": True, "mtime": mtime}
 
 
+class ExternalFileBody(BaseModel):
+    path: str
+    data: str  # base64
+
+
+@app.post("/api/runs/{name}/external-data")
+def import_external_file(name: str, body: ExternalFileBody) -> dict[str, Any]:
+    try:
+        path = workspace.import_external(name, body.path, body.data)
+    except FileExistsError as exc:
+        raise HTTPException(409, "A file with this name already exists. Rename the import first.") from exc
+    except (FileNotFoundError, ValueError) as exc:
+        raise _bad(exc) from exc
+    return {"path": path}
+
+
+@app.delete("/api/runs/{name}/external-data")
+def remove_external_file(name: str, path: str) -> dict[str, Any]:
+    if _run_busy(name):
+        raise HTTPException(409, "An agent is working on this project. Remove the file when its turn finishes.")
+    try:
+        trash = workspace.remove_external(name, path)
+    except (FileNotFoundError, ValueError) as exc:
+        raise _bad(exc, 404 if isinstance(exc, FileNotFoundError) else 400) from exc
+    return {"trash": trash}
+
+
 def _run_busy(name: str) -> bool:
     owner = manager.locks.get(name)
     return bool(owner and manager.is_running(owner))
@@ -521,6 +555,36 @@ def delete_run(name: str) -> dict[str, Any]:
 @app.get("/api/styles")
 def list_styles() -> list[dict[str, str]]:
     return render.styles()
+
+
+@app.get("/api/runs/{name}/appearance")
+def report_appearance(name: str, style: str = "meridian") -> dict[str, Any]:
+    try:
+        return appearance.view(name, style)
+    except (FileNotFoundError, ValueError) as exc:
+        raise _bad(exc) from exc
+
+
+class AppearanceBody(BaseModel):
+    style: str
+    values: dict[str, Any]
+
+
+@app.put("/api/runs/{name}/appearance")
+def save_report_appearance(name: str, body: AppearanceBody) -> dict[str, Any]:
+    try:
+        return appearance.save(name, body.style, body.values)
+    except (FileNotFoundError, ValueError) as exc:
+        raise _bad(exc) from exc
+
+
+@app.delete("/api/runs/{name}/appearance")
+def reset_report_appearance(name: str) -> dict[str, bool]:
+    try:
+        appearance.reset(name)
+    except (FileNotFoundError, ValueError) as exc:
+        raise _bad(exc) from exc
+    return {"ok": True}
 
 
 class RenderBody(BaseModel):

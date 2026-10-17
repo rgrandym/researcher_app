@@ -16,13 +16,16 @@ The master is never modified. A preview renders into the app's own cache
 from __future__ import annotations
 
 import json
+import hashlib
 import os
+import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
-from backend import config, workspace
+from backend import appearance, config, workspace
 
 TIMEOUT_S = 300
 
@@ -111,6 +114,12 @@ def build(
         raise RenderError(f"Unknown style: {style}")
     out.mkdir(parents=True, exist_ok=True)
     figures_dir.mkdir(parents=True, exist_ok=True)
+    custom = appearance.effective(run_name, style)
+    style_arg = style
+    if custom is not None:
+        effective_path = out / "_effective-style.json"
+        effective_path.write_text(json.dumps(custom))
+        style_arg = str(effective_path)
     stem = "report" if src.name in ("report.md", "draft.md") else src.stem
     py = config.python()
     styled = out / "_styled.md"
@@ -123,7 +132,7 @@ def build(
                 "build",
                 str(src),
                 "--style",
-                style,
+                style_arg,
                 "--outdir",
                 str(figures_dir),
                 "-o",
@@ -155,8 +164,24 @@ def build(
         )
     else:
         shutil.copyfile(styled, reader)
-    css = [py, _script("style.py"), "css", style, "-o", str(out / "style.css")]
+    css = [py, _script("style.py"), "css", style_arg, "-o", str(out / "style.css")]
     log.append(_run([*css, "--cover"]))
+    table_overrides = custom.get("item_overrides", {}).get("tables", {}) if custom else {}
+    if table_overrides:
+        rules = []
+        for table_id, item in table_overrides.items():
+            selector = f"#report-table-{table_id}"
+            font = ", ".join(f'"{name}"' if " " in name else name for name in appearance.FONT_STACKS[item["font_family"]])
+            rules.append(
+                f"{selector} {{ font-family: {font}; font-size: {item['font_size_pt']}pt; "
+                f"width: {item['width_percent']}%; }}\n"
+                f"{selector} th {{ font-family: inherit; background: {item['header_bg']}; color: {item['header_fg']}; "
+                f"padding: {item['cell_padding_em']}em; border-bottom: {item['rule_weight_pt']}pt solid {item['border']}; }}\n"
+                f"{selector} td {{ padding: {item['cell_padding_em']}em; "
+                f"border-bottom: {item['rule_weight_pt']}pt solid {item['border']}; }}"
+            )
+        with (out / "style.css").open("a") as stream:
+            stream.write("\n/* Individual tables */\n" + "\n".join(rules) + "\n")
     html = out / f"{stem}.html"
     pandoc = [
         _pandoc(),
@@ -184,6 +209,16 @@ def build(
         raise RenderError(f"pandoc: {exc}") from exc
     if done.returncode != 0:
         raise RenderError(f"pandoc failed:\n{done.stderr.strip()[-1500:]}")
+    if table_overrides:
+        ids = [m.group(2) for m in appearance.TABLE_CAP.finditer(src.read_text())]
+        by_number = {str(i): table_id for i, table_id in enumerate(ids, 1)}
+        pattern = re.compile(r'(<p[^>]*>\s*<strong>Table (\d+)\.</strong>.*?</p>\s*)(<table\b)', re.S)
+        def tag_table(match: re.Match[str]) -> str:
+            table_id = by_number.get(match.group(2))
+            if table_id not in table_overrides:
+                return match.group(0)
+            return match.group(1) + f'<table id="report-table-{table_id}"'
+        html.write_text(pattern.sub(tag_table, html.read_text()))
     return {
         "html": html,
         "reader": reader,
@@ -220,10 +255,14 @@ def preview(run_name: str, doc: str | None, style: str, cite: bool) -> dict[str,
     stamp = cache / "source.json"
     inputs = [src, run / "evidence.jsonl", config.ROOT / ".claude/styles" / f"{style}.json"]
     newest = max((p.stat().st_mtime for p in inputs if p.exists()), default=0)
+    appearance_file = run / appearance.FILE
+    appearance_hash = hashlib.sha256(appearance_file.read_bytes()).hexdigest() if appearance_file.exists() else ""
+    meta: dict[str, Any] = {}
     try:
         meta = json.loads(stamp.read_text())
         if (
             meta.get("source") == src.name
+            and meta.get("appearance_hash", "") == appearance_hash
             and meta.get("built", 0) >= newest
             and Path(meta["html"]).is_file()
         ):
@@ -233,7 +272,8 @@ def preview(run_name: str, doc: str | None, style: str, cite: bool) -> dict[str,
     result = build(run_name, doc, style, cite, cache / "out", cache / "figures")
     meta = {
         "source": src.name,
-        "built": max(newest, src.stat().st_mtime) + 0.001,
+        "appearance_hash": appearance_hash,
+        "built": max(time.time(), newest + 0.001, float(meta.get("built", 0)) + 0.001),
         "html": str(result["html"]),
         "log": result["log"],
     }

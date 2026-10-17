@@ -43,7 +43,9 @@ def load(name):
     """Load and validate a style. Unknown name → error listing the real ones."""
     if not name or name.lower() in ("none", "plain"):
         return None
-    path = STYLE_DIR / f"{name}.json"
+    # The app may pass a validated, report-specific style copy.
+    candidate = Path(name)
+    path = candidate if candidate.suffix == ".json" and candidate.is_file() else STYLE_DIR / f"{name}.json"
     if not path.exists():
         sys.exit(f"unknown style {name!r}; available: {', '.join(available())} (or 'none')")
     st = json.loads(path.read_text())
@@ -147,9 +149,7 @@ def build_css(st, cover=True):
 /* mark an oversized table or figure `.wide` to give it its own landscape page */
 .wide {{ page: landscape; }}
 
-/* magazine-style inset: an exhibit the text runs around rather than one that
-   interrupts it. Use for a supplied illustration that a reader consults while
-   reading, never for a data exhibit carrying a finding the prose depends on. */
+/* magazine-style inset for an illustration that readers consult while reading. */
 .float-right, .float-left {{
   width: 54.7%; margin: 0.2em 0 1em 1.6em;
   break-inside: avoid; page-break-inside: avoid;
@@ -210,6 +210,12 @@ blockquote {{
 blockquote p:last-child {{ margin-bottom: 0; }}
 
 /* ---------------- tables ---------------- */
+p:has(+ table) {{
+  break-after: avoid; page-break-after: avoid;
+  font-family: {font_stack(f['heading'])};
+  font-size: {base * 0.86:.1f}pt; color: {c['ink']};
+  margin: 1.2em 0 0.4em;
+}}
 table {{
   width: 100%; border-collapse: collapse;
   margin: 1.2em 0; font-size: {base * 0.86:.1f}pt;

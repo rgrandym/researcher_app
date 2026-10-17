@@ -92,9 +92,12 @@ def save(session: Session) -> None:
     session.updated = time.time()
     path = _dir(session.id)
     path.mkdir(parents=True, exist_ok=True)
-    tmp = path / "session.json.tmp"
-    tmp.write_text(session.model_dump_json(indent=2))
-    tmp.replace(path / "session.json")
+    tmp = path / f"session.{uuid.uuid4().hex}.tmp"
+    try:
+        tmp.write_text(session.model_dump_json(indent=2))
+        tmp.replace(path / "session.json")
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def load(session_id: str) -> Session:

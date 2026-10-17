@@ -177,6 +177,7 @@ export interface AgentRow {
   tokens_in: number;
   tokens_out: number;
   web: number;
+  calls_total: number;
   calls: { name: string; summary: string; ts: number }[];
 }
 

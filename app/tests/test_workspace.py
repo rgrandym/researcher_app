@@ -4,6 +4,7 @@ outputs/, and the checks that block a bad save."""
 from __future__ import annotations
 
 import json
+import base64
 from pathlib import Path
 from typing import Any
 
@@ -78,6 +79,19 @@ def test_runs_and_exports(root: Path) -> None:
         workspace.run_file(RUN, "../../etc/passwd")
     with pytest.raises(ValueError):
         workspace.run_dir("../x")
+
+
+def test_external_import_and_recoverable_remove(root: Path) -> None:
+    rel = workspace.import_external(RUN, "supplied/source.pdf", base64.b64encode(b"%PDF-test").decode())
+    assert rel == "external_data/supplied/source.pdf"
+    assert workspace.run_file(RUN, rel).read_bytes() == b"%PDF-test"
+    with pytest.raises(FileExistsError):
+        workspace.import_external(RUN, "supplied/source.pdf", base64.b64encode(b"replacement").decode())
+    with pytest.raises(ValueError):
+        workspace.import_external(RUN, "../report.md", base64.b64encode(b"bad").decode())
+    trash = workspace.remove_external(RUN, "supplied/source.pdf")
+    assert (workspace.run_dir(RUN) / trash).read_bytes() == b"%PDF-test"
+    assert rel not in {f["path"] for f in workspace.run_detail(RUN)["files"]}
 
 
 def test_checks(root: Path) -> None:

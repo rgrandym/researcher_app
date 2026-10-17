@@ -38,6 +38,7 @@ from backend.providers.base import (
     UsageWindows,
     as_dict,
     end_reason,
+    kill_process_tree,
     short,
 )
 
@@ -381,6 +382,7 @@ class CodexProvider:
             cwd=config.ROOT,
             env=self.env(),
             limit=STREAM_LIMIT,
+            start_new_session=True,
         )
         assert proc.stdin and proc.stdout and proc.stderr
         proc.stdin.write(text.encode())
@@ -394,9 +396,9 @@ class CodexProvider:
             while proc.returncode is None:
                 if cancelled():
                     stopped = True
-                    proc.kill()
+                    kill_process_tree(proc)
                     return
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.1)
 
         async def read() -> None:
             assert proc.stdout
@@ -417,7 +419,7 @@ class CodexProvider:
         finally:
             watcher.cancel()
             if proc.returncode is None:
-                proc.kill()
+                kill_process_tree(proc)
         if command in ISOLATED_SKILLS and parser.subagents == 0 and not stopped:
             await on_event(
                 Event(

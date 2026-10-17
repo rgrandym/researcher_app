@@ -26,7 +26,7 @@ export default function SessionView({ id, embedded = false, onNew }: { id: strin
   const activity = useQuery({
     queryKey: ["activity", id],
     queryFn: () => api.get<Activity>(`/api/sessions/${id}/activity`),
-    refetchInterval: isRunning ? 4_000 : false,
+    refetchInterval: isRunning ? 1_000 : false,
     enabled: activityOpen,
   });
   const keep = useMutation({
@@ -44,6 +44,7 @@ export default function SessionView({ id, embedded = false, onNew }: { id: strin
   }, [detail.data, id, loadEvents, setRunning]);
 
   const list = events[id] ?? [];
+  const openPermissions = detail.data?.open_permissions ?? [];
   useEffect(() => {
     const el = scroller.current;
     if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 240) bottom.current?.scrollIntoView({ block: "end" });
@@ -111,7 +112,7 @@ export default function SessionView({ id, embedded = false, onNew }: { id: strin
         )}
         <div ref={scroller} className="scroll-thin min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto max-w-3xl px-6 py-6">
-            <Transcript sid={id} events={list} running={isRunning} openSegment={openSegment} connections={connections.data ?? []} />
+            <Transcript sid={id} events={list} running={isRunning} openPermissions={openPermissions} openSegment={openSegment} connections={connections.data ?? []} />
             {isRunning && <div className="mt-3 h-2 w-2 animate-pulse rounded-full bg-accent" />}
             <div ref={bottom} />
           </div>
@@ -143,7 +144,6 @@ export default function SessionView({ id, embedded = false, onNew }: { id: strin
             connection={connection}
             onConnection={(c) => setNextConnection(id, c)}
             contextPercent={activity.data?.cost.context_percent}
-            costUsd={activity.data?.cost.total_usd}
             placeholder={embedded ? "Ask about this project, or type / for a command" : "Reply, or type / for a command"}
             autoFocus
           />
@@ -158,7 +158,7 @@ export default function SessionView({ id, embedded = false, onNew }: { id: strin
             </button>
           </div>
           <div className="min-h-0 flex-1">
-            <ActivityPanel sid={id} data={activity.data} />
+            <ActivityPanel sid={id} data={activity.data} events={list} openPermissions={openPermissions} />
           </div>
         </Panel>
       )}

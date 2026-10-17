@@ -85,14 +85,20 @@ interface Question {
   multiSelect?: boolean;
 }
 
-function QuestionCard({ ev, ctx }: { ev: AppEvent; ctx: Ctx }) {
+interface PermissionCardProps {
+  ev: AppEvent;
+  sid: string;
+  running: boolean;
+  answer?: string;
+  answered?: Record<string, string>;
+}
+
+function QuestionCard({ ev, sid, running, answer, answered }: PermissionCardProps) {
   const id = String(ev.data.id);
-  const answer = ctx.answers.get(id);
-  const live = !answer && ctx.running;
+  const live = !answer && running;
   const questions = (ev.data.questions ?? []) as Question[];
   const [picked, setPicked] = useState<Record<string, string[]>>({});
   const [other, setOther] = useState<Record<string, string>>({});
-  const answered = ctx.answerTexts.get(id);
   const toggle = (q: Question, label: string) =>
     setPicked((p) => {
       const now = p[q.question] ?? [];
@@ -103,7 +109,7 @@ function QuestionCard({ ev, ctx }: { ev: AppEvent; ctx: Ctx }) {
   const ready = questions.every((q) => value(q));
   const submit = () => {
     const answers = Object.fromEntries(questions.map((q) => [q.question, value(q)]));
-    send({ type: "permission", session: ctx.sid, id, decision: "answer", answers });
+    send({ type: "permission", session: sid, id, decision: "answer", answers });
   };
   const launch = questions.some((q) => q.header === "LAUNCH CODE");
   return (
@@ -152,7 +158,7 @@ function QuestionCard({ ev, ctx }: { ev: AppEvent; ctx: Ctx }) {
           <button onClick={submit} disabled={!ready} className="rounded-md bg-accent px-3 py-1 text-[0.75rem] text-white disabled:opacity-40">
             Answer
           </button>
-          <button onClick={() => send({ type: "permission", session: ctx.sid, id, decision: "skip" })} className="rounded-md border border-border bg-surface px-3 py-1 text-[0.75rem]">
+          <button onClick={() => send({ type: "permission", session: sid, id, decision: "skip" })} className="rounded-md border border-border bg-surface px-3 py-1 text-[0.75rem]">
             Skip
           </button>
         </div>
@@ -161,12 +167,11 @@ function QuestionCard({ ev, ctx }: { ev: AppEvent; ctx: Ctx }) {
   );
 }
 
-function PermissionCard({ ev, ctx }: { ev: AppEvent; ctx: Ctx }) {
+function PermissionCard({ ev, sid, running, answer }: PermissionCardProps) {
   const id = String(ev.data.id);
-  const answer = ctx.answers.get(id);
-  const live = !answer && ctx.running;
+  const live = !answer && running;
   const [show, setShow] = useState(false);
-  const decide = (decision: string) => send({ type: "permission", session: ctx.sid, id, decision });
+  const decide = (decision: string) => send({ type: "permission", session: sid, id, decision });
   return (
     <div className={clsx("rounded-xl border p-3 text-[0.8125rem]", live ? "border-accent bg-accent-bg" : "border-border")}>
       <div className="flex items-center gap-2">
@@ -196,6 +201,10 @@ function PermissionCard({ ev, ctx }: { ev: AppEvent; ctx: Ctx }) {
       )}
     </div>
   );
+}
+
+export function PermissionRequestCard(props: PermissionCardProps) {
+  return props.ev.data.kind === "question" ? <QuestionCard {...props} /> : <PermissionCard {...props} />;
 }
 
 function LimitCard({ ev, ctx, actionable }: { ev: AppEvent; ctx: Ctx; actionable: boolean }) {
@@ -334,12 +343,14 @@ export default function Transcript({
   sid,
   events,
   running,
+  openPermissions,
   openSegment,
   connections,
 }: {
   sid: string;
   events: AppEvent[];
   running: boolean;
+  openPermissions: string[];
   openSegment: boolean;
   connections: Connection[];
 }) {
@@ -377,6 +388,7 @@ export default function Transcript({
     tail.some((e) => e.type === "done" && e.data.end_reason === "done") &&
     !tail.some((e) => !e.agent && (e.type === "assistant_text" || e.type === "tool_call"));
   const ctx: Ctx = { sid, results, answers, answerTexts, children, running, openSegment, lastUserTs, connections };
+  const open = new Set(openPermissions);
 
   return (
     <div className="space-y-3">
@@ -394,7 +406,7 @@ export default function Transcript({
           case "tool_call":
             return <ToolRow key={i} ev={ev} ctx={ctx} />;
           case "permission_request":
-            return ev.data.kind === "question" ? <QuestionCard key={i} ev={ev} ctx={ctx} /> : <PermissionCard key={i} ev={ev} ctx={ctx} />;
+            return <PermissionRequestCard key={i} ev={ev} sid={ctx.sid} running={open.has(String(ev.data.id))} answer={ctx.answers.get(String(ev.data.id))} answered={ctx.answerTexts.get(String(ev.data.id))} />;
           case "session":
             return (
               <div key={i} className="text-center text-[0.7188rem] text-faint">

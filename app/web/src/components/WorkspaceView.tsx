@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { ChevronDown, ChevronRight, History, Plus, Sparkles } from "lucide-react";
@@ -6,6 +6,8 @@ import { api, q } from "../lib/api";
 import type { Commit, WorkspaceGroup } from "../lib/types";
 import Markdown from "./Markdown";
 import Panel, { CENTER, PANELS } from "./Panel";
+
+const MarkdownEditor = lazy(() => import("./MarkdownEditor"));
 
 function DiffView({ text }: { text: string }) {
   if (!text.trim()) return <div className="text-[0.75rem] text-faint">No change.</div>;
@@ -201,7 +203,13 @@ export default function WorkspaceView({ initialPath }: { initialPath?: string })
             {notice && <div className="border-b border-border bg-panel px-4 py-1.5 text-[0.75rem] text-muted">{notice}</div>}
             <div className="min-h-0 flex-1">
               {tab === "edit" && (
-                <textarea value={content} onChange={(e) => setContent(e.target.value)} spellCheck={path.endsWith(".md")} className="h-full w-full resize-none bg-bg p-4 font-mono text-[0.7812rem] leading-5 outline-none" />
+                path.endsWith(".md") ? (
+                  <Suspense fallback={<div className="p-4 text-muted">Loading editor…</div>}>
+                    <MarkdownEditor key={path} value={content} onChange={setContent} onSave={() => { if (content !== original) prepare.mutate(); }} />
+                  </Suspense>
+                ) : (
+                  <textarea value={content} onChange={(e) => setContent(e.target.value)} className="h-full w-full resize-none bg-bg p-4 font-mono text-[0.7812rem] leading-5 outline-none" />
+                )
               )}
               {tab === "preview" && (
                 <div className="scroll-thin h-full overflow-y-auto">

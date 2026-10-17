@@ -35,6 +35,9 @@ export default function App() {
       subscribe((msg) => {
         if (msg.type === "event") {
           addEvent(msg.session, msg.event);
+          if (msg.event.type === "permission_request" || msg.event.type === "permission_answer") {
+            void client.invalidateQueries({ queryKey: ["session", msg.session] });
+          }
           if (msg.event.type === "done" || msg.event.type === "handoff") {
             void client.invalidateQueries({ queryKey: ["session", msg.session] });
             void client.invalidateQueries({ queryKey: ["sessions"] });
@@ -42,8 +45,14 @@ export default function App() {
           }
         } else if (msg.type === "state" && msg.session) {
           setRunning(msg.session, msg.running);
+          void client.invalidateQueries({ queryKey: ["health"] });
           void client.invalidateQueries({ queryKey: ["sessions"] });
           if (!msg.running) void client.invalidateQueries({ queryKey: ["runs"] });
+        } else if (msg.type === "state") {
+          // The socket has reopened. Refresh mounted sessions so requests missed while
+          // disconnected appear with their current running state and decision controls.
+          void client.invalidateQueries({ queryKey: ["session"] });
+          void client.invalidateQueries({ queryKey: ["activity"] });
         } else if (msg.type === "error") {
           setError(msg.session, msg.text);
         }

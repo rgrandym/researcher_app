@@ -38,6 +38,7 @@ from backend.providers.base import (
     UsageWindows,
     as_dict,
     end_reason,
+    kill_process_tree,
     short,
     tool_summary,
 )
@@ -81,7 +82,9 @@ class ClaudeParser:
         self.limit_rejected = False
         self.agents: dict[str, dict[str, Any]] = {}  # Agent tool_use id -> subagent info
         self.files: set[str] = set()
-        self._seen_usage: set[str] = set()
+        self._seen_usage: dict[str, tuple[int, int]] = {}
+        self._tokens_in = 0
+        self._tokens_out = 0
         self.context_tokens = 0
 
     def _event(self, type_: Any, data: dict[str, Any], agent: str | None = None) -> Event:
@@ -136,25 +139,33 @@ class ClaudeParser:
         events: list[Event] = []
         mid = str(message.get("id") or "")
         u = message.get("usage") or {}
-        if u and mid not in self._seen_usage:  # one message arrives once per content block
-            self._seen_usage.add(mid)
+        if u:
             tokens_in = sum(
                 int(u.get(k) or 0)
                 for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
             )
+            tokens_out = int(u.get("output_tokens") or 0)
+            previous_in, previous_out = self._seen_usage.get(mid, (0, 0))
+            delta_in = max(0, tokens_in - previous_in)
+            delta_out = max(0, tokens_out - previous_out)
+            self._seen_usage[mid] = (max(tokens_in, previous_in), max(tokens_out, previous_out))
+            self._tokens_in += delta_in
+            self._tokens_out += delta_out
             if agent is None:
                 self.context_tokens = tokens_in
-            events.append(
+            if delta_in or delta_out:
+                events.append(
                 self._event(
                     "usage",
                     {
-                        "tokens_in": tokens_in,
-                        "tokens_out": int(u.get("output_tokens") or 0),
+                        "tokens_in": delta_in,
+                        "tokens_out": delta_out,
                         "context_tokens": tokens_in if agent is None else None,
+                        "model": message.get("model"),
                     },
                     agent,
                 )
-            )
+                )
         for block in message.get("content") or []:
             if not isinstance(block, dict):
                 continue
@@ -218,12 +229,19 @@ class ClaudeParser:
         for info in (msg.get("modelUsage") or {}).values():
             if isinstance(info, dict) and info.get("contextWindow"):
                 window = int(info["contextWindow"])
+        final_usage = msg.get("usage") or {}
+        final_in = sum(int(final_usage.get(k) or 0) for k in
+                       ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+        final_out = int(final_usage.get("output_tokens") or 0)
+        delta_in = max(0, final_in - self._tokens_in)
+        delta_out = max(0, final_out - self._tokens_out)
         percent = (
             round(100 * self.context_tokens / window, 1) if window and self.context_tokens else None
         )
         return self._event(
             "usage",
             {
+                **({"tokens_in": delta_in, "tokens_out": delta_out} if final_usage else {}),
                 "cost_usd": msg.get("total_cost_usd"),
                 "context_tokens": self.context_tokens or None,
                 "context_window": window,
@@ -508,6 +526,7 @@ class ClaudeProvider:
             cwd=config.ROOT,
             env=self.env(),
             limit=STREAM_LIMIT,
+            start_new_session=True,
         )
         assert proc.stdin and proc.stdout and proc.stderr
         parser = ClaudeParser(self.id)
@@ -531,7 +550,7 @@ class ClaudeProvider:
                 try:
                     await asyncio.wait_for(proc.wait(), 5)
                 except TimeoutError:
-                    proc.kill()
+                    kill_process_tree(proc)
         stderr = (await stderr_task).decode(errors="replace")
         return parser.outcome(proc.returncode, stderr, session.stopped)
 
@@ -722,18 +741,9 @@ class _ControlSession:
         while self.proc.returncode is None:
             if cancelled():
                 self.stopped = True
-                await self.send(
-                    {
-                        "type": "control_request",
-                        "request_id": "stop",
-                        "request": {"subtype": "interrupt"},
-                    }
-                )
-                await asyncio.sleep(2)
-                if self.proc.returncode is None:
-                    self.proc.kill()
+                kill_process_tree(self.proc)
                 return
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.1)
 
 
 def _run(cmd: list[str], env: dict[str, str] | None = None) -> str:

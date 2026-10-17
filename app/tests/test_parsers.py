@@ -31,9 +31,12 @@ def test_recorded_claude_turn(data: Any) -> None:
     assert any(e.type == "assistant_text" and e.data["text"] == "done" for e in events)
     result = p.outcome(0, "", False)
     assert result.end_reason == "done" and result.native_session == p.session_id and result.cost_usd
-    # One message arrives once per content block; its usage counts once.
+    # Repeated content blocks count once; the final result fills in tokens that
+    # were still in flight when the assistant blocks were streamed.
     usage_events = [e for e in events if e.type == "usage" and e.data.get("tokens_in") is not None]
-    assert len(usage_events) == 2
+    assert len(usage_events) == 3
+    assert sum(e.data["tokens_in"] for e in usage_events) == 18 + 35402 + 33888
+    assert sum(e.data["tokens_out"] for e in usage_events) == 230
 
 
 def test_claude_subagent_and_context(data: Any) -> None:
