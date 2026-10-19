@@ -99,6 +99,9 @@ class Running:
     permissions: dict[str, asyncio.Future[PermissionDecision]] = field(default_factory=dict)
     started: float = field(default_factory=time.time)
     gate_repaired: bool = False
+    # Set the moment the turn announces it has stopped, which is a little before its task
+    # returns: a client refreshing on that announcement must already be told it is over.
+    ended: bool = False
 
 
 class Hub:
@@ -132,7 +135,7 @@ class TurnManager:
 
     def is_running(self, session_id: str) -> bool:
         r = self.running.get(session_id)
-        return bool(r and r.task and not r.task.done())
+        return bool(r and r.task and not r.task.done() and not r.ended)
 
     def any_running(self) -> bool:
         return any(self.is_running(s) for s in self.running)
@@ -483,18 +486,27 @@ class TurnManager:
         )
         self.last_turn_end[session_id] = time.time()
         self._release_locks(session_id)
-        repair = None
-        if result.end_reason == "done" and seg is not None:
-            repair = await self._codex_gate(session, seg, started, running)
-            await self._handover_offer(session_id, seg)
-        if repair:
-            running.gate_repaired = True
-            running.task = asyncio.create_task(self._run(session_id, repair, running))
-            return
-        following = await self._next_stage(session_id, result, running)
-        if following:
-            running.task = asyncio.create_task(self._run(session_id, following, running, following))
-            return
+        # Whatever the follow-up steps do, the turn must end with "not running": a failure
+        # here without that message would leave the app showing the task in progress for ever.
+        try:
+            repair = None
+            if result.end_reason == "done" and seg is not None:
+                repair = await self._codex_gate(session, seg, started, running)
+                await self._handover_offer(session_id, seg)
+            if repair:
+                running.gate_repaired = True
+                running.task = asyncio.create_task(self._run(session_id, repair, running))
+                return
+            following = await self._next_stage(session_id, result, running)
+            if following:
+                running.task = asyncio.create_task(self._run(session_id, following, running, following))
+                return
+        except Exception as exc:  # noqa: BLE001
+            await self._emit(
+                session_id,
+                Event(type="error", data={"kind": "other", "text": f"After the turn ended: {type(exc).__name__}: {exc}"}),
+            )
+        running.ended = True
         await self.hub.publish(session_id, {"type": "state", "running": False})
 
     # ------------------------------------------------------------------ staged pipeline

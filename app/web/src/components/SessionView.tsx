@@ -29,6 +29,13 @@ export default function SessionView({ id, embedded = false, onNew }: { id: strin
     refetchInterval: isRunning ? 1_000 : false,
     enabled: activityOpen,
   });
+  // Polling stops when the turn ends, so the last poll is from while it ran: fetch once more
+  // when it finishes, or the panel keeps showing the main thread mid-task.
+  const wasRunning = useRef(isRunning);
+  useEffect(() => {
+    if (wasRunning.current && !isRunning) void client.invalidateQueries({ queryKey: ["activity", id] });
+    wasRunning.current = isRunning;
+  }, [isRunning, id, client]);
   const keep = useMutation({
     mutationFn: () => api.post(`/api/sessions/${id}/keep`),
     onSuccess: () => void client.invalidateQueries({ queryKey: ["session", id] }),

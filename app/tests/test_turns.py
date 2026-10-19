@@ -211,3 +211,52 @@ def test_stale_session_starts_fresh(root: Path) -> None:
         assert not sessions.load(s.id).stale
 
     asyncio.run(go())
+
+
+def _stops(m: TurnManager, sid: str) -> list[bool]:
+    """What is_running answered at each "not running" announcement, recorded as it is sent."""
+    seen: list[bool] = []
+    publish = m.hub.publish
+
+    async def spy(session_id: str, message: dict[str, Any]) -> None:
+        if message.get("type") == "state" and message.get("running") is False:
+            seen.append(m.is_running(sid))
+        await publish(session_id, message)
+
+    m.hub.publish = spy  # type: ignore[method-assign]
+    return seen
+
+
+def test_turn_reads_finished_when_it_announces_it(root: Path) -> None:
+    # The app refreshes its progress panel on this announcement and then stops polling, so
+    # an answer of "still running" here left the panel showing the task unfinished for ever.
+    m, _, _ = _manager(["claude_subagent.jsonl"], [])
+
+    async def go() -> None:
+        s = sessions.create()
+        seen = _stops(m, s.id)
+        await m.send(s.id, "/repair outputs/x/critique.md", "claude-sub")
+        await _settle(m, s.id)
+        assert seen == [False]
+
+    asyncio.run(go())
+
+
+def test_failed_follow_up_still_ends_the_turn(root: Path) -> None:
+    m, _, _ = _manager(["claude_subagent.jsonl"], [])
+
+    async def broken(*_: Any) -> None:
+        raise RuntimeError("stage lookup failed")
+
+    m._next_stage = broken  # type: ignore[method-assign]
+
+    async def go() -> None:
+        s = sessions.create()
+        seen = _stops(m, s.id)
+        await m.send(s.id, "/repair outputs/x/critique.md", "claude-sub")
+        await _settle(m, s.id)
+        assert seen == [False]
+        errors = [e for e in sessions.transcript(s.id) if e.type == "error"]
+        assert errors and "stage lookup failed" in errors[-1].data["text"]
+
+    asyncio.run(go())
