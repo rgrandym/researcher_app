@@ -13,6 +13,13 @@ reader cannot tell where the seam was.
 
 The invariant is **their concepts, not their sentences.**
 
+Treat their saved wording as the default text. Rephrase only where grammar or
+the join to neighbouring prose requires it. Preserve the direction and strength
+of each opinion, doubt, preference, and conclusion, including qualifiers such
+as *may*, *likely*, and *I believe*. Do not substitute a smoother argument for
+the one the author chose. Fill a gap with the report's existing evidence or
+leave the gap visible; never invent a premise to make the transition work.
+
 ```
 PRESERVE   every idea, angle, framing and emphasis they introduced
 REPAIR     the grammar, flow, transitions, repetition, and reference numbers
@@ -23,6 +30,14 @@ NEVER      drop a concept, dilute it, or quietly argue against it
 tissue, repetition, reference integrity, and the line the argument runs along.
 No searching, no new sources, no fact-checking of what they wrote, unless the
 user asks for it in this round. See §0.
+
+**A saved edit is an editorial decision.** Its additions, deletions, ordering,
+emphasis, and directions outrank the agent's prior framing. A clear change of
+direction authorises the corresponding changes throughout the report. Declare
+the affected sections before writing and carry the change through them; do not
+ask the author to approve the same decision again. Ask only when the edit has
+two materially different readings or would require a new factual claim that
+the available evidence cannot support.
 
 ## 0. Decide which job you are doing
 
@@ -58,46 +73,64 @@ and this is where it comes from:
 run=outputs/<slug>
 doc=$(python3 .claude/scripts/runmeta.py $run --masters | head -1)
 mirror=$run/.voice-mirror-$(basename $doc .md).md
+python3 app/backend/edit_state.py inspect $doc
 ```
 
 The rule that decides the round: **their
 concepts, not their sentences.**
 
-**Run the save check next, before anything else.** It answers the one question
+**Run the save check before reading or changing the report.** It answers the one question
 you cannot answer by reading: is the edit the user is describing actually on
 disk, or still in their editor?
 
 ```bash
-python3 .claude/scripts/saved_check.py $run $(basename $doc)   # exit 1 = nothing saved, STOP
+python3 .claude/scripts/saved_check.py $run $(basename $doc)   # exit 1 = no new save
 ```
 
 An agent reads files; an editor holds unsaved buffers; nothing bridges the two.
-When this exits 1, **stop the round and say so in one line.** Do not proceed to
+When this exits 1, ask the author to save the edit or paste it, and keep the
+round pending for their reply. Do not proceed to
 the diff, do not infer the edit from the chat, and do not report a clean result:
 a round run against the agent's own text will find no changes and will say so
 confidently, which reads as "your edit was fine" rather than "your edit is not
-here". Offer `--wait 120` if the user is at the keyboard, and `--rescue` if a
-previous save has been overwritten and needs recovering from editor history.
+here". Use the in-turn question tool when available, then rerun the check when
+the author says they saved. Offer `--wait 120` if the user is at the keyboard,
+and `--rescue` if a previous save has been overwritten and needs recovering
+from editor history. Do not treat a reply alone as proof that the edit landed.
 
-The same exit-1 state is also the warning that the user's *next* save will
-overwrite whatever the agent wrote in the meantime, because their buffer
-predates it. Say that too; it is the more expensive half.
+The same exit-1 state warns that an old editor buffer can overwrite later
+agent work. The app's version check rejects a stale save; an external editor
+may overwrite it. Say which case applies.
+
+If `inspect` showed no active app record, freeze the saved master and agent
+mirror now, before any report write. This also covers a save made in an
+external editor. If the two have identical text, `capture` exits 2: there is
+no attributable text change to integrate, so investigate the file the author
+actually edited rather than claiming a clean round.
+
+```bash
+python3 app/backend/edit_state.py capture $doc  # only when inspect said active=false
+```
 
 Then the normal checks:
 
 ```bash
 python3 .claude/scripts/section_guard.py check $doc   # which sections moved
 python3 .claude/scripts/audit_citations.py $run $(basename $doc)       # what broke
-python3 .claude/scripts/voice.py learn $doc           # capture how they write
+python3 .claude/scripts/voice.py learn $doc           # capture finished author prose
 ```
 
-Run `learn` **before you touch the file**, or the capture is contaminated with
-your own prose. It diffs the report against the mirror of what an agent last
-wrote and files the author's passages into `.claude/voice/corpus/`. If it
-reports no mirror, say so: the voice sample for this round is lost, and the fix
-is to run `voice.py mark` at the end of every write from now on.
+Run `learn` **before you touch the file**. For an app save it reads the recorded
+author copy and original baseline, even if an agent subsequently updated the
+mirror or the master. Otherwise it uses the mirror. It files newly written
+passages into `.claude/voice/corpus/` and skips passages already captured. If
+there is no baseline, say so; the voice sample cannot be attributed reliably.
 
-`check` names the changed sections. Read **only those** — a user edit is local.
+`check` names the changed sections. Read those in full. If an edit changes the
+report's framing, also read the title, brief, conclusion, headings, and the
+openings and conclusions of sections that may depend on the old framing. Use a
+targeted search for the affected claim and references to it. The user's edit
+sets the scope; the number of directly edited sections does not cap it.
 
 Run `external_index.py scan $run` only when the user dropped a file in or asked
 for research. In an editorial round there is nothing to mine.
@@ -114,13 +147,35 @@ one `/export` from deletion.
 Declare your `--allow` set now, in writing. It starts as the sections they
 touched. It grows only by the rule in §7, and only out loud.
 
-## 2. Read what they actually did
-
-Get the real diff before interpreting anything:
+Read the final section list before declaring scope:
 
 ```bash
-diff -u $mirror $doc | head -200
+python3 .claude/scripts/section_guard.py locks $doc
 ```
+
+A final section is the author's approved text. It stays byte-identical even if
+the new story line would read more smoothly with a change there. `--allow` never
+overrides a final lock. Explain the tension in chat and propose the exact change;
+the author can use **Reopen section** in the app before a later round. Continue
+integrating the new edit in sections that remain open. Never unlock a section
+on the author's behalf, and never update its lock hash to make a changed section
+pass. A direct author edit to a final section also requires reopening it before
+the round can close. The guard checks this mechanically, including at snapshot.
+
+## 2. Read what they actually did
+
+Get the real diff before interpreting anything. Compare the immutable author
+copy with its original baseline. These
+files remain available throughout the round, even after the agent edits
+`report.md`:
+
+```bash
+diff -u $run/.user-edit-$(basename $doc .md)-base.md \
+        $run/.user-edit-$(basename $doc .md)-saved.md | head -200
+```
+
+Read beyond 200 lines when the diff continues. Never infer a clean result from
+the mirror alone if an active app save exists.
 
 Four kinds of change, and each is handled differently:
 
@@ -139,11 +194,13 @@ Then read the edit as intent:
 | A question in the text | Answer it if you can from the report's own evidence; otherwise put the question to the user and leave the text unchanged |
 | A bare concept or fragment dropped mid-section | They want it stated properly in the prose. Write it out from what the section already supports; flag it if it needs a source you do not have |
 | Rough prose asserting something new | Their point, their claim. Tidy the sentence, keep the assertion, mark it for validation only if they asked |
+| A personal opinion or feeling ("I feel", "I believe", "in my opinion", or equivalent wording) | Preserve it as the author's view. Improve clarity and placement without recasting it as an objective fact or flagging it merely for lacking evidence |
 | A reframing of an opening, a heading, or a claim's emphasis | Directive, and often document-wide — see §7 |
 | A precise, finished sentence replacing yours | Literal. Keep the wording |
 | A typo or grammar fix | Literal. Nothing to do |
 
-**A deletion is a finished decision, and it is not reported back.** An author
+**A deletion is a finished decision, and routine deletions are not itemised in
+the report-back.** An author
 who removes a sentence usually did so because they did not like how it sounds,
 or because the text works without it. Do not list what they cut, do not offer to restore it,
 and do not carry it into the report-back as a loss. Repair what depended on the
@@ -159,17 +216,31 @@ never the reason, and "it was well sourced" is not a reason.
 in the editorial direction costs a comma; guessing wrong in the research
 direction costs a round the user did not want.
 
+**Classify by meaning, not by trigger words.** An opinion may be expressed
+without "I think", and "I believe" may introduce a testable claim. Do not
+require a citation for a feeling, preference, interpretation, or value judgement
+clearly attributed to the author. Do not mark its lack of evidence as an issue,
+or argue that the author does not feel it. Offer editorial advice about whether
+the view fits the document's purpose, voice, and reader. Where a sentence mixes
+an opinion with a factual premise, preserve the opinion and consider the premise
+separately: keep the author's text, and flag only a specific conflict with the
+run's evidence in chat. Do not silently promote the view into a general fact.
+
 **The same edit is read twice, for two different things.** As *content* it is
 handled by the tables above. As *voice* it is a sample of how the author writes,
 and only the finished-prose rows are that: a rough note or a question is
 content, and it is noise in the corpus. After `learn` has captured the round,
-open the corpus file and delete the captures that were directives rather than
-prose. See `.claude/references/voice.md`, and `/narrator` §4.
+open the new corpus capture and remove directives, questions to the agent, and
+rough fragments before rebuilding the profile. Preserve finished prose, even
+when it needs editorial repair in the report. A stated rule about the author's
+writing is recorded in `.claude/voice/profile.md` as a rule; do not promote an
+inferred habit to a rule. See `.claude/references/voice.md`, and `/narrator` §4.
 
 ## 3. List what you are keeping, before you edit
 
 Write the list out explicitly, in chat, or in `rounds/rN/ask.md` for a large
-absorb. One line per thing the user introduced or removed:
+absorb. One line per substantive decision the user introduced, including
+deletions that affect the argument. A routine sentence cut needs no entry:
 
 ```
 C1  opening reframed as an introduction that sets up the question, not answer-first
@@ -187,6 +258,10 @@ weight the user gave it.
 If a concept sits against the report's own evidence, **it still does not
 disappear.** Leave what they wrote, flag the conflict in chat with the opposing
 `[E#]`, and let the user rule.
+
+Separate *what the author decided* from *how they happened to phrase it*. A
+deliberate finished sentence may remain verbatim; a rough sentence may be
+rewritten. Either way, the decision and its weight in the argument survive.
 
 ## 4. Edit: the default round
 
@@ -272,6 +347,11 @@ sentences are treated as claims: extracted, traced to sources, and graded as
 `/verify` would. Report the verdicts and let the user decide what changes. Do
 not rewrite their assertion on the strength of your own check without saying so.
 
+Opinions and feelings are not factual claims to grade. If the author asks to
+validate a passage containing one, check any testable premise or attribution,
+then discuss the opinion's editorial effect on its own terms. A missing source
+for the opinion itself is not a finding.
+
 An unasked-for validation pass is not a favour. It spends a round on work the
 user did not request, and it tends to end with the agent arguing against the
 document's owner.
@@ -288,10 +368,13 @@ The reconciliation: containment was never "nothing else may change". It is
 1. Name the blast radius before editing: which sections the new direction
    touches, and what happens to each. `grep` the report for the claim and its
    `[E#]`s.
-2. **Show the user that list and get agreement** when the answer, the title, or
-   a top-line conclusion moves. This is cheap now and expensive later.
+2. Tell the user the scope you will update. Their saved edit is the authority
+   for the change. Ask only if its meaning is ambiguous or evidence needed for
+   a new factual assertion is absent.
 3. Add those sections to `--allow`, so the guard reports them as in-scope rather
    than as drift.
+   Exclude final sections. Record any needed change to one as a proposed edit
+   for the author's decision, with the existing text preserved.
 4. Then work in the order of `expand`'s pivot procedure (§5b there): thesis
    first, then section order, then headings, then the confidence statement last.
 
@@ -318,6 +401,14 @@ positional, and renumbered only by `figures.py build`.
 
 ## 9. Close out
 
+Before the mechanical checks, send the original baseline, saved author copy,
+current report, decision list, and declared scope to an independent
+`user-edits-reviewer` subagent using `.claude/agents/user-edits-reviewer.md` as
+its instructions. The thread that integrated the edit does not review its own
+work. Repair every finding that identifies a lost decision, stale framing, or
+visible seam, then have the reviewer check the repair. This is editorial review
+of the affected passages, not a new research round.
+
 ```bash
 python3 .claude/scripts/section_guard.py check $doc --allow "<sec>"…
 python3 .claude/scripts/audit_citations.py $run $(basename $doc)
@@ -325,8 +416,14 @@ python3 .claude/scripts/figures.py check $doc
 python3 .claude/scripts/voice.py lint $doc               # must exit 0
 python3 .claude/scripts/section_guard.py snapshot $doc   # only when clean
 python3 .claude/scripts/voice.py mark $doc               # only when clean
-python3 .claude/scripts/voice.py profile --rebuild                 # fold in what you learned
+python3 app/backend/edit_state.py acknowledge $doc        # active app save only, after checks
+python3 .claude/scripts/voice.py profile --rebuild        # fold in reviewed prose
 ```
+
+The app save remains active through the final guard check. `acknowledge` closes
+it only after the integrated report passes the checks; the original and saved
+author copies remain on disk for audit. If the round stops early, leave the
+record active so the next attempt can recover the author's decisions.
 
 The prose you wrote around the author's edit obeys `<run>/voice.md` and
 `.claude/voice/profile.md` like any other prose. This is the stage where the

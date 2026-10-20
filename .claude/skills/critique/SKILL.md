@@ -6,9 +6,25 @@ disable-model-invocation: true
 
 # Critique
 
-`/verify` asks "is this true?". You ask **"does this hold up?"** — true facts assembled into a wrong conclusion is the failure this stage catches.
+`/verify` asks "is this true?". The independent critic asks **"does this hold up?"** — true facts assembled into a wrong conclusion is the failure this stage catches.
 
-Write findings to `outputs/<slug>/critique.md`. Do not edit the draft.
+**Spawn `report-critic` from `.claude/agents/report-critic.md` for every invocation,
+including a standalone `/critique`.** Give it the run path, the current master
+(`report.md` when present, otherwise `draft.md`), the author's requested section
+or scope, and this skill. If the request refers to a hand edit, run
+`saved_check.py` first and wait for the save when it reports one missing. The critic
+reads the document from disk and writes `outputs/<slug>/critique.md` itself.
+The thread that wrote the draft or repair must never conduct the critique, edit
+its findings, or write `critique.md` on the critic's behalf. Wait for the critic
+to finish, then check that the file exists and report its verdict. If spawning
+fails, stop with the critique stage incomplete and tell the author why. Do not
+produce a same-thread substitute.
+Also check that the critic wrote `critique-questions.json` after the critique,
+with an empty `questions` list when no author decision is needed. The app uses
+this file to prepare the questions before repair.
+
+The critic does not edit the article. Findings can be applied later with
+`/repair`, after the author has read them.
 
 ## Attack surfaces
 

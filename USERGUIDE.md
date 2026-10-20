@@ -25,11 +25,14 @@ Claude picks up `/research-pipeline` and runs the whole thing. When you want to 
 /export      pdf, Meridian style
 /expand      go deeper on the permitting timeline
 /user-edits  I rewrote the intro and added a note in §3 — finish it
+/brain_storm  Would a more personal opening help this argument?
 ```
 
 Every stage works standalone. You can hand `/verify` someone else's document and get a fact-check with no research run behind it.
 
 `/polish` rewrites a passage in your voice without changing what it claims. To teach the agents how you write, and what you don't want to read, see **[Teaching it your style over time](#teaching-it-your-style-over-time)**.
+
+`/brain_storm` discusses subjects, angles, structure, and prose with you in chat. It weighs reader impact against precision and evidence, makes concrete suggestions, and leaves editorial decisions with you. It does not change the document.
 
 Three you'll use after the first report is written: **[`/export`](#applying-a-style)** puts it in a professional style and a real file format, **[`/expand`](#continuing-research-on-a-finished-report)** researches further without breaking the document you already have, and **[`/user-edits`](#editing-the-report-yourself)** picks up changes you made by hand.
 
@@ -56,6 +59,11 @@ Three you'll use after the first report is written: **[`/export`](#applying-a-st
 
 **`/critique`** — A different question: not "is this true?" but "does this hold up?". A `report-critic` subagent attacks the reasoning — inference gaps, hidden assumptions, missing evidence classes, rival explanations, confidence exceeding sourcing. True facts assembled into a wrong conclusion is what this stage catches.
 
+Standalone `/critique` must launch the independent critic and produce a fresh `critique.md`. If it cannot, the app leaves the review stage incomplete. Open `critique.md` in the app to read the findings, then select **Apply feedback to article**. A popup asks which findings to address and shows any specific questions the critic identified about your intended meaning or experience. You can choose an option, write your own answer, and add directions. The app records those answers before starting `/repair`. Each finding is then recorded as fixed, open, or declined with a reason. Approved final sections stay protected; reopen one yourself if you decide to accept a proposed change there.
+If the repair agent discovers another question later, the app presents it in a popup while the repair is paused. The question also remains in the conversation if you close the popup.
+
+**`/plagiarism`** — A similarity check in the manner of Turnitin. It compares the report's wording with the full text of every source the run read, your supplied files, and pages an exact-phrase web search finds, then gives an originality percentage, a plagiarism risk score with a band, a per-section table, and each problem passage with a short fix. It catches copied runs of eight words or more and close paraphrase, and it separates quoted, cited and uncited matches. It writes `plagiarism.md` and leaves the report alone; fix by hand or with `/repair <run> plagiarism.md`. Paywalled journals and student-paper archives are outside its reach, as they are for every free checker.
+
 **`/repair`** — Applies findings surgically, one edit per finding. Every finding ends as `fixed`, `won't fix (reason)`, or `open (needs input)`. Nothing disappears quietly.
 
 **`/export`** — Builds `.docx` / `.pptx` / `.html` / PDF in one of five styles, rendering the report's charts on the way, but only from content that cleared the gates.
@@ -63,6 +71,10 @@ Three you'll use after the first report is written: **[`/export`](#applying-a-st
 **`/expand`** — Continues researching over a report you have already read. Opens a round inside the same folder, researches your follow-up, then **reconciles** — every new finding is classified against the existing text (`CONFIRMS`, `DEEPENS`, `QUALIFIES`, `CONTRADICTS`, `SUPERSEDES`, `NEW`) and edited into place. You should not be able to tell which round wrote which paragraph.
 
 **`/user-edits`** — For when you have opened the document and written in it yourself, whether that is `report.md` or a piece from the writing lane. Your additions, deletions and rewrites stand, and the agent repairs the document around them: grammar, flow between paragraphs, repeated words, reference numbers, and the story line the section now argues. It is an editing pass, so it researches or fact-checks only if you ask. It will not touch a section you did not edit unless it tells you first.
+
+Your stated feelings and opinions are treated as your views. `/user-edits` may suggest a clearer way to express or place them, but does not flag them for lacking a citation. If a view includes a separate factual assertion, the agent handles that assertion under the usual evidence rules.
+
+In the app's Edit tab, choose a report section and **Mark final** once you have approved it. Later agent rounds must leave that section byte-identical. If a new edit calls for a change there, the agent explains the proposed change; use **Reopen section** when you decide to revise it. The app also blocks saves that alter a final section until it is reopened. The HTML tab has controls to zoom the rendered report, and Markdown editors underline spelling and Markdown errors with suggestions or fixes.
 
 **`/narrator`** — Decides who the report is written for, and holds your writing style. Two narration modes: **scientific** for specialists in the field, and **explanatory** for readers who are technically literate but not scientists. Both carry the same claims, the same citations, the same caveats and the same confidence; they differ in how much of each mechanism gets built for the reader. It also runs the style-learning loop described below. Ask for it directly ("write this for non-scientists", "this reads like AI, fix the voice"), or let `/report` invoke it before drafting.
 
@@ -218,6 +230,7 @@ outputs/2026-08-12-eu-battery-rules/
   figures/<style>/  rendered charts
   rounds/r1/        each /expand round: what you asked, what changed
   export/<style>/   .docx, .pdf, .pptx
+  notebooks/        Jupyter notebooks reproducing figures and tables, made by /notebook
 ```
 
 **Read `report.md` for the answer. Read `verification.md` when you need to trust it. Read `coverage.md` when you want to know what it didn't look at.**
@@ -373,8 +386,8 @@ In the app, the command a message starts with picks the model, on Claude and on 
 
 | Tier | Claude | Codex | Commands |
 |---|---|---|---|
-| Frontier | Opus | `gpt-6-astra` | `/research`, `/research-pipeline`, `/expand`, `/critique`, `/report`, `/repair`, `/user-edits`, `/figures`, `/narrator`, `/polish` |
-| Workhorse | Sonnet | `gpt-6.1-sol` | `/verify`, `/export`, `/visualize`, `/voice-rule`, and plain chat |
+| Frontier | Opus | `gpt-6-astra` | `/research`, `/research-pipeline`, `/expand`, `/critique`, `/report`, `/repair`, `/user-edits`, `/figures`, `/narrator`, `/polish`, `/brain_storm` |
+| Workhorse | Sonnet | `gpt-6.1-sol` | `/verify`, `/plagiarism`, `/export`, `/visualize`, `/voice-rule`, and plain chat |
 | Fast | Haiku (the latest, through the `haiku` alias) | `gpt-6-luna` | `/app`: questions about the app, answered from this guide |
 
 Inside a run, scouts and the fact-checker run on Sonnet; the critic and the writer run on Opus. Change the maps, or switch routing off, under Models. `python3 .claude/scripts/cost_report.py --last 1` shows where the last session's tokens went.
@@ -1047,6 +1060,19 @@ python3 .claude/scripts/check_export.py <source.md> <out.pdf> <out.docx> <out.ht
 
 It compares the set of evidence IDs, the exhibit count and the placeholder count in each artifact against the source. A renderer that clips a table doesn't warn and produces a document that reads as complete — this is the only thing that catches it. If a format proves lossy, the workspace changes the renderer, never the report.
 
+### Analysis notebooks
+
+`/notebook` writes a Jupyter notebook for the figures and tables you name, in `<run>/notebooks/`. Each is written the way a data analyst documents their own work: the sources, how each dataset was obtained (downloaded, copied from a held file with its checksum, or transcribed with the page named), every cleaning step, the method with its formulas, all the code, and the rebuilt chart or table. A final section checks every reproduced number against the published one and fails if any differ beyond rounding, so a figure that no longer follows from its data cannot pass unnoticed.
+
+Notebooks are made only when you type the command, never by `/export` or any drafting stage, so you choose when the analysis is settled enough to document:
+
+```text
+/notebook figure 1 and table 1 together
+/notebook all
+```
+
+To run one: `pip install -r requirements.txt` in that folder, open the notebook, and choose *Restart and Run All*. If you edit the report after a notebook exists, `/notebook` on the same item finds it stale and updates its published values; the check then shows which numbers moved. Installing `nbclient` and `ipykernel` lets the workspace save results into each notebook so a reader sees them without running anything.
+
 ---
 
 ## Continuing research on a finished report
@@ -1295,7 +1321,7 @@ which exits non-zero — for anything else that changed.
 
 **A chart looks wrong.** The numbers are in the report source as JSON, so you can read them directly. `figures.py check` validates structure; if the *data* is wrong that's a `/verify` question, not a rendering one.
 
-**You edited the report and want it finished.** `/user-edits`. It reads what you wrote as **direction**, not as final prose: it extracts the concepts you introduced, researches and sources them, then rewrites the passage so each one is properly argued where you put it. You get a concept-by-concept report of where each landed. Run it *before* `/expand` — extending over unabsorbed edits is how your work gets overwritten.
+**You edited the report and want it finished.** `/user-edits`. It keeps your concepts, emphasis, and deliberate wording, then repairs the surrounding flow. It researches or verifies only when you ask. You get a concept-by-concept account of where each change landed. Run it *before* `/expand` so the next research round sees your edits.
 
 **You want the report to argue something different.** Say so, in the document or in chat. A change of direction is a supported operation: the agent names every section the new framing touches, shows you that list, then rewrites thesis, section order and headings together. What it will not do is bend the evidence — if the new direction isn't supported you get told, and you get what is.
 

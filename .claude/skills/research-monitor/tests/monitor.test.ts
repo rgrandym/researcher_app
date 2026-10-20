@@ -67,7 +67,7 @@ describe('save check before /user-edits', () => {
     const out = await $.skill.prompt({ skill: 'user-edits', text: RUN_TEXT })
 
     expect(out.text).toMatch(/^research-monitor ran saved_check\.py on outputs\/2026-01-01-example-run/)
-    expect(out.text).toMatch(/Stop\. Tell the author to save/)
+    expect(out.text).toMatch(/Ask the author to save or paste the edit, keep this task pending/)
     expect(out.text).toMatch(/Absorb the edits/)
   })
 

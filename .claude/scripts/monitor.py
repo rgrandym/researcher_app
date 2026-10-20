@@ -256,8 +256,8 @@ def codex_hook(event: dict) -> None:
             code, said = saved_check(run)
             if code == 1:
                 notes.append(f"research-monitor ran saved_check.py on outputs/{run}: exit 1, no save has landed "
-                             "since the agent last wrote. Stop. Tell the author to save the document in their "
-                             f"editor, and do not read it until they confirm.\n{said}")
+                             "since the agent last wrote. Ask the author to save or paste the edit, keep this "
+                             f"task pending, and rerun the check after they answer.\n{said}")
             elif code != 0:
                 notes.append(f"research-monitor ran saved_check.py on outputs/{run}: exit {code}, so whether the "
                              "author saved cannot be told. Say so to the author before reading their edits.")

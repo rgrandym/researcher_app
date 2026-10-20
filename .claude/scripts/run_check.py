@@ -104,8 +104,13 @@ def check(run: Path, ship: bool) -> int:
     stage("verify", bool(ver), ", ".join(ver) if ver else "sources never re-checked")
 
     crit = [p.name for p in run.glob("critique*.md")]
-    stage("critique", bool(crit), ", ".join(crit) if crit
-          else "reasoning never attacked")
+    marker = run / ".critique-isolation-failed"
+    isolation_failed = marker.exists() and not any(
+        p.stat().st_mtime > marker.stat().st_mtime for p in run.glob("critique*.md")
+    )
+    stage("critique", bool(crit) and not isolation_failed,
+          "independent critic did not complete; rerun /critique" if isolation_failed
+          else ", ".join(crit) if crit else "reasoning never attacked")
 
     rep = [p.name for p in run.glob("repair-log*.md")]
     stage("repair", bool(rep), ", ".join(rep) if rep

@@ -42,6 +42,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import biblio  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "app"))
+from backend import edit_state  # noqa: E402
 VOICE = ROOT / ".claude" / "voice"
 CORPUS = VOICE / "corpus"
 PROFILE = VOICE / "profile.md"
@@ -671,11 +673,17 @@ def learn(path, slug=None):
     """
     p = Path(path)
     mp = mirror_path(p)
-    if not mp.exists():
+    author_edit = edit_state.active(p)
+    baseline = edit_state.base_path(p) if author_edit else mp
+    if not baseline.exists():
         print(f"no mirror at {mp}; run `voice.py mark {p}` after the next agent write")
         return 2
-    old = mp.read_text().splitlines()
-    new = p.read_text().splitlines()
+    old = baseline.read_text().splitlines()
+    new = (edit_state.saved_path(p) if author_edit else p).read_text().splitlines()
+    # A repeated /user-edits run must not count the same paragraph twice as
+    # evidence of the author's cadence. Revised paragraphs remain new samples.
+    known = {part.strip() for f in corpus_files()
+             for part in f.read_text().split("\n\n")}
     captured = []
     for line in difflib.ndiff(old, new):
         if not line.startswith("+ "):
@@ -684,6 +692,8 @@ def learn(path, slug=None):
         if len(s.split()) < 6:
             continue
         if s.startswith(("|", ">", "```", "#", "!", "[E")):
+            continue
+        if s in known or s in captured:
             continue
         captured.append(s)
     if not captured:

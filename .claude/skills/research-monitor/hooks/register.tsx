@@ -258,10 +258,10 @@ export const register: Register = (on, options) => {
     const notice =
       checked.exitCode === 1
         ? `${P} ran saved_check.py on outputs/${name} before this skill: exit 1, no save has landed since the agent last wrote. ` +
-          'Stop. Tell the author to save the document in their editor, and do not read it until they confirm.'
+          'Ask the author to save or paste the edit, keep this task pending, and rerun the check after they answer. Do not infer an unsaved edit from this result alone.'
         : `${P} ran saved_check.py on outputs/${name} before this skill: exit ${checked.exitCode}, so whether the author saved cannot be told. ` +
           'Say so to the author before reading their edits.'
-    if (checked.exitCode === 1) $.ui.toast('Save your edits in the editor first: /user-edits would read a stale file.')
+    if (checked.exitCode === 1) $.ui.toast('No new save detected. Save your edits so /user-edits can read them.')
 
     return next({ ...e, text: `${notice}\n\n${said}\n\n${e.text}` })
   })

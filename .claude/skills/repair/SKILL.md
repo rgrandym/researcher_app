@@ -8,6 +8,29 @@ disable-model-invocation: true
 
 Fix the findings. Do not rewrite the report.
 
+When `/repair` is launched from **Apply feedback to article**, read the named
+`critique*.md` file, the linked `repair-feedback-*.json`, and the current master.
+Apply only the scope the author selected and treat their answers and notes as
+editorial decisions. Do not guess the answer to an unresolved question: ask the
+author through the app's question tool, then continue when they answer. The
+button starts a repair round;
+it does not authorise a broad rewrite or a change to an approved final section.
+In the feedback file, `all` includes minor findings, `material` includes only
+blocking and material findings, and `specified` follows the author's written
+selection. Findings outside the selected scope are logged as declined by scope,
+with no change to the article.
+Before editing, check that each quoted target still exists. A finding whose
+target has changed since the critique is `open (stale target)` until it is
+reassessed; never apply its suggested fix to a different passage by guesswork.
+
+Before touching a saved `report.md`, run
+`python3 app/backend/edit_state.py inspect <run>/report.md`. If the author save
+is still pending, finish `/user-edits` first. Then list final sections with
+`python3 .claude/scripts/section_guard.py locks <run>/report.md`. A final section
+stays byte-identical even when a finding recommends changing it. Record that
+finding as open with the exact proposed edit, and ask the author to **Reopen
+section** if they want it applied. Never unlock or refresh a final lock yourself.
+
 Inside `/research-pipeline` this skill runs in a `report-writer` agent. Typed on
 its own against a finished report (one finding, one section), it runs here: read
 the findings named and the sections they point to, not the whole document
@@ -23,6 +46,11 @@ the findings named and the sections they point to, not the whole document
 ## Edits are surgical
 
 Use Edit, not Write. One finding, one edit, matched to the exact text the finding names. Rewriting a whole section to fix one sentence discards reviewed prose and re-introduces defects the reviewers already cleared.
+
+Declare the sections the fixes will touch before editing. For a report with a
+section guard baseline, run `section_guard.py check` with those sections as
+`--allow` before closing the round. The guard's final locks still apply inside
+the allowed scope.
 
 ## Fixing by verdict
 

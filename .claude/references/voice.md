@@ -176,8 +176,11 @@ loop:
 
 1. An agent writes or edits `report.md`, then runs `voice.py mark`.
 2. The author edits the file by hand.
-3. `voice.py learn <run>/report.md` diffs the file against the mirror and files
-   the author's own passages into `.claude/voice/corpus/`.
+3. `voice.py learn <run>/report.md` compares the saved author copy with its
+   pre-edit baseline when `/user-edits` has an active edit record. For an older
+   run without that record, it compares the master with the agent mirror. It
+   files new author passages into `.claude/voice/corpus/` without counting the
+   same passage twice.
 4. `voice.py profile --rebuild` measures the corpus and moves the cadence bands
    toward it.
 5. A human reviews `profile.md` and writes any new **stated rule** into it. This

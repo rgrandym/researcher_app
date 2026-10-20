@@ -37,7 +37,7 @@ import matplotlib  # noqa: E402
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib import font_manager  # noqa: E402
-from matplotlib.colors import LinearSegmentedColormap  # noqa: E402
+from matplotlib.colors import LinearSegmentedColormap, to_rgb  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
 from matplotlib.patches import FancyBboxPatch  # noqa: E402
 
@@ -134,12 +134,13 @@ def apply_sort(spec):
     if order in ("desc", "asc") and cats and len(ser) == 1:
         # unobtained values always sort last, whichever direction the rest goes
         desc = order == "desc"
-        pairs = sorted(zip(cats, ser[0]["values"]),
+        pairs = sorted(zip(cats, ser[0]["values"], range(len(cats))),
                        key=lambda p: (p[1] is not None if desc else p[1] is None,
                                       p[1] if p[1] is not None else 0),
                        reverse=desc)
         spec["categories"] = [p[0] for p in pairs]
         ser[0]["values"] = [p[1] for p in pairs]
+        spec["_label_indices"] = [p[2] for p in pairs]
     return spec
 
 
@@ -237,14 +238,50 @@ def draw_placeholders(ax, spec, ctx, idx, horizontal=False):
                         fontname=ctx.body, color=ctx.c["muted"], style="italic")
 
 
-def value_label(ax, x, y, v, ctx, spec, ha="center", va="bottom", inside=False):
+def label_text(ctx, key, value, spec):
+    return ctx.ch.get("label_text", {}).get(key, fmt(value, spec))
+
+
+def contrast_color(fill, background, alpha=1.0):
+    rgb = tuple(alpha * c + (1 - alpha) * bg for c, bg in zip(to_rgb(fill), to_rgb(background)))
+    linear = tuple(c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in rgb)
+    luminance = sum(a * b for a, b in zip(linear, (0.2126, 0.7152, 0.0722)))
+    return "#111418" if luminance > 0.179 else "#FFFFFF"
+
+
+def label_color(ctx, fill=None, inside=False):
+    chosen = ctx.ch.get("label_color", "auto")
+    if chosen != "auto":
+        return chosen
+    if not inside or fill is None:
+        return ctx.c["body"]
+    if ctx.ch.get("bar_fill", "solid") in ("outline", "hatched"):
+        fill = ctx.c["surface"]
+    return contrast_color(fill, ctx.c["surface"], ctx.ch.get("bar_opacity", 1.0))
+
+
+def bar_fill_kwargs(ctx, colors):
+    fill = ctx.ch.get("bar_fill", "solid")
+    alpha = ctx.ch.get("bar_opacity", 1.0)
+    if fill == "outline":
+        return {"color": "none", "edgecolor": colors, "linewidth": 1.2, "alpha": alpha}
+    if fill == "hatched":
+        return {"color": ctx.c["surface"], "edgecolor": colors, "hatch": "////", "linewidth": 0.8, "alpha": alpha}
+    return {"color": colors, "alpha": alpha}
+
+
+def value_label(ax, x, y, v, ctx, spec, key, fill=None, horizontal=False):
     if not spec.get("value_labels", ctx.ch.get("value_labels", True)):
         return
-    off = (4, 0) if (ha == "left" and not inside) else (0, -9 if inside else 3)
-    ax.annotate(fmt(v, spec), (x, y), textcoords="offset points",
-                xytext=off, ha=ha, va="center" if inside else va,
-                fontsize=ctx.base * 0.72, fontname=ctx.body,
-                color="#FFFFFF" if inside else ctx.c["body"])
+    inside = ctx.ch.get("label_position", "auto") == "inside"
+    if horizontal:
+        off, ha, va = ((-5, 0), "right", "center") if inside else ((5, 0), "left", "center")
+    else:
+        off, ha, va = ((0, -5), "center", "top") if inside else ((0, 3), "center", "bottom")
+    ax.annotate(label_text(ctx, key, v, spec), (x, y), textcoords="offset points",
+                xytext=off, ha=ha, va=va,
+                fontsize=ctx.base * 0.72 * ctx.ch.get("label_font_scale", 1.0), fontname=ctx.body,
+                color=label_color(ctx, fill, inside))
 
 
 def soften_bars(ax, bars, radius_px):
@@ -276,6 +313,7 @@ def _draw_bar(ax, spec, ctx, horizontal=False):
     cats, ser = spec["categories"], series_of(spec)
     n, w = len(ser), ctx.ch.get("bar_width", 0.62)
     idx = range(len(cats))
+    label_indices = spec.get("_label_indices") or list(idx)
     bars = []
     for i, s in enumerate(ser):
         col = ctx.color_for(s.get("name", f"s{i}"), i)
@@ -284,16 +322,17 @@ def _draw_bar(ax, spec, ctx, horizontal=False):
         pos = [x + off for x in idx]
         vals = s["values"]
         plot = [0 if v is None else v for v in vals]
+        paint = bar_fill_kwargs(ctx, cols)
         if horizontal:
-            bars.extend(ax.barh(pos, plot, height=w / n, color=cols, label=s.get("name"), zorder=3))
-            for p, v in zip(pos, vals):
+            bars.extend(ax.barh(pos, plot, height=w / n, label=s.get("name"), zorder=3, **paint))
+            for j, (p, v) in enumerate(zip(pos, vals)):
                 if v is not None:
-                    value_label(ax, v, p, v, ctx, spec, ha="left", va="center")
+                    value_label(ax, v, p, v, ctx, spec, f"s{i}c{label_indices[j]}", cols[j] if isinstance(cols, list) else cols, True)
         else:
-            bars.extend(ax.bar(pos, plot, width=w / n, color=cols, label=s.get("name"), zorder=3))
-            for p, v in zip(pos, vals):
+            bars.extend(ax.bar(pos, plot, width=w / n, label=s.get("name"), zorder=3, **paint))
+            for j, (p, v) in enumerate(zip(pos, vals)):
                 if v is not None:
-                    value_label(ax, p, v, v, ctx, spec)
+                    value_label(ax, p, v, v, ctx, spec, f"s{i}c{label_indices[j]}", cols[j] if isinstance(cols, list) else cols)
     if horizontal:
         ax.set_yticks(list(idx), [wrap(c, 26) for c in cats])
         ax.invert_yaxis()
@@ -328,19 +367,31 @@ def _draw_stacked_bar(ax, spec, ctx, horizontal=False):
         col = ctx.color_for(s.get("name", f"s{i}"), i)
         vals = [v or 0 for v in s["values"]]
         if horizontal:
-            ax.barh(idx, vals, left=base, height=w, color=col, label=s.get("name"), zorder=3)
+            ax.barh(idx, vals, left=base, height=w, label=s.get("name"), zorder=3,
+                    **bar_fill_kwargs(ctx, col))
         else:
-            ax.bar(idx, vals, bottom=base, width=w, color=col, label=s.get("name"), zorder=3)
-        if spec.get("segment_labels", True):
+            ax.bar(idx, vals, bottom=base, width=w, label=s.get("name"), zorder=3,
+                   **bar_fill_kwargs(ctx, col))
+        if spec.get("segment_labels", True) and ctx.ch.get("value_labels", True):
             for j, v in enumerate(vals):
                 if v and v / max(sum(x) for x in [[sum(c) for c in zip(*[[y or 0 for y in t["values"]] for t in ser])]]) > 0.05:
                     pos, mid = (v / 2 + base[j], idx[j])
-                    ax.text(*(pos, mid) if horizontal else (mid, pos), fmt(v, spec),
-                            ha="center", va="center", fontsize=ctx.base * 0.68,
-                            fontname=ctx.body, color="#FFFFFF")
+                    outside = ctx.ch.get("label_position", "auto") == "outside"
+                    label = label_text(ctx, f"s{i}c{j}", v, spec)
+                    size = ctx.base * 0.68 * ctx.ch.get("label_font_scale", 1.0)
+                    if outside:
+                        end = base[j] + v
+                        ax.annotate(label, (end, idx[j]) if horizontal else (idx[j], end),
+                                    xytext=(5, 0) if horizontal else (0, 3), textcoords="offset points",
+                                    ha="left" if horizontal else "center", va="center" if horizontal else "bottom",
+                                    fontsize=size, fontname=ctx.body, color=label_color(ctx))
+                    else:
+                        ax.text(*(pos, mid) if horizontal else (mid, pos), label,
+                                ha="center", va="center", fontsize=size,
+                                fontname=ctx.body, color=label_color(ctx, col, True))
         base = [b + v for b, v in zip(base, vals)]
     empty = [j for j in idx if all(t["values"][j] is None for t in ser)]
-    if spec.get("total_labels", True):
+    if spec.get("total_labels", ctx.ch.get("label_position", "auto") != "outside"):
         for j, tot in enumerate(base):
             if j in empty:
                 continue
@@ -381,16 +432,18 @@ def _draw_line(ax, spec, ctx, fill=False, stack=False):
         vals = s["values"]
         if stack:
             top = [b + (v or 0) for b, v in zip(base, vals)]
-            ax.fill_between(xs, base, top, color=col, label=name, zorder=3, linewidth=0)
+            ax.fill_between(xs, base, top, color=col, label=name, zorder=3, linewidth=0,
+                            alpha=ctx.ch.get("stacked_fill_opacity", 1.0))
             base = top
             continue
         ax.plot(xs, vals, color=col, linewidth=lw,
                 linestyle=ctx.ch.get("line_style", "solid"), label=name, zorder=3,
+                alpha=ctx.ch.get("line_opacity", 1.0),
                 marker="o" if spec.get("markers", len(xs) <= 12) else None,
                 markersize=ctx.ch.get("marker_size", 4.5), markeredgewidth=0,
                 solid_capstyle="round")
         if fill:
-            ax.fill_between(xs, vals, color=col, alpha=0.13, zorder=2, linewidth=0)
+            ax.fill_between(xs, vals, color=col, alpha=ctx.ch.get("area_fill_opacity", 0.13), zorder=2, linewidth=0)
         if spec.get("direct_labels", len(ser) <= 5):
             last = next((k for k in range(len(vals) - 1, -1, -1) if vals[k] is not None), None)
             if last is not None:
@@ -428,7 +481,7 @@ def _draw_scatter(ax, spec, ctx):
         col = ctx.color_for(s.get("name", f"s{i}"), i)
         pts = s.get("points", [])
         ax.scatter([p[0] for p in pts], [p[1] for p in pts], s=48, color=col,
-                   label=s.get("name"), zorder=3, edgecolors="none", alpha=0.85)
+                   label=s.get("name"), zorder=3, edgecolors="none", alpha=ctx.ch.get("line_opacity", 0.85))
         for p, lab in zip(pts, s.get("labels", [])):
             ax.annotate(lab, (p[0], p[1]), xytext=(6, 3), textcoords="offset points",
                         fontsize=ctx.base * 0.7, fontname=ctx.body, color=ctx.c["muted"])
@@ -507,7 +560,8 @@ def _draw_slope(ax, spec, ctx):
             col = ctx.c.get("mute_fill", ctx.c["rule"])
         v0, v1 = s["values"]
         ax.plot([0, 1], [v0, v1], color=col, linewidth=ctx.ch.get("line_width", 2.0),
-                marker="o", markersize=ctx.ch.get("marker_size", 4.5), markeredgewidth=0, zorder=3)
+                marker="o", markersize=ctx.ch.get("marker_size", 4.5), markeredgewidth=0, zorder=3,
+                alpha=ctx.ch.get("line_opacity", 1.0))
         ax.annotate(f"{name}  {fmt(v0, spec)}", (0, v0), xytext=(-8, 0),
                     textcoords="offset points", ha="right", va="center",
                     fontsize=ctx.base * 0.74, fontname=ctx.body, color=col)
@@ -543,7 +597,7 @@ def _draw_waterfall(ax, spec, ctx):
             run += v
         pos.append(i)
     ax.bar(pos, heights, bottom=bottoms, width=ctx.ch.get("bar_width", 0.62),
-           color=cols, zorder=3)
+           zorder=3, **bar_fill_kwargs(ctx, cols))
     for i, s in enumerate(steps):
         top = bottoms[i] + heights[i]
         v = s["value"]
@@ -574,15 +628,16 @@ def _draw_heatmap(ax, spec, ctx):
         sp.set_visible(False)
     ax.grid(False)
     if spec.get("cell_labels", True):
-        flat = [v for row in vals for v in row if v is not None]
-        mid = (min(flat) + max(flat)) / 2 if flat else 0
         for i, row in enumerate(vals):
             for j, v in enumerate(row):
                 if v is None:
                     continue
-                ax.text(j, i, fmt(v, spec), ha="center", va="center",
-                        fontsize=ctx.base * 0.7, fontname=ctx.body,
-                        color="#FFFFFF" if v > mid else ctx.c["ink"])
+                fill = im.cmap(im.norm(v))
+                chosen = ctx.ch.get("label_color", "auto")
+                color = chosen if chosen != "auto" else contrast_color(fill[:3], ctx.c["surface"])
+                ax.text(j, i, label_text(ctx, f"r{i}c{j}", v, spec), ha="center", va="center",
+                        fontsize=ctx.base * 0.7 * ctx.ch.get("label_font_scale", 1.0), fontname=ctx.body,
+                        color=color)
     else:
         cb = ax.figure.colorbar(im, ax=ax, shrink=0.7, pad=0.02)
         cb.outline.set_visible(False)
@@ -665,7 +720,7 @@ def _draw_band_line_bar(ax, spec, ctx):
     band = spec.get("band")
     if band:
         bcol = band.get("color") or ctx.color_for(band.get("name", "band"), 0)
-        balpha = band.get("alpha", 0.22)
+        balpha = band.get("alpha", ctx.ch.get("area_fill_opacity", 0.22))
         ax.fill_between(xs, band["low"], band["high"], color=bcol, alpha=balpha, linewidth=0, zorder=2)
         handles.append(Patch(color=bcol, alpha=min(1.0, balpha + 0.13))); labels.append(band.get("name", "Range"))
         ends.append([band["high"][-1], ctx.c["body"], 0.72])
@@ -674,7 +729,8 @@ def _draw_band_line_bar(ax, spec, ctx):
         col = s_.get("color") or ctx.color_for(name, i + 1)
         w = lw * (1.5 if s_.get("emphasis") else 1.0)
         ln, = ax.plot(xs, s_["values"], color=col, linewidth=w, zorder=4 if s_.get("emphasis") else 3,
-                      linestyle=s_.get("linestyle", "-"), solid_capstyle="round")
+                      linestyle=s_.get("linestyle", ctx.ch.get("line_style", "solid")),
+                      alpha=ctx.ch.get("line_opacity", 1.0), solid_capstyle="round")
         handles.append(ln); labels.append(name)
         if s_.get("end_label", True):
             ends.append([s_["values"][-1], ctx.c["ink"] if s_.get("emphasis") else col, 0.68])
@@ -712,8 +768,8 @@ def _draw_band_line_bar(ax, spec, ctx):
         base = 0.0
         for j, seg in enumerate(bar["segments"]):
             col = seg.get("color") or ctx.color_for(seg["name"], 10 + j)
-            bx.bar([x0], [seg["value"]], bottom=base, width=bw, color=col, zorder=3,
-                   edgecolor=ctx.c["surface"], linewidth=0.4)
+            bx.bar([x0], [seg["value"]], bottom=base, width=bw, zorder=3,
+                   **bar_fill_kwargs(ctx, col))
             handles.append(Patch(color=col)); labels.append(seg["name"])
             base += seg["value"]
         bx.annotate(fmt(base, spec), (x0, base), xytext=(0, 4), textcoords="offset points",

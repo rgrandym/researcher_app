@@ -45,18 +45,28 @@ of it: which sections it touches, and what would count as answering it.
 
 ## 2. Read the report before researching it
 
-**First, check for the author's own edits.** Run `saved_check.py` and the section
-guard before anything else, as separate commands (one command per call, written
-out in full: no shell variables, chains or inline scripts, so each matches the
-workspace's permission rule for its own scripts):
+**First, check the saved report for the author's own edits.** Run the section
+guard before anything else:
 
 ```bash
-python3 .claude/scripts/saved_check.py outputs/<slug>
 python3 .claude/scripts/section_guard.py check outputs/<slug>/report.md
 ```
 
-If `saved_check.py` exits 1, stop: the author's editor holds unsaved changes. If
-the guard shows sections moving that no round moved, the author edited the report
+Do not run `saved_check.py` as a prerequisite for an ordinary `/expand`. Its exit
+1 means only that no author save followed the agent's last write. That is the
+normal state when the author asks for new research without editing the report.
+The author has already authorised the expansion, so continue from the saved
+document when the guard is clean. Do not ask for confirmation on this result.
+
+If the author says they edited the document, or the guard reports changes, first
+follow `.claude/skills/user-edits/SKILL.md`, including its save check. If the
+author explicitly says there is an unsaved buffer, ask them to save it before
+writing to the report, then resume this expansion after the edit is absorbed.
+If the guard has no baseline, report that containment cannot yet be checked and
+establish a baseline from the current saved document before changing it. A
+missing baseline alone does not cancel the authorised expansion.
+
+If the guard shows sections moving that no round moved, the author edited the report
 by hand: absorb that first (read `.claude/skills/user-edits/SKILL.md` and follow
 it), re-snapshot, and only then open the round. The integration step proves
 containment against the snapshot and restores any section that drifted, so a

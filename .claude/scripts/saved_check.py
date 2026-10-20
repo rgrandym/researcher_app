@@ -1,23 +1,22 @@
 #!/usr/bin/env python3
-"""Detect the one failure an agent cannot see: an edit still sitting in the
-author's editor, never written to disk.
+"""Check whether the author's edit reached the document on disk.
 
     saved_check.py <run>                 # did the author save since the agent wrote?
     saved_check.py <run> letter.md       # a named document rather than the run's first master
     saved_check.py <run> --wait 120      # say "save now", then poll for up to 120s
     saved_check.py <run> --rescue        # copy the editor's local history into <run>/.history/
 
-An agent reads files. An editor holds unsaved buffers. Nothing bridges the two,
-so a round that runs against a stale file produces a confident report about work
-the author cannot see, and the author's next save silently overwrites the
-agent's. Both halves of that are invisible without this check.
+An agent reads files. An editor holds unsaved buffers. This check cannot inspect
+those buffers. A round that depends on a hand edit must establish that the edit
+reached disk before it reads or changes the document.
 
 The signal is mtime. `voice.py mark` writes `.voice-mirror-<name>.md` on every
 agent write, so the mirror's timestamp is "when the agent last wrote". If the
-report is not newer than the mirror, the author has not saved since, and any
-edit they believe they made is still in the editor.
+report is not newer than the mirror, no later save is visible. The result alone
+cannot distinguish an unsaved edit from no edit at all.
 
-Exit 0 = a save landed, go ahead. Exit 1 = nothing saved, stop and say so.
+Exit 0 = a save landed. Exit 1 = no save since the agent's last write;
+this cannot establish whether an editor has unsaved changes.
 Exit 2 = no baseline, so the question cannot be answered.
 """
 import json
@@ -32,6 +31,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import runmeta                                            # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "app"))
+from backend import edit_state                         # noqa: E402
 # Where VS Code and its forks keep per-file local history. History is written on
 # SAVE, so it recovers overwritten versions but never an unsaved buffer.
 HISTORY_DIRS = [
@@ -100,11 +101,17 @@ def check(run, wait=0, doc=None):
     if not report.exists():
         print(f"FAIL no document at {report}")
         return 2
+    if edit_state.pending(report):
+        print(f"SAVED    {name} contains an author save recorded by the app. "
+              f"Compare {edit_state.base_path(report)} with {report}; "
+              "the agent mirror may have been updated since the save.")
+        return 0
     if not mirror.exists():
         print("UNKNOWN  no mirror, so 'since the agent last wrote' has no meaning.")
         print(f"         Run: python3 .claude/scripts/voice.py mark {report}")
         print("         after every agent write, and this check works from then on.")
         return 2
+
 
     deadline = time.time() + wait
     asked = False
@@ -122,17 +129,16 @@ def check(run, wait=0, doc=None):
             continue
         break
 
-    print(f"NOT SAVED  {name} {stamp(report)} is not newer than the agent's "
+    print(f"NO NEW SAVE  {name} {stamp(report)} is not newer than the agent's "
           f"last write {stamp(mirror)}.")
     print()
-    print("  Nothing the author typed since then is on disk. Two consequences,")
-    print("  and both are silent without this check:")
-    print("    1. A review or repair round would run against the agent's own text")
-    print("       and report success on work the author cannot see.")
-    print("    2. The author's next save carries a buffer that predates the")
-    print("       agent's write, so it overwrites it.")
+    print("  This check cannot see the editor buffer. There may be no author edit,")
+    print("  or the author may have changes that have not reached this file.")
+    print("  If this task depends on an edit the author says they made, ask them")
+    print("  to save or paste it before working from the file on disk.")
+    print("  A task that does not depend on a hand edit may continue from disk.")
     print()
-    print("  Do not proceed. Ask the author to save, or to paste the edit.")
+    print("  Recheck after a save when the task depends on that edit.")
     hist = history_for(report)
     if hist:
         newest = datetime.fromtimestamp(hist[-1][1])

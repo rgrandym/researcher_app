@@ -69,6 +69,11 @@ Do not treat a passing gate as a passing report: it checks what a script can
 check. Evidence quality, coverage and reasoning are checked by `/verify` and
 `/critique`.
 
+When a safeguard needs the author's decision, ask a concrete question and keep
+the task pending. Resume the same task after the answer and rerun any check that
+depends on a save. Do not turn a resolvable checkpoint into a failed command.
+Confirmation does not override a failed evidence, containment or quality gate.
+
 ```bash
 python3 .claude/scripts/gate.py <run>/report.md      # what the hook runs
 python3 .claude/scripts/run_check.py <run> --ship    # did every stage run?
@@ -79,6 +84,8 @@ python3 .claude/scripts/saved_check.py <run>         # did the author's save lan
 and stops when it exits 1. Nothing bridges an unsaved editor buffer and a file
 on disk, and both failures are silent: a round run against stale text reports a
 clean result, and the author's next save overwrites the agent's work.
+An `/expand` request that adds new research without claiming to read a hand edit
+does not need a newer author save. Its saved report is the starting point.
 
 ## The pipelines
 
@@ -89,7 +96,12 @@ Run the pipeline end to end with `/research-pipeline`. `/narrator` decides
 who the report is written for and is consulted before the first draft.
 `/user-edits` absorbs what the author wrote by hand into the report.
 `/visualize` governs tables and charts, and `/figures` improves them on request.
+`/notebook` writes a Jupyter notebook that reproduces figures and tables from
+their source data. It runs only when the author types it; no other stage,
+`/export` included, makes notebooks.
 `/polish` rewrites a passage in the author's voice without changing its claims.
+`/plagiarism` scores a report's originality against its sources and the web and
+lists the passages to fix; it never edits the report.
 
 Each stage is a skill in `.claude/skills/`. Doctrine shared by several of them
 lives in `.claude/references/` and is **pointed to, never restated**: a rule
@@ -118,7 +130,7 @@ for word. A run you cannot trace back to what was asked cannot be audited.
 ```text
 prompt.md  brief.md  voice.md  coverage.md  evidence.jsonl  blocked.jsonl
 notes/  external_data/  draft.md  verification.md  critique.md  repair-log.md
-report.md  figures/  rounds/rN/  export/<style>/
+report.md  figures/  rounds/rN/  export/<style>/  notebooks/
 ```
 
 Keep every intermediate file: they are the reason a claim can be defended six

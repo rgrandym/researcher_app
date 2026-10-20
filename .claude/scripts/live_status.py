@@ -40,6 +40,8 @@ EXPORT_QUIET_S = 15
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import run_check  # noqa: E402
 import runmeta  # noqa: E402
+sys.path.insert(0, str(ROOT / "app"))
+from backend import edit_state  # noqa: E402
 
 
 def master_of(run: Path) -> Path | None:
@@ -117,7 +119,8 @@ def status(since: float, running: bool) -> dict:
             continue
         mtime = master.stat().st_mtime
         mirror = run / f".voice-mirror-{master.stem}.md"
-        if (mirror.is_file() and mtime > mirror.stat().st_mtime and mtime > since
+        if ((edit_state.pending(master) or
+             (mirror.is_file() and mtime > mirror.stat().st_mtime)) and mtime > since
                 and now - mtime >= EDIT_QUIET_S and out["pending_edit"] is None):
             out["pending_edit"] = {"run": run.name, "file": master.name, "mtime": mtime}
         for html in sorted((run / "export").glob("*/report.html")):
