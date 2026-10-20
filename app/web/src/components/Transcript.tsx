@@ -1,14 +1,16 @@
 import { useState } from "react";
 import clsx from "clsx";
-import { AlertTriangle, Bot, ChevronDown, ChevronRight, CircleCheck, CircleX, Info, Repeat, ShieldQuestion, Wrench } from "lucide-react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { AlertTriangle, Bot, ChevronDown, ChevronRight, CircleCheck, CircleX, ClipboardCheck, Info, Repeat, ShieldQuestion, Wrench } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { clock, label, resetLabel } from "../lib/format";
 import { send } from "../lib/socket";
 import type { AppEvent, Connection, SessionDetail } from "../lib/types";
 import Markdown from "./Markdown";
 import { api } from "../lib/api";
+import { useUi } from "../stores/ui";
+import CritiqueQuestionsDialog, { type CritiqueAnswers, type CritiqueQuestion } from "./CritiqueQuestionsDialog";
 
-function RetryButton({ sid }: { sid: string }) {
+function RetryButton({ sid, label: buttonLabel = "Retry" }: { sid: string; label?: string }) {
   const [state, setState] = useState<"" | "sending" | "failed">("");
   return (
     <button
@@ -20,10 +22,10 @@ function RetryButton({ sid }: { sid: string }) {
         );
       }}
       disabled={state === "sending"}
-      title="Carry the request on from where the task stands"
+      title="Continue this prompt from where the task stopped"
       className="flex shrink-0 items-center gap-1 rounded-md border border-current px-2 py-0.5 text-[0.75rem] font-medium hover:bg-panel disabled:opacity-50"
     >
-      <Repeat size="0.75rem" /> {state === "sending" ? "Retrying…" : state === "failed" ? "Retry failed, try again" : "Retry"}
+      <Repeat size="0.75rem" /> {state === "sending" ? "Retrying…" : state === "failed" ? "Retry failed, try again" : buttonLabel}
     </button>
   );
 }
@@ -315,6 +317,96 @@ function HandoverCard({ ev, ctx, actionable }: { ev: AppEvent; ctx: Ctx; actiona
   );
 }
 
+/** After a /critique that passed its checks: apply every finding, apply with the author's
+ * answers and direction, or pass. Questions only the author can decide always go through
+ * the dialog, since repair refuses to start without their answers. */
+function CritiqueCard({ ev, ctx, actionable }: { ev: AppEvent; ctx: Ctx; actionable: boolean }) {
+  const client = useQueryClient();
+  const { setView } = useUi();
+  const passKey = `critique-pass:${ctx.sid}:${ev.ts}`;
+  const [state, setState] = useState<"open" | "passed" | "started">(() => {
+    try {
+      return localStorage.getItem(passKey) ? "passed" : "open";
+    } catch {
+      return "open";
+    }
+  });
+  const pass = () => {
+    setState("passed");
+    try {
+      localStorage.setItem(passKey, "1");
+    } catch {
+      /* storage blocked: the pass lasts for this view */
+    }
+  };
+  const [dialog, setDialog] = useState<CritiqueQuestion[] | null>(null);
+  const run = String(ev.data.run);
+  const path = String(ev.data.path);
+  const base = `/api/runs/${encodeURIComponent(run)}`;
+  const started = (session: string) => {
+    setDialog(null);
+    setState("started");
+    void client.invalidateQueries({ queryKey: ["sessions"] });
+    if (session !== ctx.sid) setView({ kind: "session", id: session });
+  };
+  const apply = useMutation({
+    mutationFn: (body: CritiqueAnswers) => api.post<{ session: string }>(`${base}/apply-critique`, { path, ...body }),
+    onSuccess: (res) => started(res.session),
+  });
+  const load = useMutation({
+    mutationFn: () => api.get<{ questions: CritiqueQuestion[] }>(`${base}/critique-questions?path=${encodeURIComponent(path)}`),
+  });
+  const choose = async (all: boolean) => {
+    apply.reset();
+    let questions: CritiqueQuestion[];
+    try {
+      ({ questions } = await load.mutateAsync());
+    } catch {
+      return; // shown below from load.error
+    }
+    if (all && questions.length === 0) apply.mutate({ scope: "all", answers: {}, notes: "" });
+    else setDialog(questions);
+  };
+  const busy = load.isPending || apply.isPending;
+  const error = (load.error ?? (dialog ? null : apply.error)) as Error | null;
+  const button = "rounded-md border border-border px-2.5 py-1 text-[0.75rem] hover:border-accent disabled:opacity-40";
+  return (
+    <div className="rounded-lg border border-accent/50 px-3 py-2 text-[0.7812rem]">
+      <div className="flex items-center gap-2">
+        <ClipboardCheck size="0.875rem" className="shrink-0 text-accent" />
+        <span className="flex-1">
+          {ev.data.text}
+          {state === "passed" && <span className="text-faint"> Passed; apply it later from the file in the run.</span>}
+          {state === "started" && <span className="text-faint"> Repair started.</span>}
+        </span>
+      </div>
+      {actionable && state === "open" && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          <button disabled={busy} onClick={() => void choose(true)} className="rounded-md bg-accent px-2.5 py-1 text-[0.75rem] text-white disabled:opacity-40">
+            {apply.isPending ? "Starting repair…" : "Apply all findings"}
+          </button>
+          <button disabled={busy} onClick={() => void choose(false)} className={button}>
+            Apply with my feedback
+          </button>
+          <button disabled={busy} onClick={pass} className={button}>
+            Pass
+          </button>
+        </div>
+      )}
+      {error && <div className="mt-1 text-[0.75rem] text-bad">{error.message}</div>}
+      {dialog && (
+        <CritiqueQuestionsDialog
+          questions={dialog}
+          submitting={apply.isPending}
+          error={apply.isError ? (apply.error as Error).message : ""}
+          onClose={() => setDialog(null)}
+          onSubmit={(answers) => apply.mutate(answers)}
+        />
+      )}
+    </div>
+  );
+}
+
 function HandoffRow({ ev }: { ev: AppEvent }) {
   const [open, setOpen] = useState(false);
   return (
@@ -371,10 +463,13 @@ export default function Transcript({
   const lastUserTs = Math.max(0, ...events.filter((e) => e.type === "user").map((e) => e.ts));
   const lastLimit = [...events].reverse().find((e) => e.type === "error" && e.data.kind === "limit");
   const lastHandover = [...events].reverse().find((e) => e.type === "notice" && e.data.kind === "handover");
+  const lastCritique = [...events].reverse().find((e) => e.type === "notice" && e.data.kind === "critique_ready");
   // The last turn that did nothing or broke off (not on a limit, which has its own card),
   // when nothing has been asked since: it offers Retry.
-  const lastUser = [...events].reverse().findIndex((e) => e.type === "user");
-  const sinceUser = lastUser < 0 ? events : events.slice(events.length - 1 - lastUser);
+  const lastUserFromEnd = [...events].reverse().findIndex((e) => e.type === "user");
+  const lastUser = lastUserFromEnd < 0 ? -1 : events.length - 1 - lastUserFromEnd;
+  const sinceUser = lastUser < 0 ? events : events.slice(lastUser);
+  const latestPromptFinished = lastUser >= 0 && !running && events.slice(lastUser + 1).some((e) => e.type === "done");
   const lastBroken = [...sinceUser].reverse().find((e) => (e.type === "notice" && e.data.kind === "empty") || (e.type === "error" && e.data.kind !== "limit"));
   const lastSwitch = Math.max(0, ...events.filter((e) => e.type === "handoff").map((e) => e.ts));
   // A turn that finished since the last request or handover without a reply or a tool call:
@@ -420,6 +515,9 @@ export default function Transcript({
             if (ev.data.kind === "handover") {
               return <HandoverCard key={i} ev={ev} ctx={ctx} actionable={ev === lastHandover && !running && openSegment && ev.ts > lastSwitch} />;
             }
+            if (ev.data.kind === "critique_ready") {
+              return <CritiqueCard key={i} ev={ev} ctx={ctx} actionable={ev === lastCritique && !running && ev.ts > lastUserTs} />;
+            }
             if (ev.data.kind === "route") {
               return (
                 <div key={i} className="px-1 text-[0.7188rem] text-faint">
@@ -463,6 +561,11 @@ export default function Transcript({
           <Info size="0.875rem" className="mt-0.5 shrink-0" />
           <span className="min-w-0 flex-1">The last turn ended without doing anything, so the request did not run. Retry to carry on from where the task stands.</span>
           <RetryButton sid={sid} />
+        </div>
+      )}
+      {latestPromptFinished && !lastBroken && !stalled && !sinceUser.some((e) => e.type === "error" && e.data.kind === "limit") && (
+        <div className="flex justify-end">
+          <RetryButton sid={sid} label="Retry last prompt" />
         </div>
       )}
     </div>

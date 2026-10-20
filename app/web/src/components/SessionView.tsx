@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { PanelRight, PanelRightClose, Plus, X } from "lucide-react";
@@ -11,7 +11,7 @@ import ActivityPanel from "./ActivityPanel";
 import Panel, { CENTER, PANELS } from "./Panel";
 import { attachNote } from "./Home";
 import PromptBar, { type Attached, useConnections, useSettings } from "./PromptBar";
-import Transcript from "./Transcript";
+import Transcript, { PermissionRequestCard } from "./Transcript";
 
 /** A conversation. `embedded`: inside a project's Chat tab, where the project view supplies
  * the header and the side panel, and `onNew` starts another conversation on the project. */
@@ -40,8 +40,9 @@ export default function SessionView({ id, embedded = false, onNew }: { id: strin
     mutationFn: () => api.post(`/api/sessions/${id}/keep`),
     onSuccess: () => void client.invalidateQueries({ queryKey: ["session", id] }),
   });
-  const bottom = useRef<HTMLDivElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
+  const followLatest = useRef(true);
+  const [dismissedQuestion, setDismissedQuestion] = useState<string | null>(null);
 
   useEffect(() => {
     if (detail.data) {
@@ -52,9 +53,14 @@ export default function SessionView({ id, embedded = false, onNew }: { id: strin
 
   const list = events[id] ?? [];
   const openPermissions = detail.data?.open_permissions ?? [];
-  useEffect(() => {
+  const latestRequest = [...list].reverse().find((event) => event.type === "user");
+  const repairIsActive = String(latestRequest?.data.text ?? "").startsWith("/repair");
+  const pendingRepairQuestion = repairIsActive && isRunning
+    ? [...list].reverse().find((event) => event.type === "permission_request" && event.data.kind === "question" && openPermissions.includes(String(event.data.id)))
+    : undefined;
+  useLayoutEffect(() => {
     const el = scroller.current;
-    if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 240) bottom.current?.scrollIntoView({ block: "end" });
+    if (el && followLatest.current) el.scrollTop = el.scrollHeight;
   }, [list.length]);
 
   const segments = detail.data?.segments ?? [];
@@ -117,11 +123,17 @@ export default function SessionView({ id, embedded = false, onNew }: { id: strin
           </button>
         </div>
         )}
-        <div ref={scroller} className="scroll-thin min-h-0 flex-1 overflow-y-auto">
+        <div
+          ref={scroller}
+          onScroll={(event) => {
+            const el = event.currentTarget;
+            followLatest.current = el.scrollHeight - el.scrollTop - el.clientHeight < 240;
+          }}
+          className="scroll-thin min-h-0 flex-1 overflow-y-auto"
+        >
           <div className="mx-auto max-w-3xl px-6 py-6">
             <Transcript sid={id} events={list} running={isRunning} openPermissions={openPermissions} openSegment={openSegment} connections={connections.data ?? []} />
             {isRunning && <div className="mt-3 h-2 w-2 animate-pulse rounded-full bg-accent" />}
-            <div ref={bottom} />
           </div>
         </div>
         <div className="mx-auto w-full max-w-3xl px-6 pb-4">
@@ -165,9 +177,20 @@ export default function SessionView({ id, embedded = false, onNew }: { id: strin
             </button>
           </div>
           <div className="min-h-0 flex-1">
-            <ActivityPanel sid={id} data={activity.data} events={list} openPermissions={openPermissions} />
+            <ActivityPanel sid={id} data={activity.data} events={list} openPermissions={openPermissions} connection={connection} running={isRunning} />
           </div>
         </Panel>
+      )}
+      {pendingRepairQuestion && String(pendingRepairQuestion.data.id) !== dismissedQuestion && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4">
+          <div role="dialog" aria-modal="true" aria-label="Repair needs your answer" className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-xl border border-border bg-surface p-5 shadow-2xl">
+            <div className="mb-3 flex items-center gap-2">
+              <h2 className="flex-1 text-[0.9375rem] font-semibold">Repair needs your answer</h2>
+              <button onClick={() => setDismissedQuestion(String(pendingRepairQuestion.data.id))} aria-label="Close question popup" title="The question remains in the conversation" className="rounded p-1 text-muted hover:bg-panel"><X size="0.875rem" /></button>
+            </div>
+            <PermissionRequestCard ev={pendingRepairQuestion} sid={id} running />
+          </div>
+        </div>
       )}
     </div>
   );

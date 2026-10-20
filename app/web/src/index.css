@@ -12,6 +12,8 @@
   --text-muted: #8f8a81;
   --accent: #b5562f;
   --accent-bg: #f6e9e2;
+  --editor-caret: #a84420;
+  --editor-selection: #e5b49a;
   --good: #3d7a4f;
   --warn: #a86b12;
   --bad: #b3362b;
@@ -30,6 +32,8 @@
     --text-muted: #85817a;
     --accent: #e08158;
     --accent-bg: #3a2a22;
+    --editor-caret: #f2a17c;
+    --editor-selection: #77503f;
     --good: #7cbf8e;
     --warn: #e0a64a;
     --bad: #e57a6e;
@@ -48,6 +52,8 @@
   --text-muted: #85817a;
   --accent: #e08158;
   --accent-bg: #3a2a22;
+  --editor-caret: #f2a17c;
+  --editor-selection: #77503f;
   --good: #7cbf8e;
   --warn: #e0a64a;
   --bad: #e57a6e;
@@ -66,6 +72,8 @@
   --text-muted: #8a8d94;
   --accent: #2b62b8;
   --accent-bg: #e4ecf8;
+  --editor-caret: #2155a4;
+  --editor-selection: #b6cff8;
   --good: #1f6fb2;
   --warn: #8a6d00;
   --bad: #c25400;
@@ -82,6 +90,8 @@
   --text-muted: #80838b;
   --accent: #79a8f2;
   --accent-bg: #1f2c42;
+  --editor-caret: #93bdff;
+  --editor-selection: #345781;
   --good: #6fb3ef;
   --warn: #e6c14d;
   --bad: #f29a4a;
@@ -98,6 +108,8 @@
   --text-muted: #7a8394;
   --accent: #2f6fd0;
   --accent-bg: #e5edfb;
+  --editor-caret: #235cbb;
+  --editor-selection: #b8cff5;
   --good: #2f7a4f;
   --warn: #a86b12;
   --bad: #b3362b;
@@ -114,6 +126,8 @@
   --text-muted: #6e7b8a;
   --accent: #5ea1ff;
   --accent-bg: #1a2a40;
+  --editor-caret: #83b5ff;
+  --editor-selection: #31547d;
   --good: #6cc08b;
   --warn: #e0b04a;
   --bad: #f07a6e;
@@ -130,6 +144,8 @@
   --text-muted: #c4c4c4;
   --accent: #ffb000;
   --accent-bg: #3a2a00;
+  --editor-caret: #ffd04d;
+  --editor-selection: #725200;
   --good: #6ee7a0;
   --warn: #ffd24a;
   --bad: #ff8a80;

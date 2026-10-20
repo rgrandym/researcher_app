@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
-import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Check, Circle, Globe, LayoutGrid, Rows3 } from "lucide-react";
 import { api } from "../lib/api";
 import { prefs, setPref } from "../lib/prefs";
 import { clock, elapsed, resetLabel, tokens } from "../lib/format";
-import type { Activity, AgentRow, AppEvent, Usage, UsageWindow } from "../lib/types";
+import type { Activity, AgentRow, AppEvent, Connection, UsageWindow } from "../lib/types";
+import { usageQuery, useUsageEdges } from "../lib/usage";
+import { useConnections } from "./PromptBar";
 import { PermissionRequestCard } from "./Transcript";
 
 // ------------------------------------------------------------------ the current task's stepper
@@ -327,23 +329,29 @@ function WindowLine({ window, now }: { window: UsageWindow; now: number }) {
   );
 }
 
-const PLAN_CONNECTIONS = [
-  { id: "claude-sub", label: "Claude" },
-  { id: "codex-plan", label: "Codex" },
-] as const;
+function PlanUsage({ connection, inUse, live, now }: { connection: Connection; inUse: boolean; live: boolean; now: number }) {
+  useUsageEdges(connection.id, live);
+  const plan = useQuery(usageQuery(connection.id, live));
+  return (
+    <div className="space-y-1">
+      <div className="flex items-baseline gap-1.5 text-[0.7188rem]">
+        <span className="font-medium">{connection.label}</span>
+        {inUse && <span className="text-[0.6875rem] text-accent">in use</span>}
+        {plan.data?.updated_at && <span className="text-[0.6875rem] text-faint">last reported {elapsed(plan.data.updated_at, now)} ago</span>}
+      </div>
+      {plan.isPending && <div className="text-[0.6875rem] text-faint">Reading plan usage…</div>}
+      {plan.isError && <div className="text-[0.6875rem] text-bad">Usage unavailable: {(plan.error as Error).message}</div>}
+      {plan.data?.windows.map((window) => <WindowLine key={window.name} window={window} now={now} />)}
+      {plan.data && !plan.data.windows.length && <div className="text-[0.6875rem] text-faint">{plan.data.note || "Plan allowance unavailable."}</div>}
+    </div>
+  );
+}
 
-function UsageSummary({ data }: { data: Activity }) {
+function UsageSummary({ data, connection, running }: { data: Activity; connection: string; running: boolean }) {
   const now = useNow(true);
   const segments = data.cost.segments;
-  const busy = data.agents.some((agent) => agent.status === "running");
-  const plans = useQueries({
-    queries: PLAN_CONNECTIONS.map((connection) => ({
-      queryKey: ["usage", connection.id],
-      queryFn: () => api.get<Usage>(`/api/usage/${connection.id}`),
-      refetchInterval: busy ? 10_000 : 60_000,
-      retry: false,
-    })),
-  });
+  // Every signed-in subscription, and the session's own connection even if it is signed out.
+  const plans = (useConnections().data ?? []).filter((c) => c.billing === "plan" && (c.signed_in || c.id === connection));
   const input = segments.reduce((sum, segment) => sum + segment.tokens_in, 0);
   const output = segments.reduce((sum, segment) => sum + segment.tokens_out, 0);
   return (
@@ -353,21 +361,9 @@ function UsageSummary({ data }: { data: Activity }) {
         <span className="text-faint"> · {tokens(input)} input / {tokens(output)} output tokens</span>
         {data.cost.context_percent != null && <span className="text-faint"> · context {Math.max(0, Math.round(100 - data.cost.context_percent))}% left</span>}
       </div>
-      {PLAN_CONNECTIONS.map((connection, i) => {
-        const plan = plans[i];
-        return (
-          <div key={connection.id} className="space-y-1">
-            <div className="flex items-baseline gap-1.5 text-[0.7188rem]">
-              <span className="font-medium">{connection.label}</span>
-              {plan.data?.updated_at && <span className="text-[0.6875rem] text-faint">last reported {elapsed(plan.data.updated_at, now)} ago</span>}
-            </div>
-            {plan.isPending && <div className="text-[0.6875rem] text-faint">Reading plan usage…</div>}
-            {plan.isError && <div className="text-[0.6875rem] text-bad">Usage unavailable: {(plan.error as Error).message}</div>}
-            {plan.data?.windows.map((window) => <WindowLine key={window.name} window={window} now={now} />)}
-            {plan.data && !plan.data.windows.length && <div className="text-[0.6875rem] text-faint">{plan.data.note || "Plan allowance unavailable."}</div>}
-          </div>
-        );
-      })}
+      {plans.map((c) => (
+        <PlanUsage key={c.id} connection={c} inUse={c.id === connection} live={running && c.id === connection} now={now} />
+      ))}
       {segments.map((segment, i) => (
         <div key={i} className="flex items-center gap-2 rounded-md bg-panel px-2 py-1.5 text-[0.6875rem]">
           <span className="font-medium">{segment.label}{segment.model ? ` · ${segment.model}` : ""}{segment.open ? " · current" : ""}</span>
@@ -378,7 +374,7 @@ function UsageSummary({ data }: { data: Activity }) {
   );
 }
 
-export default function ActivityPanel({ sid, data, events, openPermissions }: { sid: string; data: Activity | undefined; events: AppEvent[]; openPermissions: string[] }) {
+export default function ActivityPanel({ sid, data, events, openPermissions, connection, running }: { sid: string; data: Activity | undefined; events: AppEvent[]; openPermissions: string[]; connection: string; running: boolean }) {
   const client = useQueryClient();
   const raise = useMutation({
     mutationFn: () => api.post(`/api/sessions/${sid}/raise-cap`),
@@ -401,7 +397,7 @@ export default function ActivityPanel({ sid, data, events, openPermissions }: { 
       <Agents agents={data.agents} task={data.task} earlier={data.agents_earlier ?? 0} />
 
       <Heading>Usage</Heading>
-      <UsageSummary data={data} />
+      <UsageSummary data={data} connection={connection} running={running} />
 
       <Heading>Permissions</Heading>
       {pending.length > 0 && (

@@ -54,6 +54,8 @@ class ConnectionStatus(BaseModel):
     signed_in: bool = False
     message: str = ""
     models: list[dict[str, Any]] = Field(default_factory=list)
+    account: str | None = None  # the email a subscription is signed in as
+    removable: bool = False  # an extra Claude account the author added in Models
 
 
 class UsageWindow(BaseModel):

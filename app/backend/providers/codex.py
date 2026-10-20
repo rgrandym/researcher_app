@@ -46,7 +46,7 @@ STREAM_LIMIT = 64 * 1024 * 1024
 TURN_TIMEOUT_S = 6 * 3600
 PREAMBLE = config.PROMPTS / "codex-preamble.md"
 # Skills whose steps run in isolated subagents (rule 4: the drafting thread never reviews).
-ISOLATED_SKILLS = {"research", "research-pipeline", "verify", "critique"}
+ISOLATED_SKILLS = {"research", "research-pipeline", "verify"}
 
 
 def codex_binary() -> str | None:
@@ -374,6 +374,7 @@ class CodexProvider:
         if not binary:
             raise ProviderError("Codex not found.")
         text, command = self.prompt(prompt, first=native_session is None)
+        turn_started = time.time()
         proc = await asyncio.create_subprocess_exec(
             *self.command(binary, native_session, options),
             stdin=asyncio.subprocess.PIPE,
@@ -420,6 +421,18 @@ class CodexProvider:
             watcher.cancel()
             if proc.returncode is None:
                 kill_process_tree(proc)
+        if parser.subagents == 0 and not stopped:
+            # The stream leaves out the spawn; the subagents' own rollouts record it.
+            for child in usage.codex_child_threads(parser.thread_id, turn_started - 5):
+                parser.subagents += 1
+                name = child["path"].rsplit("/", 1)[-1] or child["role"]
+                call = {"id": f"spawn-{child['id']}", "name": "Agents: spawn", "files": [],
+                        "summary": name,
+                        "subagent": {"type": child["role"], "description": name}}
+                await on_event(parser._event("tool_call", call))
+                await on_event(parser._event(
+                    "tool_result", {"id": call["id"], "is_error": False, "summary": "completed",
+                                    "subagent_done": True}))
         if command in ISOLATED_SKILLS and parser.subagents == 0 and not stopped:
             await on_event(
                 Event(

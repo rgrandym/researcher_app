@@ -1,8 +1,10 @@
-import { useEffect } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Settings2, X } from "lucide-react";
 import { subscribe } from "./lib/socket";
+import { api } from "./lib/api";
+import type { SessionSummary } from "./lib/types";
 import { useUi } from "./stores/ui";
 import Sidebar from "./components/Sidebar";
 import StatusIndicator from "./components/StatusIndicator";
@@ -17,6 +19,16 @@ import GuideView from "./components/GuideView";
 
 export default function App() {
   const { view, tab, setTab, setView, close, addEvent, setRunning, setError } = useUi();
+  const sessions = useQuery({ queryKey: ["sessions"], queryFn: () => api.get<SessionSummary[]>("/api/sessions") });
+  const startupRestored = useRef(false);
+
+  useEffect(() => {
+    if (startupRestored.current || !sessions.data) return;
+    startupRestored.current = true;
+    if (view.kind === "home" && tab === "research" && sessions.data[0]) {
+      setView({ kind: "session", id: sessions.data[0].id });
+    }
+  }, [sessions.data, view.kind, tab, setView]);
 
   // Esc closes the Workspace and Models panels, unless a modal or a field has focus.
   useEffect(() => {

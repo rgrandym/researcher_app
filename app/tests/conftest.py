@@ -150,6 +150,10 @@ def root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data: Path) -> Path:
         ws / ".claude/commands/figures.md",
         "---\ndescription: Improve the figures\n---\n\nImprove the figures. Target: $ARGUMENTS\n",
     )
+    _write(
+        ws / ".claude/commands/brain_storm.md",
+        "---\ndescription: Discuss editorial direction\n---\n\nDiscuss this idea: $ARGUMENTS\n",
+    )
     run = ws / "outputs" / RUN
     _write(
         run / "prompt.md",

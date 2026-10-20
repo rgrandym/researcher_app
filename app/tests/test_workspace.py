@@ -27,6 +27,7 @@ def test_commands_from_real_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
         "export",
         "expand",
         "polish",
+        "brain_storm",
         "figures",
         "app",
         "user-edits",
@@ -57,6 +58,8 @@ def test_expand_command(root: Path) -> None:
     )
     text, name = workspace.expand_command("/figures F4 horizontal")
     assert name == "figures" and "Target: F4 horizontal" in text and "$ARGUMENTS" not in text
+    text, name = workspace.expand_command("/brain_storm strengthen the introduction")
+    assert name == "brain_storm" and "strengthen the introduction" in text
     assert workspace.expand_command("plain question") == ("plain question", None)
     assert workspace.expand_command("/nonexistent x") == ("/nonexistent x", None)
 

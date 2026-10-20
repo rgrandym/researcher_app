@@ -89,6 +89,7 @@ export interface RunDetail {
   meta: { kind: string; doc_kind?: string; masters: string[]; primary: string | null };
   stages: Stage[];
   files: { path: string; size: number; mtime: number }[];
+  critique_failed_at: number | null;
   master: string;
   evidence_rows: number;
   notes: number;
@@ -135,6 +136,15 @@ export interface Connection {
   message: string;
   models: ModelOption[];
   usage: Usage | null;
+  account?: string | null;
+  removable?: boolean;
+}
+
+export interface ClaudeAccount {
+  id: string;
+  label: string;
+  email: string;
+  config_dir: string;
 }
 
 export interface Caps {
@@ -148,6 +158,7 @@ export interface Settings {
   connections: Record<string, { model: string; effort: string }>;
   fallback_order: string[];
   default_connection: string;
+  claude_accounts: ClaudeAccount[];
   handover_threshold: number;
   allow_rules: { tool: string; rule: string }[];
   caps: Caps;

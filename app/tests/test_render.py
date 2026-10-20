@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from conftest import RUN
 
-from backend import appearance, render, workspace
+from backend import appearance, edit_state, render, workspace
 
 
 def _report(root: Path) -> Path:
@@ -118,15 +118,23 @@ def test_individual_figure_and_table_appearance(root: Path) -> None:
 
 def test_edit_refuses_a_stale_save(root: Path) -> None:
     doc = _report(root)
+    mirror = doc.parent / ".voice-mirror-report.md"
+    mirror.write_text(doc.read_text())
     loaded = doc.stat().st_mtime
     mtime = workspace.save_run_file(RUN, "report.md", "# Edited\n", loaded)
     assert doc.read_text() == "# Edited\n"
+    assert edit_state.pending(doc)
+    assert edit_state.base_path(doc).read_text() == mirror.read_text()
     with pytest.raises(workspace.Conflict):
         workspace.save_run_file(
             RUN, "report.md", "# Older tab\n", loaded - 5
         )  # someone saved since
     assert doc.read_text() == "# Edited\n"
     assert workspace.save_run_file(RUN, "report.md", "# Again\n", mtime)
+    assert edit_state.base_path(doc).read_text() == mirror.read_text()
+    # A later agent mirror must not erase the author's saved edit record.
+    mirror.write_text(doc.read_text())
+    assert edit_state.pending(doc)
     for bad in ("evidence.jsonl", "export/meridian/report.md", "../other/report.md"):
         with pytest.raises(ValueError):
             workspace.save_run_file(RUN, bad, "x", None)

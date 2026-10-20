@@ -34,6 +34,8 @@ def test_command_picks_tier_per_runtime(data: Path) -> None:
     assert (r.model, r.effort) == ("gpt-6-astra", "medium")
     r = router.route("/verify outputs/x E42", "codex-api", s)
     assert (r.model, r.effort, r.tier) == ("gpt-6.1-sol", "medium", "workhorse")
+    r = router.route("/brain_storm revise the angle", "codex-api", s)
+    assert (r.model, r.effort, r.tier, r.key) == ("gpt-6-astra", "medium", "frontier", "brain_storm")
 
 
 def test_plain_text_and_unknown_commands_are_chat(data: Path) -> None:

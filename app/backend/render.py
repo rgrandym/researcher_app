@@ -177,8 +177,9 @@ def build(
                 f"width: {item['width_percent']}%; }}\n"
                 f"{selector} th {{ font-family: inherit; background: {item['header_bg']}; color: {item['header_fg']}; "
                 f"padding: {item['cell_padding_em']}em; border-bottom: {item['rule_weight_pt']}pt solid {item['border']}; }}\n"
-                f"{selector} td {{ padding: {item['cell_padding_em']}em; "
-                f"border-bottom: {item['rule_weight_pt']}pt solid {item['border']}; }}"
+                f"{selector} td {{ background: {item['body_bg']}; color: {item['body_fg']}; "
+                f"padding: {item['cell_padding_em']}em; border-bottom: {item['rule_weight_pt']}pt solid {item['border']}; }}\n"
+                f"{selector} tbody tr:nth-child(even) td {{ background: {item['stripe_bg']}; }}"
             )
         with (out / "style.css").open("a") as stream:
             stream.write("\n/* Individual tables */\n" + "\n".join(rules) + "\n")
@@ -256,7 +257,12 @@ def preview(run_name: str, doc: str | None, style: str, cite: bool) -> dict[str,
     inputs = [src, run / "evidence.jsonl", config.ROOT / ".claude/styles" / f"{style}.json"]
     newest = max((p.stat().st_mtime for p in inputs if p.exists()), default=0)
     appearance_file = run / appearance.FILE
-    appearance_hash = hashlib.sha256(appearance_file.read_bytes()).hexdigest() if appearance_file.exists() else ""
+    global_defaults_file = config.DATA / "appearance-defaults.json"
+    digest = hashlib.sha256()
+    for source in (appearance_file, global_defaults_file):
+        if source.exists():
+            digest.update(source.read_bytes())
+    appearance_hash = digest.hexdigest()
     meta: dict[str, Any] = {}
     try:
         meta = json.loads(stamp.read_text())

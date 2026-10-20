@@ -120,6 +120,35 @@ figures appear beside it as PNG and SVG downloads. Export HTML and Export PDF wr
 source of every format; a save is refused if the file changed on disk meanwhile, and
 the HTML re-renders from the saved file. No model call is involved in any of this.
 
+## Claude accounts
+
+Models lists every Claude subscription the app can use. The default one runs from
+`~/.claude`. **Add a Claude account** registers another, with a name, an optional email
+(it pre-fills the sign-in page) and an optional folder. Each account is its own Claude
+Code config folder (`CLAUDE_CONFIG_DIR`, `~/.claude-<name>` unless a folder is given), so
+each keeps its own sign-in and plan windows. The folder links settings, skills, commands,
+plugins and conversations back to `~/.claude`, and an existing folder, such as one set up
+for VS Code, keeps its sign-in. Each account card has **Sign in** and **Sign out**, and an
+added one has **Remove account**, which signs it out and takes it out of the app but leaves
+its folder on disk.
+
+**Order of use** in Models decides which account works first: new sessions start on the
+top entry, and when one runs out the app offers to continue on the next. It never switches
+by itself.
+
+The agent can do the same from `app/`, when the author asks:
+
+```bash
+python3 -m backend.accounts list
+python3 -m backend.accounts add "Second plan" --email me@example.com [--dir ~/.claude-x]
+python3 -m backend.accounts login claude-second-plan    # opens the browser sign-in
+python3 -m backend.accounts logout claude-second-plan
+python3 -m backend.accounts remove claude-second-plan
+```
+
+Signing in opens the browser on whichever Claude account it is signed into there. To sign
+in a different one, sign out of claude.ai in that browser first, then sign in again.
+
 ## Cost
 
 Each turn's model and effort follow the command it starts with (`backend/router.py`).

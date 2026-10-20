@@ -3,6 +3,7 @@ import { basicSetup } from "codemirror";
 import { markdown } from "@codemirror/lang-markdown";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { EditorView } from "@codemirror/view";
+import { linter, lintGutter, type Diagnostic } from "@codemirror/lint";
 import { tags } from "@lezer/highlight";
 
 const highlighting = HighlightStyle.define([
@@ -16,6 +17,49 @@ const highlighting = HighlightStyle.define([
   { tag: tags.meta, color: "var(--text-muted)" },
 ]);
 
+function markdownDiagnostics(view: EditorView): Diagnostic[] {
+  const diagnostics: Diagnostic[] = [];
+  let fence: { from: number; marker: string } | null = null;
+  for (let n = 1; n <= view.state.doc.lines; n++) {
+    const line = view.state.doc.line(n);
+    const trimmed = line.text.trimStart();
+    const marker = trimmed.match(/^(`{3,}|~{3,})/);
+    if (marker) {
+      if (!fence) fence = { from: line.from + line.text.indexOf(marker[0]), marker: marker[0] };
+      else if (marker[0][0] === fence.marker[0] && marker[0].length >= fence.marker.length) fence = null;
+      continue;
+    }
+    if (fence) continue;
+    const repeated = /\b([A-Za-z]{2,})\s+\1\b/giu.exec(line.text);
+    if (repeated) {
+      const second = line.from + repeated.index + repeated[0].length - repeated[1].length;
+      diagnostics.push({
+        from: second,
+        to: second + repeated[1].length,
+        severity: "warning",
+        message: "Repeated word. Remove it if this was accidental.",
+        actions: [{ name: "Remove repeated word", apply: (v) => v.dispatch({ changes: { from: line.from + repeated.index + repeated[1].length, to: second + repeated[1].length } }) }],
+      });
+    }
+    const brokenLink = /\[[^\]]+\]\(([^)]*)$/u.exec(line.text);
+    if (brokenLink) diagnostics.push({
+      from: line.from + brokenLink.index,
+      to: line.to,
+      severity: "error",
+      message: "This Markdown link is missing a closing parenthesis.",
+      actions: [{ name: "Add )", apply: (v) => v.dispatch({ changes: { from: line.to, insert: ")" } }) }],
+    });
+  }
+  if (fence) diagnostics.push({
+    from: fence.from,
+    to: fence.from + fence.marker.length,
+    severity: "error",
+    message: "This code fence has no closing fence.",
+    actions: [{ name: "Close fence", apply: (v) => v.dispatch({ changes: { from: v.state.doc.length, insert: `\n${fence!.marker}\n` } }) }],
+  });
+  return diagnostics;
+}
+
 const editorTheme = EditorView.theme({
   "&": {
     height: "100%",
@@ -25,7 +69,11 @@ const editorTheme = EditorView.theme({
     fontSize: "0.8125rem",
   },
   ".cm-scroller": { overflow: "auto", fontFamily: "inherit" },
-  ".cm-content": { padding: "1.25rem", caretColor: "var(--text-primary)" },
+  ".cm-content": { padding: "1.25rem", caretColor: "var(--editor-caret)" },
+  ".cm-cursor, .cm-dropCursor": {
+    borderLeftColor: "var(--editor-caret) !important",
+    borderLeftWidth: "2px",
+  },
   ".cm-line": { lineHeight: "1.5rem" },
   ".cm-gutters": {
     backgroundColor: "var(--bg)",
@@ -35,8 +83,12 @@ const editorTheme = EditorView.theme({
   "&.cm-focused": { outline: "none" },
   ".cm-activeLine, .cm-activeLineGutter": { backgroundColor: "var(--bg-panel)" },
   ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
-    backgroundColor: "var(--accent-bg) !important",
+    backgroundColor: "var(--editor-selection) !important",
   },
+  ".cm-content ::selection, &.cm-focused .cm-content ::selection": {
+    backgroundColor: "var(--editor-selection) !important",
+  },
+  ".cm-lintRange-error": { textDecoration: "underline wavy var(--bad)" },
 });
 
 interface Props {
@@ -62,9 +114,11 @@ export default function MarkdownEditor({ value, onChange, onSave, onScroll, init
       extensions: [
         basicSetup,
         markdown(),
+        linter(markdownDiagnostics, { delay: 400 }),
+        lintGutter(),
         syntaxHighlighting(highlighting),
         EditorView.lineWrapping,
-        EditorView.contentAttributes.of({ spellcheck: "true" }),
+        EditorView.contentAttributes.of({ spellcheck: "true", lang: "en-GB", autocorrect: "on" }),
         editorTheme,
         EditorView.updateListener.of((update) => {
           if (update.docChanged) callbacks.current.onChange(update.state.doc.toString());

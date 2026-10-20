@@ -4,7 +4,7 @@ import asyncio
 import os
 import time
 
-from backend import autoedits, workspace
+from backend import autoedits, edit_state, workspace
 
 
 class FakeManager:
@@ -89,3 +89,18 @@ def test_second_watcher_skips_a_claimed_save(tmp_path, monkeypatch):
     asyncio.run(_watcher(first).tick())
     asyncio.run(_watcher(second).tick())
     assert len(first.sent) == 1 and second.sent == []
+
+
+def test_author_save_survives_agent_mirror_refresh(tmp_path, monkeypatch):
+    run = _run(tmp_path, monkeypatch, age=120)
+    doc = run / "report.md"
+    mirror = run / ".voice-mirror-report.md"
+    mirror.write_text("# Original\n")
+    edit_state.record(doc, "# Original\n\n## Introduction\nAuthor's text.\n")
+    doc.write_text(edit_state.saved_path(doc).read_text())
+    mirror.write_text(doc.read_text())
+    os.utime(doc, (time.time() - 120, time.time() - 120))
+    assert edit_state.pending(doc)
+    manager = FakeManager()
+    asyncio.run(_watcher(manager).tick())
+    assert len(manager.sent) == 1

@@ -217,7 +217,7 @@ class ClaudeParser:
         info = msg.get("rate_limit_info") or {}
         if not isinstance(info, dict):
             return []
-        windows = usage.record_claude_limit(info)
+        windows = usage.record_claude_limit(info, self.provider)
         if info.get("status") == "rejected":
             self.limit_rejected = True
             if info.get("resetsAt"):
@@ -302,18 +302,32 @@ def _result_text(content: Any) -> str:
 class ClaudeProvider:
     runtime = "claude"
 
-    def __init__(self, id_: str) -> None:
+    def __init__(
+        self, id_: str, config_dir: str = "", label: str = "", email: str = ""
+    ) -> None:
         self.id = id_
         self.billing: Billing = "key" if id_ == "claude-api" else "plan"
-        self.label = (
+        # An extra subscription account runs from its own config folder; "" is ~/.claude.
+        self.config_dir = config_dir
+        self.email = email
+        self.label = label or (
             "Claude Code (API key)" if self.billing == "key" else "Claude Code (subscription)"
         )
         self._models: tuple[float, list[dict[str, Any]]] | None = None
 
+    def _account(self, env: dict[str, str]) -> dict[str, str]:
+        """Point Claude Code at this account's config folder. The default account drops an
+        inherited CLAUDE_CONFIG_DIR, so an app started from a shell set to another account
+        still runs "claude-sub" on ~/.claude."""
+        env.pop("CLAUDE_CONFIG_DIR", None)
+        if self.config_dir:
+            env["CLAUDE_CONFIG_DIR"] = self.config_dir
+        return env
+
     # ---- environment
 
     def env(self) -> dict[str, str]:
-        env = config.child_env()
+        env = self._account(config.child_env())
         if self.billing == "plan":
             for key in STRIP_FOR_PLAN:
                 env.pop(key, None)
@@ -401,10 +415,15 @@ class ClaudeProvider:
             except ValueError:
                 info = {}
             st.signed_in = bool(info.get("loggedIn")) and info.get("authMethod") == "claude.ai"
+            st.account = info.get("email") or None
+            st.removable = bool(self.config_dir)
             plan = info.get("subscriptionType")
+            who = f" as {st.account}" if st.account else ""
             st.message = (
-                f"Signed in with Claude {str(plan).capitalize()}."
+                f"Signed in{who} with Claude {str(plan).capitalize()}."
                 if st.signed_in and plan
+                else f"Signed in{who}."
+                if st.signed_in
                 else "Signed in with a Console account, which bills per token."
                 if info.get("loggedIn")
                 else "Not signed in."
@@ -413,7 +432,7 @@ class ClaudeProvider:
         return st
 
     def _plan_env(self) -> dict[str, str]:
-        env = config.child_env()
+        env = self._account(config.child_env())
         for key in STRIP_FOR_PLAN:
             env.pop(key, None)
         return env
@@ -489,20 +508,38 @@ class ClaudeProvider:
     def usage(self) -> UsageWindows | None:
         if self.billing == "key":
             return UsageWindows(note="Billed per token; no plan windows.")
-        return usage.claude_usage()
+        return usage.claude_usage(self.id)
 
     def start_login(self) -> None:
         binary = claude_binary()
         if not binary:
             raise ProviderError("Claude Code not found.")
+        cmd = [binary, "auth", "login", "--claudeai"]
+        if self.email:
+            cmd += ["--email", self.email]  # pre-fills the sign-in page with this account
         subprocess.Popen(
-            [binary, "auth", "login", "--claudeai"],
+            cmd,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
             env=self._plan_env(),
         )
+
+    def logout(self) -> None:
+        """Sign this account's folder out. Other accounts keep their own sign-in."""
+        binary = claude_binary()
+        if not binary:
+            raise ProviderError("Claude Code not found.")
+        out = subprocess.run(
+            [binary, "auth", "logout"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=self._plan_env(),
+        )
+        if out.returncode != 0:
+            raise ProviderError(out.stderr.strip() or "Claude Code could not sign out.")
 
     # ---- one turn
 

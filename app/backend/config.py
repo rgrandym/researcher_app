@@ -29,6 +29,10 @@ DEFAULT_PORT = 8765
 TOKEN = os.environ.get("RESEARCH_APP_TOKEN") or secrets.token_urlsafe(24)
 
 CONNECTIONS = ("claude-sub", "codex-plan", "claude-api", "codex-api")
+# A Claude subscription account added in Models runs from its own Claude Code config folder
+# (CLAUDE_CONFIG_DIR) and is a connection of its own, id "claude-<slug>". "claude-sub" is the
+# account in the default folder, ~/.claude.
+ACCOUNT_PREFIX = "claude-"
 
 DEFAULT_SETTINGS: dict[str, Any] = {
     "connections": {
@@ -37,8 +41,12 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "codex-plan": {"model": "", "effort": "medium"},
         "codex-api": {"model": "", "effort": "medium"},
     },
+    # The order of use: new sessions start on the first; when one runs out the app offers
+    # the next. It never switches by itself.
     "fallback_order": ["claude-sub", "codex-plan", "claude-api"],
     "default_connection": "claude-sub",
+    # Extra Claude subscription accounts: {"id", "label", "email", "config_dir"}.
+    "claude_accounts": [],
     "handover_threshold": 90,
     # Tool permissions the author granted with "Always allow" in the app: {"tool", "rule"}.
     "allow_rules": [],
@@ -102,10 +110,12 @@ DEFAULT_SETTINGS: dict[str, Any] = {
                     "user-edits",
                     "narrator",
                     "polish",
+                    "brain_storm",
                 )
             },
             "figures": ["frontier", "medium"],
             "verify": ["workhorse", "medium"],
+            "plagiarism": ["workhorse", "medium"],
             "visualize": ["workhorse", "medium"],
             "voice-rule": ["workhorse", "medium"],
             "export": ["workhorse", "low"],
@@ -169,6 +179,17 @@ def save_settings(settings: dict[str, Any]) -> dict[str, Any]:
     data_dir()
     (DATA / "settings.json").write_text(json.dumps(merged, indent=2) + "\n")
     return merged
+
+
+def claude_accounts(settings: dict[str, Any] | None = None) -> list[dict[str, str]]:
+    accounts = (settings or load_settings()).get("claude_accounts") or []
+    return [a for a in accounts if isinstance(a, dict) and a.get("id") and a.get("config_dir")]
+
+
+def connection_ids(settings: dict[str, Any] | None = None) -> list[str]:
+    """Every connection, the extra Claude accounts after the default one."""
+    extra = [a["id"] for a in claude_accounts(settings)]
+    return ["claude-sub", *extra, "codex-plan", "claude-api", "codex-api"]
 
 
 def resolved_paths() -> dict[str, str]:

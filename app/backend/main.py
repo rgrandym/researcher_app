@@ -27,9 +27,9 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from backend import activity, appearance, autoedits, config, keychain, render, sessions, usage, workspace
+from backend import accounts, activity, appearance, autoedits, config, edit_state, final_sections, keychain, render, sessions, usage, workspace
 from backend.providers.base import Event, ProviderError
 from backend.turns import TurnManager
 
@@ -163,7 +163,8 @@ def _status(conn: str, fresh: bool = False) -> dict[str, Any]:
 @app.get("/api/connections")
 async def connections(fresh: bool = False) -> list[dict[str, Any]]:
     out = []
-    for conn in config.CONNECTIONS:
+    manager.sync_accounts()
+    for conn in config.connection_ids():
         st = await asyncio.to_thread(_status, conn, fresh)
         u = await asyncio.to_thread(manager.provider(conn).usage)
         out.append({**st, "usage": u.model_dump() if u else None})
@@ -191,8 +192,56 @@ def login(conn: str) -> dict[str, Any]:
     _status_cache.pop(conn, None)
     return {
         "ok": True,
-        "message": "The sign-in page opens in your browser. Refresh this card when you are done.",
+        "message": "The sign-in page opens in your browser. If it shows a different Claude "
+        "account, sign out of claude.ai there first, then sign in again. Refresh this card "
+        "when you are done.",
     }
+
+
+@app.post("/api/connections/{conn}/logout")
+def logout(conn: str) -> dict[str, Any]:
+    """Sign one Claude subscription out. Codex is shared with other apps and never signed
+    out from here."""
+    provider = manager.provider(conn)
+    if not hasattr(provider, "logout") or getattr(provider, "billing", "") != "plan":
+        raise HTTPException(400, "Only a Claude subscription signs out here.")
+    try:
+        provider.logout()  # type: ignore[attr-defined]
+    except ProviderError as exc:
+        raise _bad(exc) from exc
+    _status_cache.pop(conn, None)
+    return {"ok": True, "message": "Signed out. Sign in again to use this account."}
+
+
+class AccountBody(BaseModel):
+    label: str
+    email: str = ""
+    config_dir: str = ""
+
+
+@app.post("/api/accounts")
+def add_account(body: AccountBody) -> dict[str, Any]:
+    """Add a Claude subscription account, with its own Claude Code config folder."""
+    try:
+        account = accounts.add(body.label, body.email, body.config_dir)
+    except ProviderError as exc:
+        raise _bad(exc) from exc
+    manager.sync_accounts()
+    return account
+
+
+@app.delete("/api/accounts/{conn}")
+def remove_account(conn: str) -> dict[str, Any]:
+    """Sign an added account out and take it out of the app; its folder stays on disk."""
+    if any(manager.runs_on(s, conn) for s in manager.running):
+        raise HTTPException(409, "A turn is running on this account. Remove it when it finishes.")
+    try:
+        account = accounts.remove(conn)
+    except ProviderError as exc:
+        raise _bad(exc, 404) from exc
+    manager.sync_accounts()
+    _status_cache.pop(conn, None)
+    return account
 
 
 class KeyBody(BaseModel):
@@ -311,7 +360,7 @@ def session_activity(sid: str) -> dict[str, Any]:
 
 @app.post("/api/sessions/{sid}/retry")
 async def retry_session(sid: str) -> dict[str, Any]:
-    """Carry the last request on after a turn that did nothing or broke off."""
+    """Carry the last prompt on from the current task state."""
     try:
         await manager.retry(sid)
     except ProviderError as exc:
@@ -445,6 +494,113 @@ def project_chat(name: str, body: ProjectChat) -> dict[str, Any]:
     }
 
 
+class ApplyCritiqueBody(BaseModel):
+    path: str = "critique.md"
+    scope: str = "all"
+    answers: dict[str, str] = Field(default_factory=dict)
+    notes: str = ""
+
+
+def _critique_context(name: str, path: str) -> tuple[Path, Path, str, Path]:
+    if not re.fullmatch(r"critique[\w-]*\.md", path):
+        raise HTTPException(400, "Choose a critique file in this run.")
+    try:
+        run_path = workspace.run_dir(name)
+        critique = workspace.run_file(name, path)
+        primary = workspace.run_meta(run_path).get("primary")
+        if not primary:
+            raise ValueError("This run has no article to repair.")
+        doc = workspace.run_file(name, primary)
+    except (FileNotFoundError, ValueError) as exc:
+        raise _bad(exc, 404) from exc
+    if not critique.read_text().strip():
+        raise HTTPException(400, "The critique file is empty.")
+    marker = run_path / ".critique-isolation-failed"
+    if marker.exists() and critique.stat().st_mtime <= marker.stat().st_mtime:
+        raise HTTPException(409, "This critique did not pass independent review. Rerun /critique first.")
+    return run_path, critique, primary, doc
+
+
+def _critique_questions(run_path: Path, critique: Path) -> list[dict[str, Any]]:
+    question_file = run_path / f"{critique.stem}-questions.json"
+    if not question_file.is_file() or question_file.stat().st_mtime < critique.stat().st_mtime:
+        return []
+    try:
+        data = json.loads(question_file.read_text())
+        raw = data.get("questions", [])
+        if not isinstance(raw, list):
+            return []
+        questions = []
+        for item in raw[:12]:
+            if not isinstance(item, dict) or not item.get("id") or not item.get("question"):
+                continue
+            options = item.get("options", [])
+            questions.append({
+                "id": str(item["id"])[:80],
+                "finding": str(item.get("finding", ""))[:200],
+                "question": str(item["question"])[:600],
+                "options": [
+                    {"label": str(option.get("label", ""))[:100],
+                     "description": str(option.get("description", ""))[:250]}
+                    for option in options[:4] if isinstance(option, dict) and option.get("label")
+                ] if isinstance(options, list) else [],
+            })
+        return questions
+    except (OSError, ValueError, AttributeError):
+        return []
+
+
+@app.get("/api/runs/{name}/critique-questions")
+def critique_questions(name: str, path: str = "critique.md") -> dict[str, Any]:
+    run_path, critique, _, _ = _critique_context(name, path)
+    return {"questions": _critique_questions(run_path, critique)}
+
+
+@app.post("/api/runs/{name}/apply-critique")
+async def apply_critique(name: str, body: ApplyCritiqueBody) -> dict[str, str]:
+    """Start /repair only after the author has answered the critique questions."""
+    run_path, critique, primary, doc = _critique_context(name, body.path)
+    if body.scope not in {"all", "material", "specified"}:
+        raise HTTPException(400, "Choose which findings to apply.")
+    if body.scope == "specified" and not body.notes.strip():
+        raise HTTPException(400, "Describe which findings to apply.")
+    questions = _critique_questions(run_path, critique)
+    missing = [question["id"] for question in questions if not body.answers.get(question["id"], "").strip()]
+    if missing:
+        raise HTTPException(400, "Answer every author question before starting repair.")
+    if len(body.notes) > 10_000 or any(len(answer) > 2_000 for answer in body.answers.values()):
+        raise HTTPException(400, "The feedback is too long; shorten it before submitting.")
+    if edit_state.active(doc):
+        raise HTTPException(409, "Absorb the latest saved author edits before applying critique feedback.")
+    if _run_busy(name):
+        raise HTTPException(409, "An agent is already working on this run.")
+    session = sessions.for_project(name)
+    if session is None:
+        session = sessions.create(name)
+        session.project = name
+        session.runs = [name]
+        sessions.save(session)
+    decisions = run_path / f"repair-feedback-{time.time_ns()}.json"
+    decisions.write_text(json.dumps({
+        "critique": body.path,
+        "scope": body.scope,
+        "answers": {question["id"]: body.answers[question["id"]].strip() for question in questions},
+        "notes": body.notes.strip(),
+        "questions": questions,
+    }, indent=2) + "\n")
+    prompt = (
+        f"/repair outputs/{name}/{body.path} Apply its findings to {primary}. "
+        f"Read outputs/{name}/{decisions.name} first and follow the author's answers and scope. "
+        "Respect final sections, ask about any unresolved author decision before editing it, "
+        "and record every finding's disposition."
+    )
+    try:
+        await manager.send(session.id, prompt)
+    except ProviderError as exc:
+        raise _bad(exc, 409) from exc
+    return {"session": session.id}
+
+
 @app.get("/api/runs/{name}/file")
 def run_file(name: str, path: str) -> Response:
     try:
@@ -475,11 +631,44 @@ class RunFileBody(BaseModel):
     mtime: float | None = None
 
 
+@app.get("/api/runs/{name}/final-sections")
+def run_final_sections(name: str) -> list[dict[str, str | bool]]:
+    try:
+        doc = workspace.run_file(name, workspace.run_meta(workspace.run_dir(name))["primary"])
+        return final_sections.sections(doc)
+    except (FileNotFoundError, ValueError, KeyError, TypeError) as exc:
+        raise _bad(exc, 404) from exc
+
+
+class FinalSectionBody(BaseModel):
+    heading: str
+    final: bool
+
+
+@app.put("/api/runs/{name}/final-sections")
+def update_final_section(name: str, body: FinalSectionBody) -> dict[str, bool]:
+    if _run_busy(name):
+        raise HTTPException(409, "An agent is working on this run. Try when its turn finishes.")
+    try:
+        doc = workspace.run_file(name, workspace.run_meta(workspace.run_dir(name))["primary"])
+        final_sections.set_final(doc, body.heading, body.final)
+    except (FileNotFoundError, ValueError, KeyError, TypeError) as exc:
+        raise _bad(exc) from exc
+    return {"ok": True}
+
+
 @app.put("/api/runs/{name}/file")
 def save_run_file(name: str, body: RunFileBody) -> dict[str, Any]:
     if _run_busy(name):
         raise HTTPException(409, "An agent is working on this run. Save when its turn finishes.")
     try:
+        run_path = workspace.run_dir(name)
+        primary = workspace.run_meta(run_path).get("primary")
+        if body.path == primary:
+            doc = workspace.run_file(name, body.path)
+            changed = final_sections.changed_final(doc, body.content)
+            if changed:
+                raise HTTPException(409, "Reopen final section before saving changes: " + ", ".join(changed))
         mtime = workspace.save_run_file(name, body.path, body.content, body.mtime)
     except workspace.Conflict as exc:
         raise _bad(exc, 409) from exc
@@ -568,12 +757,13 @@ def report_appearance(name: str, style: str = "meridian") -> dict[str, Any]:
 class AppearanceBody(BaseModel):
     style: str
     values: dict[str, Any]
+    remember_default: bool = False
 
 
 @app.put("/api/runs/{name}/appearance")
 def save_report_appearance(name: str, body: AppearanceBody) -> dict[str, Any]:
     try:
-        return appearance.save(name, body.style, body.values)
+        return appearance.save(name, body.style, body.values, body.remember_default)
     except (FileNotFoundError, ValueError) as exc:
         raise _bad(exc) from exc
 

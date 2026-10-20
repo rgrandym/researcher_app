@@ -20,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from backend import config, sessions, workspace
+from backend import config, edit_state, sessions, workspace
 
 POLL_S = 5
 # An agent write lands while the run is locked; one this close after the lock ends is
@@ -53,10 +53,10 @@ class Watcher:
                 continue
             master = path / name
             mirror = path / f".voice-mirror-{master.stem}.md"
-            if not master.is_file() or not mirror.is_file():
-                continue  # no agent write yet, so no baseline to compare against
+            if not master.is_file() or not (mirror.is_file() or edit_state.pending(master)):
+                continue  # no agent baseline or recorded app save to compare against
             mtime = master.stat().st_mtime
-            if mtime > mirror.stat().st_mtime:
+            if edit_state.pending(master) or mtime > mirror.stat().st_mtime:
                 out.append((path.name, master, mtime))
         return out
 

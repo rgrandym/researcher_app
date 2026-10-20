@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Check, Circle, Code2, Download, FileDown, FolderSearch, Palette, PanelRight, PanelRightClose, Pencil, RefreshCw, Trash2, Upload } from "lucide-react";
+import { Check, Circle, Code2, Download, FileDown, FolderSearch, Minus, Palette, PanelRight, PanelRightClose, Pencil, Plus, RefreshCw, RotateCcw, Trash2, Upload, X } from "lucide-react";
 import Panel, { CENTER, PANELS } from "./Panel";
 import { api, ApiError, fileUrl, getText, q, renderedUrl } from "../lib/api";
 import { bytes, day } from "../lib/format";
@@ -13,6 +13,7 @@ import Markdown from "./Markdown";
 import AppearancePanel from "./AppearancePanel";
 import type { AppearanceResponse, AppearanceValues } from "./AppearancePanel";
 import SessionView from "./SessionView";
+import CritiqueQuestionsDialog, { type CritiqueAnswers, type CritiqueQuestion } from "./CritiqueQuestionsDialog";
 
 const MarkdownEditor = lazy(() => import("./MarkdownEditor"));
 
@@ -51,7 +52,7 @@ function FileViewer({ run, path }: { run: string; path: string }) {
   if (text.isLoading) return <div className="text-faint">Loading…</div>;
   if (text.isError) return <div className="text-bad">{(text.error as Error).message}</div>;
   const body = String(text.data ?? "");
-  if (path.endsWith(".md")) return <Markdown text={body} />;
+  if (path.endsWith(".md")) return <Markdown text={body} run={run} />;
   if (path.endsWith(".jsonl")) {
     return (
       <div className="space-y-1">
@@ -78,13 +79,24 @@ function FileViewer({ run, path }: { run: string; path: string }) {
   return <pre className="whitespace-pre-wrap font-mono text-[0.75rem]">{body}</pre>;
 }
 
-function EditPane({ run, path, onSaved }: { run: string; path: string; onSaved: () => void }) {
+function EditPane({ run, path, isMaster, onSaved }: { run: string; path: string; isMaster: boolean; onSaved: () => void }) {
   const kept = place(run).drafts[path];
   const [text, setText] = useState(kept?.text ?? "");
   const [original, setOriginal] = useState(kept?.original ?? "");
   const [mtime, setMtime] = useState<number | null>(kept?.mtime ?? null);
   const [message, setMessage] = useState("");
   const [conflict, setConflict] = useState(false);
+  const [selectedSection, setSelectedSection] = useState("");
+  const finalSections = useQuery({
+    queryKey: ["final-sections", run, path],
+    queryFn: () => api.get<{ heading: string; final: boolean }[]>(`/api/runs/${encodeURIComponent(run)}/final-sections`),
+    enabled: isMaster,
+  });
+  const selectedFinal = finalSections.data?.find((section) => section.heading === selectedSection)?.final ?? false;
+  const setFinal = useMutation({
+    mutationFn: (final: boolean) => api.put(`/api/runs/${encodeURIComponent(run)}/final-sections`, { heading: selectedSection, final }),
+    onSuccess: () => void finalSections.refetch(),
+  });
   const load = async () => {
     const res = await getText(`/api/runs/${encodeURIComponent(run)}/file?${q({ path })}`);
     setText(res.text);
@@ -108,6 +120,7 @@ function EditPane({ run, path, onSaved }: { run: string; path: string; onSaved: 
       setOriginal(text);
       setMessage("Saved. The HTML view re-renders from this file. A minute after your last save, an agent absorbs the edit into the report (/user-edits) by itself.");
       onSaved();
+      void finalSections.refetch();
     },
     onError: (e) => {
       setConflict(e instanceof ApiError && e.status === 409 && e.message.includes("changed on disk"));
@@ -120,6 +133,17 @@ function EditPane({ run, path, onSaved }: { run: string; path: string; onSaved: 
       <div className="flex items-center gap-2 border-b border-border px-4 py-2 text-[0.7812rem]">
         <span className="font-mono">{path}</span>
         {dirty && <span className="text-warn">unsaved</span>}
+        {isMaster && (finalSections.data?.length ?? 0) > 0 && (
+          <>
+            <select aria-label="Report section" value={selectedSection} onChange={(e) => setSelectedSection(e.target.value)} className="max-w-56 rounded-md border border-border bg-surface px-2 py-1">
+              <option value="">Select section</option>
+              {finalSections.data?.map((section) => <option key={section.heading} value={section.heading}>{section.final ? "Final: " : ""}{section.heading}</option>)}
+            </select>
+            <button disabled={!selectedSection || (dirty && !selectedFinal) || setFinal.isPending} onClick={() => setFinal.mutate(!selectedFinal)} className="rounded-md border border-border px-2.5 py-1 disabled:opacity-40" title={dirty && !selectedFinal ? "Save the report before marking this section final" : undefined}>
+              {selectedFinal ? "Reopen section" : "Mark final"}
+            </button>
+          </>
+        )}
         <div className="flex-1" />
         <button onClick={() => setText(original)} disabled={!dirty} className="rounded-md border border-border px-2.5 py-1 disabled:opacity-40">
           Revert
@@ -138,6 +162,7 @@ function EditPane({ run, path, onSaved }: { run: string; path: string; onSaved: 
           )}
         </div>
       )}
+      {setFinal.isError && <div className="border-b border-border px-4 py-1 text-[0.75rem] text-bad">{(setFinal.error as Error).message}</div>}
       <div className="min-h-0 flex-1">
         {path.endsWith(".md") ? (
           <Suspense fallback={<div className="p-5 text-muted">Loading editor…</div>}>
@@ -177,6 +202,17 @@ function HtmlPane({ run, version }: { run: string; version: number }) {
   const [appearanceNotice, setAppearanceNotice] = useState("");
   const appearanceLoaded = useRef(false);
   const [cite, setCiteState] = useState(() => place(run).cite ?? true);
+  const [zoom, setZoom] = useState(100);
+  const frame = useRef<HTMLIFrameElement>(null);
+  const applyZoom = (value: number) => {
+    const body = frame.current?.contentDocument?.body;
+    if (body) body.style.zoom = `${value}%`;
+  };
+  const changeZoom = (value: number) => {
+    const next = Math.max(50, Math.min(200, value));
+    setZoom(next);
+    applyZoom(next);
+  };
   const setStyle = (v: string) => {
     setStyleState(v);
     remember(run, { style: v });
@@ -201,6 +237,7 @@ function HtmlPane({ run, version }: { run: string; version: number }) {
   // The rendered page is served from this app's own address, so its scroll can be read
   // and put back: the author returns to the paragraph they were reading.
   const onFrameLoad = (frame: HTMLIFrameElement) => {
+    if (frame.contentDocument?.body) frame.contentDocument.body.style.zoom = `${zoom}%`;
     const win = frame.contentWindow;
     if (!win) return;
     const top = place(run).scroll.html;
@@ -233,7 +270,8 @@ function HtmlPane({ run, version }: { run: string; version: number }) {
     retry: false,
   });
   const saveAppearance = useMutation({
-    mutationFn: (values: AppearanceValues) => api.put<AppearanceResponse>(`/api/runs/${encodeURIComponent(run)}/appearance`, { style, values }),
+    mutationFn: ({ values, rememberDefault }: { values: AppearanceValues; rememberDefault: boolean }) =>
+      api.put<AppearanceResponse>(`/api/runs/${encodeURIComponent(run)}/appearance`, { style, values, remember_default: rememberDefault }),
     onSuccess: () => {
       setAppearanceNotice("Appearance saved for this report.");
       setExported(null);
@@ -283,6 +321,12 @@ function HtmlPane({ run, version }: { run: string; version: number }) {
           <RefreshCw size="0.8125rem" className={clsx(rendered.isFetching && "animate-spin")} />
         </button>
         <div className="flex-1" />
+        <div className="flex items-center rounded-md border border-border" aria-label="Report zoom">
+          <button onClick={() => changeZoom(zoom - 10)} disabled={zoom <= 50} title="Zoom report out" aria-label="Zoom report out" className="p-1.5 disabled:opacity-40"><Minus size="0.8125rem" /></button>
+          <span className="min-w-10 text-center tabular-nums">{zoom}%</span>
+          <button onClick={() => changeZoom(zoom + 10)} disabled={zoom >= 200} title="Zoom report in" aria-label="Zoom report in" className="p-1.5 disabled:opacity-40"><Plus size="0.8125rem" /></button>
+          <button onClick={() => changeZoom(100)} disabled={zoom === 100} title="Reset report zoom" aria-label="Reset report zoom" className="border-l border-border p-1.5 disabled:opacity-40"><RotateCcw size="0.75rem" /></button>
+        </div>
         {data && data.figures.length > 0 && !figuresOpen && (
           <button onClick={() => { setAppearanceOpen(false); setFiguresOpen(true); }} title="Show the figures panel" className="rounded-md p-1 text-faint hover:text-fg">
             <PanelRight size="0.875rem" />
@@ -324,14 +368,14 @@ function HtmlPane({ run, version }: { run: string; version: number }) {
         <div className={`bg-white ${CENTER}`}>
           {rendered.isFetching && !data && <div className="p-6 text-[0.8125rem] text-faint">Rendering the figures and the HTML…</div>}
           {rendered.isError && <pre className="whitespace-pre-wrap p-6 text-[0.7812rem] text-bad">{(rendered.error as Error).message}</pre>}
-          {data && <iframe key={`${data.html}@${data.built}`} title="HTML" src={renderedUrl(run, style, cite, data.html, false, data.built)} onLoad={(e) => onFrameLoad(e.currentTarget)} className="h-full w-full border-0" />}
+          {data && <iframe ref={frame} key={`${data.html}@${data.built}`} title="HTML" src={renderedUrl(run, style, cite, data.html, false, data.built)} onLoad={(e) => onFrameLoad(e.currentTarget)} className="h-full w-full border-0" />}
         </div>
         {appearanceOpen && (
           <Panel size={PANELS.appearance} side="right" overlayBelow={740} onClose={() => setAppearanceOpen(false)} className="bg-panel">
             <AppearancePanel
               key={style}
               data={appearance.data}
-              onApply={(values) => saveAppearance.mutate(values)}
+              onApply={(values, rememberDefault) => saveAppearance.mutate({ values, rememberDefault })}
               onReset={() => resetAppearance.mutate()}
               onRetry={() => void appearance.refetch()}
               busy={saveAppearance.isPending || resetAppearance.isPending}
@@ -408,6 +452,7 @@ export default function RunView({ name, file }: { name: string; file?: string })
   };
   // The project's conversation, opened (or created) when the Chat tab is first shown.
   const [chat, setChat] = useState<string | null>(null);
+  const [critiqueReview, setCritiqueReview] = useState<{ path: string; questions: CritiqueQuestion[] } | null>(null);
   const openChat = useMutation({
     mutationFn: (fresh: boolean) => api.post<SessionDetail>(`/api/runs/${encodeURIComponent(name)}/chat`, { new: fresh }),
     onSuccess: (s) => {
@@ -417,6 +462,7 @@ export default function RunView({ name, file }: { name: string; file?: string })
   });
   useEffect(() => {
     setChat(null);
+    setCritiqueReview(null);
   }, [name]);
   useEffect(() => {
     if (tab === "chat" && !chat && !openChat.isPending) openChat.mutate(false);
@@ -478,6 +524,19 @@ export default function RunView({ name, file }: { name: string; file?: string })
     },
     onError: (e) => setFileMessage((e as Error).message),
   });
+  const loadCritiqueQuestions = useMutation({
+    mutationFn: (path: string) => api.get<{ questions: CritiqueQuestion[] }>(`/api/runs/${encodeURIComponent(name)}/critique-questions?${q({ path })}`),
+    onSuccess: (result, path) => setCritiqueReview({ path, questions: result.questions }),
+  });
+  const applyCritique = useMutation({
+    mutationFn: (body: CritiqueAnswers & { path: string }) => api.post<{ session: string }>(`/api/runs/${encodeURIComponent(name)}/apply-critique`, body),
+    onSuccess: (result) => {
+      setCritiqueReview(null);
+      setChat(result.session);
+      setTab("chat");
+      void client.invalidateQueries({ queryKey: ["sessions"] });
+    },
+  });
   const data = run.data;
   const hasContent = Boolean(data);
   useLayoutEffect(() => {
@@ -506,6 +565,7 @@ export default function RunView({ name, file }: { name: string; file?: string })
   if (!data) return <div className="p-6 text-faint">Loading…</div>;
   const primary = data.meta.primary;
   const editing = editPath ?? primary ?? undefined;
+  const critiqueFailed = Boolean(selected && data.critique_failed_at && data.critique_failed_at >= (data.files.find((item) => item.path === selected)?.mtime ?? 0));
   const onSaved = () => {
     setVersion((v) => v + 1);
     void client.invalidateQueries({ queryKey: ["run", name] });
@@ -557,11 +617,30 @@ export default function RunView({ name, file }: { name: string; file?: string })
         <div className="flex gap-1 border-b border-border px-4 py-1.5">
           {tabs
             .filter((t) => t.show)
-            .map((t) => (
-              <button key={t.id} onClick={() => setTab(t.id)} className={clsx("max-w-[16rem] truncate rounded-md px-3 py-1 text-[0.7812rem]", tab === t.id ? "bg-panel font-medium text-fg" : "text-muted hover:text-fg")}>
-                {t.label}
-              </button>
-            ))}
+            .map((t) =>
+              t.id === "file" ? (
+                <span key={t.id} className={clsx("flex max-w-[17.5rem] items-center rounded-md text-[0.7812rem]", tab === t.id ? "bg-panel font-medium text-fg" : "text-muted hover:text-fg")}>
+                  <button onClick={() => setTab(t.id)} className="truncate py-1 pl-3 pr-1">
+                    {t.label}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setSelected(undefined);
+                      setTab("document");
+                    }}
+                    title="Close this file"
+                    aria-label="Close this file"
+                    className="mr-1 rounded p-0.5 text-faint hover:bg-surface hover:text-fg"
+                  >
+                    <X size="0.75rem" />
+                  </button>
+                </span>
+              ) : (
+                <button key={t.id} onClick={() => setTab(t.id)} className={clsx("max-w-[16rem] truncate rounded-md px-3 py-1 text-[0.7812rem]", tab === t.id ? "bg-panel font-medium text-fg" : "text-muted hover:text-fg")}>
+                  {t.label}
+                </button>
+              ),
+            )}
           {tab === "file" && selected?.endsWith(".md") && !selected.startsWith("export/") && (
             <button
               onClick={() => {
@@ -573,7 +652,17 @@ export default function RunView({ name, file }: { name: string; file?: string })
               <Pencil size="0.75rem" /> Edit this file
             </button>
           )}
+          {tab === "file" && selected && /^critique[\w-]*\.md$/.test(selected) && (
+            <button onClick={() => { applyCritique.reset(); loadCritiqueQuestions.mutate(selected); }} disabled={loadCritiqueQuestions.isPending || critiqueFailed} title={critiqueFailed ? "Run /critique again with an independent critic first" : undefined} className="ml-auto rounded-md border border-accent px-2.5 py-1 text-[0.75rem] text-accent hover:bg-panel disabled:opacity-40">
+              {critiqueFailed ? "Independent review required" : loadCritiqueQuestions.isPending ? "Preparing questions…" : "Apply feedback to article"}
+            </button>
+          )}
         </div>
+        {tab === "file" && selected && /^critique[\w-]*\.md$/.test(selected) && critiqueFailed && (
+          <div className="border-b border-border px-4 py-1.5 text-[0.75rem] text-warn">This critique needs an independent review. Run /critique again before applying its findings.</div>
+        )}
+        {applyCritique.isError && <div className="border-b border-border px-4 py-1.5 text-[0.75rem] text-bad">{(applyCritique.error as Error).message}</div>}
+        {loadCritiqueQuestions.isError && <div className="border-b border-border px-4 py-1.5 text-[0.75rem] text-bad">{(loadCritiqueQuestions.error as Error).message}</div>}
         <div className="min-h-0 flex-1">
           {tab === "chat" &&
             (chat ? (
@@ -582,14 +671,14 @@ export default function RunView({ name, file }: { name: string; file?: string })
               <div className="p-6 text-[0.8125rem] text-faint">{openChat.isError ? (openChat.error as Error).message : "Opening the project's conversation…"}</div>
             ))}
           {tab === "html" && <HtmlPane run={name} version={version} />}
-          {tab === "edit" && editing && <EditPane run={name} path={editing} onSaved={onSaved} />}
+          {tab === "edit" && editing && <EditPane run={name} path={editing} isMaster={editing === primary} onSaved={onSaved} />}
           {(tab === "document" || tab === "file") && (
             <div ref={reader} onScroll={(e) => rememberScroll(name, readerKey, e.currentTarget.scrollTop)} className="scroll-thin h-full overflow-y-auto">
               <div className="mx-auto max-w-3xl px-8 py-6">
                 {tab === "file" && selected ? (
                   <FileViewer run={name} path={selected} />
                 ) : data.master ? (
-                  <Markdown text={data.master} />
+                  <Markdown text={data.master} run={name} />
                 ) : (
                   <div className="text-[0.8125rem] text-faint">No master document yet ({data.meta.masters.join(", ")}).</div>
                 )}
@@ -650,6 +739,16 @@ export default function RunView({ name, file }: { name: string; file?: string })
         </div>
       </div>
       </Panel>
+      )}
+      {critiqueReview && (
+        <CritiqueQuestionsDialog
+          key={critiqueReview.path}
+          questions={critiqueReview.questions}
+          submitting={applyCritique.isPending}
+          error={applyCritique.isError ? (applyCritique.error as Error).message : ""}
+          onClose={() => setCritiqueReview(null)}
+          onSubmit={(answers) => applyCritique.mutate({ path: critiqueReview.path, ...answers })}
+        />
       )}
     </div>
   );

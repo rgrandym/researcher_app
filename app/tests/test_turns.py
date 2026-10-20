@@ -78,6 +78,26 @@ def test_limit_then_continue_on_codex(root: Path) -> None:
     asyncio.run(go())
 
 
+def test_retry_keeps_original_prompt_across_attempts(root: Path) -> None:
+    m, claude, _ = _manager(["claude_subagent.jsonl"] * 3, [])
+
+    async def go() -> None:
+        s = sessions.create()
+        await m.send(s.id, "/expand cover UK biotech jobs", "claude-sub")
+        await _settle(m, s.id)
+        await m.retry(s.id)
+        await _settle(m, s.id)
+        await m.retry(s.id)
+        await _settle(m, s.id)
+
+        assert len(claude.prompts) == 3
+        for prompt, _ in claude.prompts[1:]:
+            assert prompt.count("The request was:") == 1
+            assert prompt.endswith("/expand cover UK biotech jobs")
+
+    asyncio.run(go())
+
+
 def test_switch_back_resumes_native_session(root: Path) -> None:
     m, claude, codex = _manager(
         ["claude_subagent.jsonl", "claude_subagent.jsonl"], ["codex_turn.jsonl"]

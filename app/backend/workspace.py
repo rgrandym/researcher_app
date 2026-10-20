@@ -28,7 +28,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-from backend import config
+from backend import config, edit_state
 
 RUN_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}-[A-Za-z0-9._-]+$")
 RUN_IN_PATH = re.compile(r"outputs/(\d{4}-\d{2}-\d{2}-[A-Za-z0-9._-]+)")
@@ -252,18 +252,22 @@ def run_detail(name: str) -> dict[str, Any]:
     meta = run_meta(path)
     files = []
     for p in sorted(path.rglob("*")):
-        if p.is_file() and ".history" not in p.parts and ".trash" not in p.parts and not p.name.startswith(".voice-mirror"):
+        if (p.is_file() and ".history" not in p.parts and ".trash" not in p.parts
+                and not p.name.startswith(".voice-mirror")
+                and p.name != ".critique-isolation-failed"):
             st = p.stat()
             files.append(
                 {"path": str(p.relative_to(path)), "size": st.st_size, "mtime": st.st_mtime}
             )
     primary = meta.get("primary")
+    isolation_marker = path / ".critique-isolation-failed"
     return {
         "name": name,
         "path": str(path),
         "meta": meta,
         "stages": stages(name),
         "files": files,
+        "critique_failed_at": isolation_marker.stat().st_mtime if isolation_marker.exists() else None,
         "master": _read(path / primary) if primary else "",
         "evidence_rows": count_jsonl(path / "evidence.jsonl"),
         "notes": len(list((path / "notes").glob("*.md"))) if (path / "notes").is_dir() else 0,
@@ -356,6 +360,8 @@ def save_run_file(name: str, rel: str, content: str, base_mtime: float | None) -
         raise Conflict(
             f"{rel} changed on disk since you opened it. Reload it, then make your edit again."
         )
+    if target.parent == base and target.name in ("report.md", "draft.md"):
+        edit_state.record(target, content)
     target.write_text(content)
     return target.stat().st_mtime
 

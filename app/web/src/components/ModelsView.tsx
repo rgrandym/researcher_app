@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { ArrowDown, ArrowUp, CircleCheck, CircleX, ExternalLink, RefreshCw, X } from "lucide-react";
+import { ArrowDown, ArrowUp, CircleCheck, CircleX, ExternalLink, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import { api } from "../lib/api";
 import { resetLabel } from "../lib/format";
 import type { Caps, Connection, Routing, Settings, Tier } from "../lib/types";
@@ -22,7 +22,7 @@ const OPTION_TITLE: Record<string, string> = {
   "codex-api": "Use an OpenAI API key",
 };
 
-function ProviderPanel({ title, ids, all, settings, onSaved, put }: { title: string; ids: string[]; all: Connection[]; settings: Settings; onSaved: () => void; put: (p: Partial<Settings>) => Promise<void> }) {
+function ProviderPanel({ title, ids, all, settings, onSaved, put, children }: { title: string; ids: string[]; all: Connection[]; settings: Settings; onSaved: () => void; put: (p: Partial<Settings>) => Promise<void>; children?: React.ReactNode }) {
   const conns = ids.map((id) => all.find((c) => c.id === id)).filter((c): c is Connection => Boolean(c));
   const first = conns[0];
   return (
@@ -39,9 +39,10 @@ function ProviderPanel({ title, ids, all, settings, onSaved, put }: { title: str
       {first && !first.installed && <div className="mb-3 text-[0.7812rem] text-muted">{first.message}</div>}
       <div className="grid gap-3 md:grid-cols-2">
         {conns.map((c) => (
-          <Card key={c.id} c={c} settings={settings} onSaved={onSaved} isDefault={settings.default_connection === c.id} onDefault={() => void put({ default_connection: c.id })} />
+          <Card key={c.id} c={c} settings={settings} onSaved={onSaved} isDefault={settings.default_connection === c.id} onDefault={() => void put(firstInOrder(settings, c.id))} />
         ))}
       </div>
+      {children}
     </section>
   );
 }
@@ -58,6 +59,8 @@ function Card({ c, settings, onSaved, isDefault, onDefault }: { c: Connection; s
   const act = useMutation({
     mutationFn: async (what: string) => {
       if (what === "login") return api.post<{ message: string }>(`/api/connections/${c.id}/login`);
+      if (what === "logout") return api.post<{ message: string }>(`/api/connections/${c.id}/logout`);
+      if (what === "remove") return api.del(`/api/accounts/${c.id}`);
       if (what === "key") return api.post(`/api/connections/${c.id}/key`, { key });
       if (what === "unkey") return api.del(`/api/connections/${c.id}/key`);
       if (what === "test") return api.post(`/api/connections/${c.id}/test`);
@@ -65,7 +68,8 @@ function Card({ c, settings, onSaved, isDefault, onDefault }: { c: Connection; s
     },
     onSuccess: (res, what) => {
       setKey("");
-      if (what === "login") setMessage((res as { message: string }).message);
+      if (what === "login" || what === "logout") setMessage((res as { message: string }).message);
+      if (what === "remove") onSaved();
       if (what === "test") setMessage("Checked the binary and the sign-in. No model call was made.");
       if (what === "turn") setView({ kind: "session", id: (res as { session: string }).session });
       void client.invalidateQueries({ queryKey: ["connections"] });
@@ -81,7 +85,7 @@ function Card({ c, settings, onSaved, isDefault, onDefault }: { c: Connection; s
     <div className="rounded-xl border border-border bg-surface p-4">
       <div className="flex items-center gap-2">
         {c.installed && c.signed_in ? <CircleCheck size="1rem" className="text-good" /> : <CircleX size="1rem" className="text-faint" />}
-        <div className="text-[0.8438rem] font-medium">{OPTION_TITLE[c.id] ?? c.label}</div>
+        <div className="text-[0.8438rem] font-medium">{OPTION_TITLE[c.id] ?? `Use my Claude plan: ${c.label}`}</div>
         <button onClick={refresh} title="Check again" className="ml-auto text-faint hover:text-fg">
           <RefreshCw size="0.8125rem" />
         </button>
@@ -93,7 +97,7 @@ function Card({ c, settings, onSaved, isDefault, onDefault }: { c: Connection; s
         New sessions start here
       </label>
       <div className="mt-1 flex flex-wrap gap-x-3">
-        {(LINKS[c.id] ?? []).map((l) => (
+        {(LINKS[c.id] ?? (c.runtime === "claude" && c.billing === "plan" ? LINKS["claude-sub"] : [])).map((l) => (
           <a key={l.href} href={l.href} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-[0.75rem] text-accent underline underline-offset-2">
             {l.label} <ExternalLink size="0.6875rem" />
           </a>
@@ -143,9 +147,21 @@ function Card({ c, settings, onSaved, isDefault, onDefault }: { c: Connection; s
 
       <div className="mt-3 flex flex-wrap gap-2">
         {c.billing === "plan" ? (
-          <button disabled={!c.installed || c.signed_in} onClick={() => act.mutate("login")} className="rounded-md border border-border px-2.5 py-1 text-[0.75rem] hover:border-accent disabled:opacity-40">
-            {c.signed_in ? "Signed in" : c.runtime === "claude" ? "Sign in with Claude" : "Sign in with ChatGPT"}
-          </button>
+          <>
+            <button disabled={!c.installed || c.signed_in} onClick={() => act.mutate("login")} className="rounded-md border border-border px-2.5 py-1 text-[0.75rem] hover:border-accent disabled:opacity-40">
+              {c.signed_in ? "Signed in" : c.runtime === "claude" ? "Sign in with Claude" : "Sign in with ChatGPT"}
+            </button>
+            {c.runtime === "claude" && c.signed_in && (
+              <button
+                onClick={() => {
+                  if (window.confirm(`Sign ${c.account ?? c.label} out of this connection? Other accounts stay signed in.`)) act.mutate("logout");
+                }}
+                className="rounded-md border border-border px-2.5 py-1 text-[0.75rem] hover:border-accent"
+              >
+                Sign out
+              </button>
+            )}
+          </>
         ) : (
           <>
             <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={c.signed_in ? "Replace the stored key" : "Paste an API key"} className="w-56 rounded-md border border-border bg-surface px-2 py-1 text-[0.75rem]" />
@@ -171,7 +187,70 @@ function Card({ c, settings, onSaved, isDefault, onDefault }: { c: Connection; s
         >
           Send a test message
         </button>
+        {c.removable && (
+          <button
+            onClick={() => {
+              if (window.confirm(`Remove ${c.label} from the app? It is signed out first. Its folder stays on disk, so it can be added back.`)) act.mutate("remove");
+            }}
+            className="ml-auto flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-[0.75rem] text-bad hover:border-bad"
+          >
+            <Trash2 size="0.75rem" /> Remove account
+          </button>
+        )}
       </div>
+      {message && <div className="mt-2 text-[0.75rem] text-muted">{message}</div>}
+    </div>
+  );
+}
+
+/** Put one connection first in the order of use; new sessions start on the first. */
+function firstInOrder(s: Settings, id: string): Partial<Settings> {
+  return { default_connection: id, fallback_order: [id, ...s.fallback_order.filter((x) => x !== id)] };
+}
+
+function AddAccount({ onSaved }: { onSaved: () => void }) {
+  const client = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [label, setLabel] = useState("");
+  const [email, setEmail] = useState("");
+  const [folder, setFolder] = useState("");
+  const [message, setMessage] = useState("");
+  const add = useMutation({
+    mutationFn: () => api.post("/api/accounts", { label, email, config_dir: folder }),
+    onSuccess: () => {
+      setLabel("");
+      setEmail("");
+      setFolder("");
+      setOpen(false);
+      setMessage("Account added. Sign it in on its card.");
+      onSaved();
+      void client.invalidateQueries({ queryKey: ["connections"] });
+    },
+    onError: (e) => setMessage((e as Error).message),
+  });
+  const field = "rounded-md border border-border bg-surface px-2 py-1 text-[0.75rem]";
+  return (
+    <div className="mt-3">
+      {open ? (
+        <div className="rounded-xl border border-dashed border-border p-3">
+          <div className="mb-2 text-[0.7812rem] text-muted">Another Claude subscription, with its own sign-in and usage windows. It shares this machine's Claude Code settings, skills and conversations.</div>
+          <div className="flex flex-wrap items-center gap-2">
+            <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Name, e.g. Second plan" className={clsx(field, "w-44")} />
+            <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email (optional)" className={clsx(field, "w-52")} />
+            <input value={folder} onChange={(e) => setFolder(e.target.value)} placeholder="Folder (optional, e.g. ~/.claude-work)" title="Leave empty for ~/.claude-<name>. An existing folder keeps its sign-in." className={clsx(field, "w-64")} />
+            <button disabled={!label.trim() || add.isPending} onClick={() => add.mutate()} className="rounded-md border border-border px-2.5 py-1 text-[0.75rem] hover:border-accent disabled:opacity-40">
+              Add
+            </button>
+            <button onClick={() => setOpen(false)} className="text-[0.75rem] text-faint hover:text-fg">
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button onClick={() => { setOpen(true); setMessage(""); }} className="flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-[0.75rem] hover:border-accent">
+          <Plus size="0.75rem" /> Add a Claude account
+        </button>
+      )}
       {message && <div className="mt-2 text-[0.75rem] text-muted">{message}</div>}
     </div>
   );
@@ -272,7 +351,7 @@ export default function ModelsView() {
     const j = i + d;
     if (j < 0 || j >= order.length) return;
     [order[i], order[j]] = [order[j], order[i]];
-    void put({ fallback_order: order });
+    void put({ fallback_order: order, default_connection: order[0] });
   };
 
   return (
@@ -285,7 +364,9 @@ export default function ModelsView() {
         {connections.isLoading && <div className="text-faint">Checking the connections…</div>}
         {s && (
           <div className="space-y-4">
-            <ProviderPanel title="Claude Code" ids={["claude-sub", "claude-api"]} all={all} settings={s} onSaved={saved} put={put} />
+            <ProviderPanel title="Claude Code" ids={["claude-sub", ...(s.claude_accounts ?? []).map((a) => a.id), "claude-api"]} all={all} settings={s} onSaved={saved} put={put}>
+              <AddAccount onSaved={saved} />
+            </ProviderPanel>
             <ProviderPanel title="Codex" ids={["codex-plan", "codex-api"]} all={all} settings={s} onSaved={saved} put={put} />
           </div>
         )}
@@ -295,27 +376,37 @@ export default function ModelsView() {
             <RoutingPanel routing={s.routing} all={all} put={put} />
 
             <section>
-              <h2 className="mb-1 text-[0.875rem] font-medium">Fallback order</h2>
-              <p className="mb-2 text-[0.7812rem] text-muted">When a provider runs out, the app asks before continuing on the next one here. It never switches by itself.</p>
+              <h2 className="mb-1 text-[0.875rem] font-medium">Order of use</h2>
+              <p className="mb-2 text-[0.7812rem] text-muted">New sessions start on the first. When one runs out, the app offers to continue on the next one here; it never switches by itself.</p>
               <div className="space-y-1">
                 {s.fallback_order.map((id, i) => (
                   <div key={id} className="flex items-center gap-2 rounded-md border border-border bg-surface px-3 py-1.5 text-[0.8125rem]">
                     <span className="w-4 text-faint">{i + 1}</span>
-                    <span className="flex-1">{all.find((c) => c.id === id)?.label ?? id}</span>
+                    <span className="flex-1">
+                      {all.find((c) => c.id === id)?.label ?? id}
+                      {all.find((c) => c.id === id)?.account && <span className="ml-2 text-[0.75rem] text-faint">{all.find((c) => c.id === id)?.account}</span>}
+                      {i === 0 && <span className="ml-2 text-[0.6875rem] text-accent">new sessions start here</span>}
+                    </span>
                     <button onClick={() => move(i, -1)} className="text-faint hover:text-fg">
                       <ArrowUp size="0.8125rem" />
                     </button>
                     <button onClick={() => move(i, 1)} className="text-faint hover:text-fg">
                       <ArrowDown size="0.8125rem" />
                     </button>
-                    <button onClick={() => void put({ fallback_order: s.fallback_order.filter((x) => x !== id) })} className="text-faint hover:text-bad">
+                    <button
+                      onClick={() => {
+                        const order = s.fallback_order.filter((x) => x !== id);
+                        void put({ fallback_order: order, ...(i === 0 && order[0] ? { default_connection: order[0] } : {}) });
+                      }}
+                      className="text-faint hover:text-bad"
+                    >
                       <X size="0.8125rem" />
                     </button>
                   </div>
                 ))}
               </div>
               {all.some((c) => !s.fallback_order.includes(c.id)) && (
-                <select value="" onChange={(e) => e.target.value && void put({ fallback_order: [...s.fallback_order, e.target.value] })} className="mt-2 rounded-md border border-border bg-surface px-2 py-1 text-[0.7812rem]">
+                <select value="" onChange={(e) => e.target.value && void put({ fallback_order: [...s.fallback_order, e.target.value], ...(s.fallback_order.length ? {} : { default_connection: e.target.value }) })} className="mt-2 rounded-md border border-border bg-surface px-2 py-1 text-[0.7812rem]">
                   <option value="">Add a connection…</option>
                   {all
                     .filter((c) => !s.fallback_order.includes(c.id))

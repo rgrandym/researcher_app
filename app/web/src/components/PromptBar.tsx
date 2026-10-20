@@ -4,7 +4,8 @@ import clsx from "clsx";
 import { ArrowUp, Paperclip, Square, X } from "lucide-react";
 import { api } from "../lib/api";
 import { resetLabel } from "../lib/format";
-import type { Command, Connection, Settings, Usage } from "../lib/types";
+import type { Command, Connection, Settings } from "../lib/types";
+import { usageQuery, useUsageEdges } from "../lib/usage";
 
 export interface Attached {
   name: string;
@@ -55,12 +56,8 @@ export default function PromptBar({
   const commands = useQuery({ queryKey: ["commands"], queryFn: () => api.get<Command[]>("/api/commands"), staleTime: 60_000 });
   const settings = useSettings();
   const connections = useConnections();
-  const usage = useQuery({
-    queryKey: ["usage", connection],
-    queryFn: () => api.get<Usage>(`/api/usage/${connection}`),
-    refetchInterval: 60_000,
-    enabled: Boolean(connection),
-  });
+  useUsageEdges(connection, running);
+  const usage = useQuery(usageQuery(connection, running));
 
   const slash = /^\/([\w:-]*)$/.exec(text);
   const matches = useMemo(() => {

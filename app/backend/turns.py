@@ -84,12 +84,19 @@ def project_note(run: str) -> str:
 
 
 def make_providers() -> dict[str, Any]:
-    return {
+    providers: dict[str, Any] = {
         "claude-sub": ClaudeProvider("claude-sub"),
         "claude-api": ClaudeProvider("claude-api"),
         "codex-plan": CodexProvider("codex-plan"),
         "codex-api": CodexProvider("codex-api"),
     }
+    for a in config.claude_accounts():
+        providers[a["id"]] = _account_provider(a)
+    return providers
+
+
+def _account_provider(a: dict[str, str]) -> ClaudeProvider:
+    return ClaudeProvider(a["id"], a["config_dir"], a.get("label", ""), a.get("email", ""))
 
 
 @dataclass
@@ -142,8 +149,33 @@ class TurnManager:
 
     def provider(self, connection: str) -> Provider:
         if connection not in self.providers:
+            self.sync_accounts()
+        if connection not in self.providers:
             raise ProviderError(f"Unknown connection: {connection}")
         return self.providers[connection]  # type: ignore[no-any-return]
+
+    def sync_accounts(self) -> None:
+        """Match the Claude account providers to settings after an account is added or
+        removed. A provider whose account was removed stays while a turn still uses it."""
+        wanted = {a["id"]: a for a in config.claude_accounts()}
+        for conn, prov in list(self.providers.items()):
+            if getattr(prov, "config_dir", "") and conn not in wanted:
+                if not any(self.runs_on(sid, conn) for sid in self.running):
+                    del self.providers[conn]
+        for conn, a in wanted.items():
+            prov = self.providers.get(conn)
+            same = prov is not None and (prov.config_dir, prov.email) == (
+                a["config_dir"],
+                a.get("email", ""),
+            )
+            if not same:
+                self.providers[conn] = _account_provider(a)
+
+    def runs_on(self, session_id: str, connection: str) -> bool:
+        if not self.is_running(session_id):
+            return False
+        seg = sessions.load(session_id).current()
+        return seg is not None and seg.provider == connection
 
     # ------------------------------------------------------------------ sending
 
@@ -407,7 +439,56 @@ class TurnManager:
                 end_reason="error",
                 error=f"{type(exc).__name__}: {exc}",
             )
+        critique_ready: dict[str, str] | None = None
+        if router.command_of(route_text) == "critique" and result.end_reason == "done":
+            launched = any(
+                event.type == "tool_call" and event.data.get("subagent")
+                for event in sessions.transcript(session_id) if event.ts >= started
+            )
+            current = sessions.load(session_id)
+            named_runs = sorted(workspace.runs_in(route_text))
+            run_name = named_runs[0] if len(named_runs) == 1 else current.project or (current.runs[-1] if current.runs else "")
+            run_path = config.OUTPUTS / run_name if run_name else None
+            fresh = bool(run_path and any(
+                file.stat().st_mtime >= started for file in run_path.glob("critique*.md")
+            ))
+            questions_fresh = False
+            question_file = run_path / "critique-questions.json" if run_path else None
+            if question_file and question_file.is_file() and question_file.stat().st_mtime >= started:
+                try:
+                    questions_fresh = isinstance(json.loads(question_file.read_text()).get("questions"), list)
+                except (OSError, ValueError, AttributeError):
+                    pass
+            if not launched or (run_path and (not fresh or not questions_fresh)):
+                reason = ("did not launch an independent report-critic" if not launched
+                          else "did not write a fresh critique file" if not fresh
+                          else "did not write the author questions file")
+                result = result.model_copy(update={
+                    "end_reason": "error",
+                    "error": f"Critique {reason}. The review stage is incomplete; rerun /critique.",
+                })
+                if run_path and run_path.is_dir():
+                    (run_path / ".critique-isolation-failed").write_text(reason + "\n")
+            elif run_path:
+                (run_path / ".critique-isolation-failed").unlink(missing_ok=True)
+                newest = max(run_path.glob("critique*.md"), key=lambda f: f.stat().st_mtime)
+                critique_ready = {"run": run_name, "path": newest.name}
         await self._finish(session_id, result, started, running)
+        if critique_ready:
+            # The transcript offers the author's three choices: apply every finding, apply
+            # with their answers and direction, or pass (POST /api/runs/{run}/apply-critique).
+            await self._emit(
+                session_id,
+                Event(
+                    type="notice",
+                    data={
+                        "kind": "critique_ready",
+                        **critique_ready,
+                        "text": f"The critique of outputs/{critique_ready['run']} is ready "
+                        f"in {critique_ready['path']}.",
+                    },
+                ),
+            )
 
     @staticmethod
     def _did_nothing(session_id: str, started: float) -> bool:
@@ -415,18 +496,30 @@ class TurnManager:
         return not any(e.type in ("assistant_text", "tool_call") for e in events)
 
     async def retry(self, session_id: str, connection: str | None = None) -> None:
-        """Carry the last request on after a turn that did nothing or broke off. It is phrased
-        as a continuation, not the original command again: re-sending /expand would open a
-        new round, while the run folder already holds whatever the last attempt finished."""
+        """Retry the last prompt from the current state. Re-sending a slash command
+        verbatim could duplicate work already recorded in its run folder."""
         if self.is_running(session_id):
             raise ProviderError("A turn is already running in this session.")
         events = sessions.transcript(session_id)
-        last = next((e for e in reversed(events) if e.type == "user"), None)
-        request = str(last.data.get("text") or "") if last else ""
+        prefix = "The author clicked Retry for the previous prompt."
+        old_prefix = "Carry on with the task from before; its last attempt ended before it finished."
+        last = next(
+            (
+                e for e in reversed(events)
+                if e.type == "user"
+                and not str(e.data.get("text") or "").startswith((prefix, old_prefix))
+            ),
+            None,
+        )
+        if last is None:
+            raise ProviderError("There is no prompt to retry in this session.")
+        request = str(last.data.get("text") or "")
         text = (
-            "Carry on with the task from before; its last attempt ended before it finished. "
-            "Check the run folder for what is already done and continue from there."
-            + (f"\n\nThe request was:\n{request}" if request else "")
+            prefix + " "
+            "Re-read the current command instructions. Reassess the request against "
+            "the current state, finish what remains, and "
+            "avoid repeating completed steps or creating duplicate rounds."
+            + f"\n\nThe request was:\n{request}"
         )
         await self.send(session_id, text, connection)
 
@@ -818,8 +911,13 @@ class TurnManager:
         prompt = (config.PROMPTS / "improve.md").read_text()
         for key, value in {"path": str(copy), "original": rel, "request": request}.items():
             prompt = prompt.replace("{{" + key + "}}", value)
+        claude = [
+            c
+            for c in config.load_settings().get("fallback_order", [])
+            if c in self.providers and getattr(self.providers[c], "runtime", "") == "claude"
+        ]
         connection = next(
-            (c for c in ("claude-sub", "claude-api") if self.providers[c].status().signed_in), None
+            (c for c in [*claude, "claude-sub", "claude-api"] if self.providers[c].status().signed_in), None
         )
         if connection is None:
             raise ProviderError("Improve with an agent needs Claude Code; sign in under Models.")

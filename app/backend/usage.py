@@ -92,15 +92,17 @@ _WINDOW_NAMES = {
 }
 _claude_file_lock = threading.Lock()
 
-def _claude_file() -> Any:
-    return config.data_dir() / "usage-claude.json"
+def _claude_file(account: str = "claude-sub") -> Any:
+    """Each Claude account has its own plan windows; the default keeps its old file name."""
+    name = "usage-claude.json" if account == "claude-sub" else f"usage-{account}.json"
+    return config.data_dir() / name
 
 
-def record_claude_limit(info: dict[str, Any]) -> UsageWindows:
+def record_claude_limit(info: dict[str, Any], account: str = "claude-sub") -> UsageWindows:
     """Store one `rate_limit_info` from a stream-json `rate_limit_event`."""
     with _claude_file_lock:
         try:
-            stored = json.loads(_claude_file().read_text())
+            stored = json.loads(_claude_file(account).read_text())
         except (OSError, ValueError):
             stored = {}
         unified = info.get("unifiedWindows")
@@ -117,13 +119,13 @@ def record_claude_limit(info: dict[str, Any]) -> UsageWindows:
                 **({"utilization": info["utilization"]} if info.get("utilization") is not None else {}),
             }
         stored["observed_at"] = time.time()
-        _claude_file().write_text(json.dumps(stored))
-    return claude_usage()
+        _claude_file(account).write_text(json.dumps(stored))
+    return claude_usage(account)
 
 
-def claude_usage() -> UsageWindows:
+def claude_usage(account: str = "claude-sub") -> UsageWindows:
     try:
-        stored = json.loads(_claude_file().read_text())
+        stored = json.loads(_claude_file(account).read_text())
     except (OSError, ValueError):
         return UsageWindows(note="Shown after the first Claude Code turn.")
     windows = []
@@ -272,6 +274,32 @@ _rollout_cache: dict[str, tuple[float, dict[str, int]]] = {}
 
 def _codex_sessions_dir() -> Path:
     return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "sessions"
+
+
+def codex_child_threads(thread_id: str | None, since: float) -> list[dict[str, str]]:
+    """Subagent threads a Codex thread spawned since `since` (epoch seconds), from their
+    rollouts' first line. `codex exec --json` streams the waits on a subagent but not the
+    `spawn_agent` call itself, so the rollouts are the record that one was launched."""
+    if not thread_id:
+        return []
+    out = []
+    for path in _codex_sessions_dir().glob("*/*/*/rollout-*.jsonl"):
+        try:
+            if path.stat().st_mtime < since:
+                continue
+            with path.open(errors="replace") as fh:
+                meta = (json.loads(fh.readline()).get("payload") or {})
+        except (OSError, ValueError, AttributeError):
+            continue
+        if meta.get("parent_thread_id") != thread_id or meta.get("id") == thread_id:
+            continue
+        spawn = ((meta.get("source") or {}).get("subagent") or {}).get("thread_spawn") or {}
+        out.append({
+            "id": str(meta.get("id") or path.stem),
+            "role": str(spawn.get("agent_role") or meta.get("agent_role") or "subagent"),
+            "path": str(spawn.get("agent_path") or ""),
+        })
+    return sorted(out, key=lambda c: c["id"])
 
 
 def codex_thread_usage(thread_id: str | None) -> dict[str, int] | None:
