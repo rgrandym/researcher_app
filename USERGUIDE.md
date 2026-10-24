@@ -911,22 +911,45 @@ A business plan, an investor deck, a cash-flow model, a two-pager: put it in a p
 /rebuild   a new file in the original's design, for a PDF or a new deck
 ```
 
-**Name the document in the command.** `/audit the business plan and the cash flow in external_data, for UK angel investors` declares both files as the documents being improved. The audit verifies their claims, checks what a document of that kind needs for its readers, compares figures across the documents, and writes a cited report. `/changes add Activin A as the third target` skips the audit and works from your instruction.
+### Changing one document, step by step
 
-**You accept every change.** In the app, the project's **Changes** button opens the plan: each change shows the text it replaces, the new text, why, and its sources. Accept, reject, or rewrite it in your own words (your wording is used exactly). Then **Apply accepted changes**. For a Word document, choose tracked changes, which appear in Word's review pane under the name you give, or a clean copy. In VS Code, say it in chat ("accept all except C04") and the agent records exactly that. A change the agent edits after you accepted it comes back to you.
+**1. Put the file in the project.** It goes in the project's `external_data/`. In the app, open the project and use **Import**.
 
-**The original is never touched.** Each version is written to `deliverable/<document>/v1/`, `v2/` and so on, rebuilt from the untouched original every time.
+**2. Ask for the changes, naming the file.** In the project's Chat tab, or in VS Code:
 
-**It stays your document.**
+```text
+/changes the business plan docx: add Activin A as the third lead target, and update the market size with current figures
+```
+
+Only the file you name becomes the document being improved; everything else in `external_data/` stays a source. If the name is ambiguous ("the plan" when there are two), you are asked which file you mean. No audit is needed when you already know what you want: facts the project does not yet hold are researched first. Be specific: "update section 5 with 2026 market figures" gets tighter changes than "improve the plan".
+
+**3. Review the changes.** When the agent finishes, a **Changes** button appears in the project's toolbar. Each change shows the text it replaces, the new text, why, and its sources. **Accept**, **Reject**, or **Rewrite** it in your own words (your wording is used exactly), or use **Accept all**, **Reject all** and **Clear**. Nothing reaches the document until you accept it, and a change the agent edits after you accepted it comes back to you.
+
+**4. Apply.** Click **Apply accepted changes**. For a Word document choose **Tracked changes** (every edit appears in Word's review pane, under the name you type) or a **Clean copy**. The new file lands in `deliverable/<document>/v1/`; your original is never modified. Applying again later writes `v2`, rebuilt from the untouched original.
+
+**In VS Code**, decide in chat ("accept all except C04"; the agent records exactly what you said), then type `/revise`.
+
+### Other ways to use it
+
+| You want | Type |
+|---|---|
+| A full assessment first: what is wrong, stale or missing | `/audit the business plan docx, for UK angel investors` |
+| Changes from that assessment | `/changes using the audit` |
+| Several documents kept consistent (plan, deck, cash flow) | Name them all; each gets its own tab in the Changes window |
+| A deck you only have as a PDF | `/changes` as above, then **Apply**: it runs `/rebuild` and builds a new `.pptx` in the deck's design |
+| A document's look without its content | "use the two-pager as the template", or put it in `external_data/template/` |
+
+The audit verifies the document's claims, checks what a document of that kind needs for its readers, compares figures across documents, and writes a cited report.
+
+### It stays your document
 
 - **Citations** follow its system. A plan that links source names in parentheses gets linked source names in parentheses; a footnoted one gets footnotes; a numbered one gets the next number and a reference-list entry.
 - **Voice** follows the document: its "we", its way of writing "500,000 pounds" or "USD 9.7 billion", its terms.
 - **Formatting** comes from the document's own paragraphs, tables and slides. A check fails any version that uses a font, colour or style the original does not use, links to a page nobody fetched, or changes anything you did not accept.
-- **Spreadsheets** keep their formulas and charts, and recalculate when opened.
+- **Changes are small.** Sentences and paragraphs, not rewrites. A figure that appears elsewhere too (the executive summary, the deck, the cash flow) comes as linked changes you accept together.
+- **Spreadsheets** keep their formulas and charts, and recalculate when opened. Inputs and formulas are changed, never a typed number over a formula, and rows are not inserted.
 
 **A PDF cannot be edited**, so `/rebuild` makes a new deck in its design: its fonts, colours, type sizes, images and motifs, read from the PDF and checked slide by slide against its pages. If you have the `.pptx` or `.docx` the PDF came from, add it instead: editing beats rebuilding.
-
-To copy a design without using a document's content, declare it as a template: put it in `external_data/template/`, or ask for it ("use the two-pager as the template").
 
 ```bash
 python3 .claude/scripts/subject.py list   outputs/<run>          # documents declared, and their state
