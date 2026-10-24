@@ -38,8 +38,8 @@ from backend.providers.base import (
     UsageWindows,
     as_dict,
     end_reason,
-    kill_process_tree,
     short,
+    stop_process_tree,
     tool_summary,
 )
 
@@ -52,6 +52,8 @@ EARLY_RESULT_GRACE_S = 120
 AGENT_TOOLS = ("Agent", "Task")
 MONITOR_MOD = config.ROOT / ".claude" / "skills" / "research-monitor"
 STRIP_FOR_PLAN = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+# How long a signed-in answer from `claude auth status` stands before it is checked again.
+AUTH_TTL_S = 600
 
 
 def claude_binary() -> str | None:
@@ -314,6 +316,7 @@ class ClaudeProvider:
             "Claude Code (API key)" if self.billing == "key" else "Claude Code (subscription)"
         )
         self._models: tuple[float, list[dict[str, Any]]] | None = None
+        self._auth: tuple[float, dict[str, Any]] | None = None
 
     def _account(self, env: dict[str, str]) -> dict[str, str]:
         """Point Claude Code at this account's config folder. The default account drops an
@@ -408,12 +411,7 @@ class ClaudeProvider:
                 else "No API key stored."
             )
         else:
-            try:
-                info = json.loads(
-                    _run([binary, "auth", "status", "--json"], env=self._plan_env()) or "{}"
-                )
-            except ValueError:
-                info = {}
+            info = self._auth_info(binary)
             st.signed_in = bool(info.get("loggedIn")) and info.get("authMethod") == "claude.ai"
             st.account = info.get("email") or None
             st.removable = bool(self.config_dir)
@@ -430,6 +428,25 @@ class ClaudeProvider:
             )
         st.models = self.models()
         return st
+
+    def _auth_info(self, binary: str) -> dict[str, Any]:
+        """`claude auth status` for this folder. A signed-in answer stands for AUTH_TTL_S,
+        and a check that times out or prints nothing keeps the last answer: a slow check is
+        not a sign-out, and every check starts the CLI against the stored sign-in."""
+        if self._auth and self._auth[1].get("loggedIn") and time.time() - self._auth[0] < AUTH_TTL_S:
+            return self._auth[1]
+        try:
+            info = json.loads(_run([binary, "auth", "status", "--json"], env=self._plan_env()))
+        except ValueError:
+            info = None
+        if not isinstance(info, dict) or "loggedIn" not in info:
+            return self._auth[1] if self._auth else {}
+        self._auth = (time.time(), info)
+        return info
+
+    def forget_auth(self) -> None:
+        """Check the sign-in afresh next time: after signing in or out, or a refused turn."""
+        self._auth = None
 
     def _plan_env(self) -> dict[str, str]:
         env = self._account(config.child_env())
@@ -499,7 +516,7 @@ class ClaudeProvider:
                         if isinstance(m, dict)
                     ]
                     break
-            proc.kill()
+            _stop(proc)
         except OSError:
             return []
         self._models = (time.time(), found)
@@ -514,6 +531,7 @@ class ClaudeProvider:
         binary = claude_binary()
         if not binary:
             raise ProviderError("Claude Code not found.")
+        self.forget_auth()
         cmd = [binary, "auth", "login", "--claudeai"]
         if self.email:
             cmd += ["--email", self.email]  # pre-fills the sign-in page with this account
@@ -531,6 +549,7 @@ class ClaudeProvider:
         binary = claude_binary()
         if not binary:
             raise ProviderError("Claude Code not found.")
+        self.forget_auth()
         out = subprocess.run(
             [binary, "auth", "logout"],
             capture_output=True,
@@ -587,7 +606,7 @@ class ClaudeProvider:
                 try:
                     await asyncio.wait_for(proc.wait(), 5)
                 except TimeoutError:
-                    kill_process_tree(proc)
+                    await stop_process_tree(proc)
         stderr = (await stderr_task).decode(errors="replace")
         return parser.outcome(proc.returncode, stderr, session.stopped)
 
@@ -778,15 +797,39 @@ class _ControlSession:
         while self.proc.returncode is None:
             if cancelled():
                 self.stopped = True
-                kill_process_tree(self.proc)
+                await stop_process_tree(self.proc)
                 return
             await asyncio.sleep(0.1)
 
 
 def _run(cmd: list[str], env: dict[str, str] | None = None) -> str:
     try:
-        return subprocess.run(
-            cmd, capture_output=True, text=True, timeout=20, env=env or config.child_env()
-        ).stdout
-    except (OSError, subprocess.TimeoutExpired):
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            env=env or config.child_env(),
+        )
+    except OSError:
         return ""
+    try:
+        return proc.communicate(timeout=20)[0]
+    except subprocess.TimeoutExpired:
+        _stop(proc)
+        return ""
+
+
+def _stop(proc: subprocess.Popen[str]) -> None:
+    """End a short-lived CLI the way stop_process_tree ends a turn: end of input, then
+    SIGTERM, and SIGKILL only as the last resort, so a sign-in renewal can finish."""
+    for step in (proc.stdin.close if proc.stdin else None, proc.terminate, proc.kill):
+        if proc.poll() is not None:
+            return
+        if step:
+            step()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass

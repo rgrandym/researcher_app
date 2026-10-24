@@ -14,6 +14,8 @@ export interface Prefs {
   // Side panels' widths, as shares of the window (components/Panel.tsx).
   panel_widths?: Record<string, number>;
   figures_open?: boolean;
+  // Exported files kept as buttons in each run's HTML toolbar, newest first.
+  export_links?: Record<string, string[]>;
 }
 
 const DEFAULTS: Prefs = { theme: "system", agents_view: "lanes", sidebar_open: true, activity_open: true, run_panel_open: true };

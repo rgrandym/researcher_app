@@ -5,7 +5,9 @@ permission requests waiting for the author, and the run locks. Every event a pro
 emits is appended to the session's transcript and published to subscribers.
 
 Limits: when a turn ends because a plan ran out, the segment closes and the session
-waits for the author. The app never switches provider on its own and never retries.
+waits for the author; a spent plan is never switched on its own. A turn its account could
+not run at all (signed out, sign-in refused, network down) moves to the next signed-in
+plan in the order of use, each account tried once per message.
 """
 
 from __future__ import annotations
@@ -33,6 +35,7 @@ from backend.providers.base import (
     ProviderError,
     TurnOptions,
     TurnResult,
+    short,
 )
 from backend.providers.claude import ClaudeProvider
 from backend.providers.codex import CodexProvider
@@ -109,6 +112,7 @@ class Running:
     # Set the moment the turn announces it has stopped, which is a little before its task
     # returns: a client refreshing on that announcement must already be told it is over.
     ended: bool = False
+    request: str = ""  # the author's words for this turn, carried to a failover account
 
 
 class Hub:
@@ -137,6 +141,7 @@ class TurnManager:
         self.running: dict[str, Running] = {}
         self.locks: dict[str, str] = {}  # run name -> session id
         self.last_turn_end: dict[str, float] = {}
+        self.failover_tried: dict[str, set[str]] = {}  # session -> accounts that failed
 
     # ------------------------------------------------------------------ queries
 
@@ -184,6 +189,7 @@ class TurnManager:
         message for a different connection goes through a handoff."""
         if self.is_running(session_id):
             raise ProviderError("A turn is already running in this session.")
+        self.failover_tried.pop(session_id, None)
         settings = config.load_settings()
         name = router.command_of(text)
         if name and name in (settings.get("hidden_commands") or []):
@@ -212,7 +218,12 @@ class TurnManager:
             await self.switch(session_id, target, pending=text, reason=reason)
 
     async def switch(
-        self, session_id: str, target: str, pending: str | None = None, reason: str = "switch"
+        self,
+        session_id: str,
+        target: str,
+        pending: str | None = None,
+        reason: str = "switch",
+        echo: bool = True,
     ) -> None:
         """Close the open segment, build the packet, and open a segment on `target`."""
         if self.is_running(session_id):
@@ -291,7 +302,10 @@ class TurnManager:
         prompt = handoff.with_pending(packet, pending) if packet else (pending or "")
         if not prompt:
             return
-        await self._start(session, seg, prompt, user_text=pending)
+        # A failover carries words already shown in the transcript: route on them, unechoed.
+        await self._start(
+            session, seg, prompt, user_text=pending if echo else None, route_text=pending
+        )
 
     def _segment(self, connection: str, settings: dict[str, Any]) -> Segment:
         conf = settings.get("connections", {}).get(connection, {})
@@ -337,7 +351,12 @@ class TurnManager:
     # ------------------------------------------------------------------ the turn
 
     async def _start(
-        self, session: Session, seg: Segment, prompt: str, user_text: str | None
+        self,
+        session: Session,
+        seg: Segment,
+        prompt: str,
+        user_text: str | None,
+        route_text: str | None = None,
     ) -> None:
         conflict = self._take_locks(session)
         if conflict:
@@ -354,7 +373,7 @@ class TurnManager:
         await self._warn_external(session)
         # The route follows the author's own words; a handoff packet wrapped around them
         # does not change which command they typed.
-        route_text = user_text if user_text is not None else prompt
+        route_text = route_text or (user_text if user_text is not None else prompt)
         running.task = asyncio.create_task(self._run(session.id, prompt, running, route_text))
         await self.hub.publish(session.id, {"type": "state", "running": True})
 
@@ -365,6 +384,7 @@ class TurnManager:
         seg = session.current()
         assert seg is not None
         provider = self.provider(seg.provider)
+        running.request = route_text or prompt
         # Model and effort as set now, so a change between turns (Models, the routing
         # table, the effort meter) applies to the next turn on either provider.
         picked = await self._route(provider, seg.provider, route_text, seg.route_key)
@@ -490,6 +510,36 @@ class TurnManager:
                 ),
             )
 
+    async def _failover(
+        self, session_id: str, seg: Segment | None, result: TurnResult, started: float
+    ) -> str | None:
+        """The next signed-in plan for a turn its account could not run (signed out, sign-in
+        refused, network) and which did nothing yet. Per-token connections are skipped, and
+        a spent plan is not failed over: the author keeps that switch in their own hands."""
+        if (
+            seg is None
+            or result.end_reason not in ("auth", "network")
+            or not self._did_nothing(session_id, started)
+        ):
+            return None
+        tried = self.failover_tried.setdefault(session_id, set())
+        tried.add(seg.provider)
+        order = [c for c in config.load_settings().get("fallback_order", []) if c in self.providers]
+        if seg.provider in order:
+            i = order.index(seg.provider)
+            order = order[i + 1 :] + order[:i]
+        for conn in order:
+            prov = self.providers[conn]
+            if conn in tried or getattr(prov, "billing", "") != "plan":
+                continue
+            try:
+                st = await asyncio.to_thread(prov.status)
+            except Exception:  # noqa: BLE001  an account that cannot report is not a target
+                continue
+            if st.installed and st.signed_in:
+                return conn
+        return None
+
     @staticmethod
     def _did_nothing(session_id: str, started: float) -> bool:
         events = [e for e in sessions.transcript(session_id) if e.ts >= started]
@@ -536,6 +586,45 @@ class TurnManager:
             seg.ended = time.time()
             seg.end_reason = "limit"
         sessions.save(session)
+        if result.end_reason == "auth" and seg is not None:
+            forget = getattr(self.providers.get(seg.provider), "forget_auth", None)
+            if forget:
+                forget()
+        target = await self._failover(session_id, seg, result, started)
+        if target and seg is not None:
+            why = "is not signed in" if result.end_reason == "auth" else "could not reach the service"
+            await self._emit(
+                session_id,
+                Event(
+                    type="notice",
+                    provider=seg.provider,
+                    data={
+                        "kind": "failover",
+                        "from": seg.provider,
+                        "to": target,
+                        "text": f"{self.providers[seg.provider].label} {why}"
+                        f" ({short(result.error or '', 200)}). Continuing on "
+                        f"{self.providers[target].label}.",
+                    },
+                ),
+            )
+            await self._emit(
+                session_id,
+                Event(type="done", data={"end_reason": result.end_reason}, provider=seg.provider),
+            )
+            self.last_turn_end[session_id] = time.time()
+            self._release_locks(session_id)
+            running.ended = True
+            try:
+                await self.switch(
+                    session_id, target, pending=running.request, reason=result.end_reason, echo=False
+                )
+                return
+            except Exception as exc:  # noqa: BLE001  fall back to showing the failure
+                result = result.model_copy(
+                    update={"error": f"{result.error} Moving to {target} failed: {exc}"}
+                )
+                running.ended = False
         if result.end_reason not in ("done", "stopped"):
             kind = (
                 result.end_reason

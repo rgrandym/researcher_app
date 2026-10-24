@@ -280,3 +280,66 @@ def test_failed_follow_up_still_ends_the_turn(root: Path) -> None:
         assert errors and "stage lookup failed" in errors[-1].data["text"]
 
     asyncio.run(go())
+
+
+def _accounts(*fixtures: list[str]) -> tuple[TurnManager, list[FakeProvider]]:
+    ids = ["claude-sub", "claude-second", "claude-api", "codex-plan"]
+    provs = [FakeProvider(i, f) for i, f in zip(ids, fixtures)]
+    config.save_settings({"fallback_order": ids})
+    return TurnManager({p.id: p for p in provs}), provs
+
+
+def test_signed_out_account_moves_to_next_plan(root: Path) -> None:
+    m, (first, second, api, _) = _accounts(
+        ["claude_auth.jsonl"], ["claude_subagent.jsonl"], ["claude_turn.jsonl"], ["codex_turn.jsonl"]
+    )
+
+    async def go() -> None:
+        s = sessions.create()
+        await m.send(s.id, "/research lithium prices", "claude-sub")
+        await _settle(m, s.id)
+        await _settle(m, s.id)
+        assert len(first.prompts) == 1 and len(second.prompts) == 1 and api.prompts == []
+        assert "/research lithium prices" in second.prompts[0][0]
+        s = sessions.load(s.id)
+        assert [seg.provider for seg in s.segments] == ["claude-sub", "claude-second"]
+        events = sessions.transcript(s.id)
+        assert [e.data["to"] for e in events if e.data.get("kind") == "failover"] == ["claude-second"]
+        assert [e.type for e in events].count("user") == 1  # the author's words appear once
+        assert not any(e.type == "error" for e in events)
+        assert events[-1].type == "done" and events[-1].data["end_reason"] == "done"
+
+    asyncio.run(go())
+
+
+def test_failover_tries_each_plan_once_and_skips_api_keys(root: Path) -> None:
+    m, (first, second, api, codex) = _accounts(
+        ["claude_auth.jsonl"], ["claude_auth.jsonl"], ["claude_turn.jsonl"], ["claude_network.jsonl"]
+    )
+    codex.runtime = "claude"  # replay the Claude network fixture through this plan
+    codex.stderr = "Error: connect ECONNREFUSED api.anthropic.com"
+
+    async def go() -> None:
+        s = sessions.create()
+        await m.send(s.id, "hello", "claude-sub")
+        for _ in range(4):
+            await _settle(m, s.id)
+        assert [len(p.prompts) for p in (first, second, api, codex)] == [1, 1, 0, 1]
+        errors = [e for e in sessions.transcript(s.id) if e.type == "error"]
+        assert len(errors) == 1 and errors[0].provider == "codex-plan"  # the last one shows
+
+    asyncio.run(go())
+
+
+def test_spent_plan_still_waits_for_the_author(root: Path) -> None:
+    m, (first, second, *_) = _accounts(
+        ["claude_limit.jsonl"], ["claude_turn.jsonl"], ["claude_turn.jsonl"], ["codex_turn.jsonl"]
+    )
+
+    async def go() -> None:
+        s = sessions.create()
+        await m.send(s.id, "hello", "claude-sub")
+        await _settle(m, s.id)
+        assert second.prompts == []
+
+    asyncio.run(go())

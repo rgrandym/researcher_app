@@ -145,8 +145,16 @@ added one has **Remove account**, which signs it out and takes it out of the app
 its folder on disk.
 
 **Order of use** in Models decides which account works first: new sessions start on the
-top entry, and when one runs out the app offers to continue on the next. It never switches
-by itself.
+top entry, and when one runs out the app offers to continue on the next; a spent plan is
+never switched by itself. An account that cannot run a turn at all (signed out, its sign-in
+refused, the network down) hands the turn to the next signed-in plan in the order, with a
+note in the transcript. Each account is tried once per message, and connections billed per
+token are skipped.
+
+An account stays signed in until **Sign out**. The app checks a signed-in account at most
+every ten minutes, a slow or failed check keeps the last answer, and every Claude Code
+process the app starts is asked to exit before it is ever killed, so a sign-in renewal in
+progress is never cut off.
 
 The agent can do the same from `app/`, when the author asks:
 
@@ -193,4 +201,4 @@ menu and are refused if typed; the list is empty by default.
 The app spends model tokens only when you send a turn. Titles, listings, stage status,
 handoff packets and limit detection are built by code. "Test" on a connection checks
 the binary and the sign-in; only "Send a test message" makes a model call. The app
-never switches provider by itself and never retries after a limit.
+never switches provider by itself after a limit and never retries one.

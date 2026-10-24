@@ -254,6 +254,20 @@ function HtmlPane({ run, version }: { run: string; version: number }) {
     });
   };
   const [exported, setExported] = useState<Exported | null>(null);
+  // Every export leaves a button per file in the toolbar until the author removes it.
+  const [allLinks, setAllLinks] = useState(() => prefs().export_links ?? {});
+  const links = allLinks[run] ?? [];
+  const [linkError, setLinkError] = useState("");
+  const setLinks = (next: string[]) => {
+    const all = { ...allLinks, [run]: next };
+    if (!next.length) delete all[run];
+    setAllLinks(all);
+    setPref("export_links", all);
+  };
+  const openLink = (path: string) => {
+    setLinkError("");
+    api.post("/api/exports/open", { path }).catch((e: Error) => setLinkError(`${path.split("/").pop()}: ${e.message}`));
+  };
   const [figuresOpen, setFiguresOpenState] = useState(() => prefs().figures_open ?? true);
   const setFiguresOpen = (open: boolean) => {
     setFiguresOpenState(open);
@@ -291,7 +305,10 @@ function HtmlPane({ run, version }: { run: string; version: number }) {
   });
   const exportRun = useMutation({
     mutationFn: (formats: string[]) => api.post<Exported>(`/api/runs/${encodeURIComponent(run)}/export`, { style, cite, formats }),
-    onSuccess: setExported,
+    onSuccess: (r) => {
+      setExported(r);
+      setLinks([...r.files, ...links.filter((f) => !r.files.includes(f))]);
+    },
   });
   const saveFigures = useMutation({
     mutationFn: () => api.post<{ saved: string[] }>(`/api/runs/${encodeURIComponent(run)}/figures/save`, { style, cite }),
@@ -321,6 +338,18 @@ function HtmlPane({ run, version }: { run: string; version: number }) {
         <button onClick={() => void rendered.refetch()} title="Render again" className="rounded-md p-1 text-faint hover:text-fg">
           <RefreshCw size="0.8125rem" className={clsx(rendered.isFetching && "animate-spin")} />
         </button>
+        {links.map((f) => (
+          <span key={f} className="flex items-center rounded-md border border-border hover:border-accent">
+            <button onClick={() => openLink(f)} title={`Open ${f}`} className="flex items-center gap-1 py-1 pl-2 pr-1">
+              <FileDown size="0.75rem" className="text-faint" />
+              {f.split("/").pop()}
+              <span className="text-faint">· {f.split("/").slice(-2, -1)[0]}</span>
+            </button>
+            <button onClick={() => setLinks(links.filter((x) => x !== f))} title="Remove this button (the file stays)" aria-label={`Remove ${f}`} className="py-1 pl-0.5 pr-1.5 text-faint hover:text-fg">
+              <X size="0.6875rem" />
+            </button>
+          </span>
+        ))}
         <div className="flex-1" />
         <div className="flex items-center rounded-md border border-border" aria-label="Report zoom">
           <button onClick={() => changeZoom(zoom - 10)} disabled={zoom <= 50} title="Zoom report out" aria-label="Zoom report out" className="p-1.5 disabled:opacity-40"><Minus size="0.8125rem" /></button>
@@ -341,8 +370,17 @@ function HtmlPane({ run, version }: { run: string; version: number }) {
         </button>
       </div>
       {appearanceNotice && <div className="border-b border-border px-4 py-1 text-[0.75rem] text-good">{appearanceNotice}</div>}
+      {linkError && (
+        <div className="flex items-center gap-2 border-b border-border px-4 py-1 text-[0.75rem] text-bad">
+          <span className="flex-1">Could not open {linkError}. Export again, or remove the button.</span>
+          <button onClick={() => setLinkError("")} title="Clear" aria-label="Clear" className="text-faint hover:text-fg"><X size="0.75rem" /></button>
+        </div>
+      )}
       {(exported || exportRun.isError) && (
-        <div className="border-b border-border px-4 py-2 text-[0.75rem]">
+        <div className="relative border-b border-border px-4 py-2 pr-9 text-[0.75rem]">
+          <button onClick={() => { setExported(null); exportRun.reset(); }} title="Clear this message" aria-label="Clear this message" className="absolute right-3 top-2 rounded p-0.5 text-faint hover:text-fg">
+            <X size="0.8125rem" />
+          </button>
           {exportRun.isError ? (
             <pre className="whitespace-pre-wrap text-bad">{(exportRun.error as Error).message}</pre>
           ) : (

@@ -145,22 +145,34 @@ class ProviderError(Exception):
     pass
 
 
-def kill_process_tree(proc: asyncio.subprocess.Process) -> None:
+def kill_process_tree(proc: asyncio.subprocess.Process, sig: int = signal.SIGKILL) -> None:
     """End a CLI and its tool children. Providers launch each CLI in its own process group."""
     if proc.returncode is not None:
         return
     if os.name == "posix":
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
+            os.killpg(proc.pid, sig)
             return
         except ProcessLookupError:
             return
         except OSError:
             pass
     try:
-        proc.kill()
+        proc.send_signal(sig)
     except ProcessLookupError:
         pass
+
+
+async def stop_process_tree(proc: asyncio.subprocess.Process, grace: float = 5) -> None:
+    """Ask a CLI to exit (SIGTERM) and kill it only if it is still there after `grace`.
+    Claude Code renews its sign-in from inside whichever process is running: killed
+    outright mid-renewal, it has spent the old refresh token without saving the new one,
+    and the account is signed out."""
+    kill_process_tree(proc, signal.SIGTERM)
+    try:
+        await asyncio.wait_for(proc.wait(), grace)
+    except TimeoutError:
+        kill_process_tree(proc)
 
 
 Billing = Literal["plan", "key"]
