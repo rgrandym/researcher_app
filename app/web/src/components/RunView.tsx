@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Check, Circle, Code2, Download, FileDown, FolderSearch, Minus, Palette, PanelRight, PanelRightClose, Pencil, Plus, RefreshCw, RotateCcw, Trash2, Upload, X } from "lucide-react";
+import { Check, Circle, Code2, Download, FileDown, FolderSearch, ListChecks, Minus, Palette, PanelRight, PanelRightClose, Pencil, Plus, RefreshCw, RotateCcw, Trash2, Upload, X } from "lucide-react";
 import Panel, { CENTER, PANELS } from "./Panel";
 import { api, ApiError, fileUrl, getText, q, renderedUrl } from "../lib/api";
 import { bytes, day } from "../lib/format";
@@ -14,6 +14,7 @@ import AppearancePanel from "./AppearancePanel";
 import type { AppearanceResponse, AppearanceValues } from "./AppearancePanel";
 import SessionView from "./SessionView";
 import CritiqueQuestionsDialog, { type CritiqueAnswers, type CritiqueQuestion } from "./CritiqueQuestionsDialog";
+import ChangesDialog, { type Subject } from "./ChangesDialog";
 
 const MarkdownEditor = lazy(() => import("./MarkdownEditor"));
 
@@ -453,6 +454,15 @@ export default function RunView({ name, file }: { name: string; file?: string })
   // The project's conversation, opened (or created) when the Chat tab is first shown.
   const [chat, setChat] = useState<string | null>(null);
   const [critiqueReview, setCritiqueReview] = useState<{ path: string; questions: CritiqueQuestion[] } | null>(null);
+  // Documents this project improves (revision runs), and the dialog where the author decides on their changes.
+  const subjects = useQuery({
+    queryKey: ["subjects", name],
+    queryFn: () => api.get<{ subjects: Subject[] }>(`/api/runs/${encodeURIComponent(name)}/subjects`),
+    refetchInterval: 15_000,
+  });
+  const [changesOpen, setChangesOpen] = useState(false);
+  const planned = (subjects.data?.subjects ?? []).filter((s) => s.role === "subject" && Object.keys(s.counts).length > 0);
+  const undecided = planned.reduce((n, s) => n + (s.counts.proposed ?? 0) + (s.counts.stale ?? 0), 0);
   const openChat = useMutation({
     mutationFn: (fresh: boolean) => api.post<SessionDetail>(`/api/runs/${encodeURIComponent(name)}/chat`, { new: fresh }),
     onSuccess: (s) => {
@@ -589,6 +599,11 @@ export default function RunView({ name, file }: { name: string; file?: string })
             </div>
             <div className="truncate text-[0.9375rem] font-medium">{name}</div>
           </div>
+          {planned.length > 0 && (
+            <button onClick={() => setChangesOpen(true)} title="Review the proposed changes to this project's documents" className={clsx("flex items-center gap-1 rounded-md border px-2.5 py-1 text-[0.75rem]", undecided ? "border-accent text-accent hover:bg-panel" : "border-border hover:border-accent")}>
+              <ListChecks size="0.8125rem" /> Changes{undecided ? ` · ${undecided} to decide` : ""}
+            </button>
+          )}
           <button onClick={() => void api.post(`/api/runs/${encodeURIComponent(name)}/vscode`)} className="flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-[0.75rem] hover:border-accent">
             <Code2 size="0.8125rem" /> VS Code
           </button>
@@ -748,6 +763,19 @@ export default function RunView({ name, file }: { name: string; file?: string })
           error={applyCritique.isError ? (applyCritique.error as Error).message : ""}
           onClose={() => setCritiqueReview(null)}
           onSubmit={(answers) => applyCritique.mutate({ path: critiqueReview.path, ...answers })}
+        />
+      )}
+      {changesOpen && subjects.data && (
+        <ChangesDialog
+          run={name}
+          subjects={subjects.data.subjects}
+          onClose={() => setChangesOpen(false)}
+          onStarted={(session) => {
+            setChangesOpen(false);
+            setChat(session);
+            setTab("chat");
+            void client.invalidateQueries({ queryKey: ["sessions"] });
+          }}
         />
       )}
     </div>

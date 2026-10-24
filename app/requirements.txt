@@ -6,6 +6,11 @@ pydantic>=2.5
 # What the workspace's scripts import when the app runs them, and the hooks they back
 matplotlib>=3.8
 weasyprint>=60
+# Revision runs: reading and editing Word, PowerPoint, Excel and PDF (subject.py, apply_changes.py)
+python-docx>=1.1
+python-pptx>=1.0
+openpyxl>=3.1
+pymupdf>=1.24
 # Tests
 pytest>=8
 httpx>=0.26

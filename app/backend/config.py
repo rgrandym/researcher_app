@@ -111,8 +111,14 @@ DEFAULT_SETTINGS: dict[str, Any] = {
                     "narrator",
                     "polish",
                     "brain_storm",
+                    "audit",
+                    "changes",
+                    "rebuild",
                 )
             },
+            # Applying accepted changes is mechanical (a script does the editing); the
+            # judgement was spent on the plan.
+            "revise": ["workhorse", "medium"],
             "figures": ["frontier", "medium"],
             "verify": ["workhorse", "medium"],
             "plagiarism": ["workhorse", "medium"],

@@ -120,6 +120,18 @@ figures appear beside it as PNG and SVG downloads. Export HTML and Export PDF wr
 source of every format; a save is refused if the file changed on disk meanwhile, and
 the HTML re-renders from the saved file. No model call is involved in any of this.
 
+## Improving supplied documents
+
+A project whose documents have a change plan (`/changes`) shows a **Changes** button.
+It opens the plan for each document (`backend/revision.py`, which loads the workspace's
+`subject.py` and `changes.py`): the text each change replaces, the new text, the reason
+and the sources. The author accepts, rejects or rewrites each change; the app writes only
+`subjects/<slug>/decisions.json`, binding each decision to the change it answered, so a
+change the agent edits afterwards comes back as `stale`. **Apply accepted changes**
+writes `deliverable/<slug>/request-*.json` (tracked or clean for Word, the name on
+tracked changes, notes) and starts `/revise`, or `/rebuild` for a PDF, in the project's
+conversation. Doctrine: `.claude/references/revision.md`.
+
 ## Claude accounts
 
 Models lists every Claude subscription the app can use. The default one runs from
@@ -154,7 +166,9 @@ in a different one, sign out of claude.ai in that browser first, then sign in ag
 Each turn's model and effort follow the command it starts with (`backend/router.py`).
 Research, drafting, critique and repair run on the frontier tier (Opus, `gpt-6-astra`);
 `/verify`, `/export` and plain chat on the workhorse tier (Sonnet, `gpt-6.1-sol`);
-`/app` questions on the fast tier (Haiku, `gpt-6-luna`). The maps are in Models
+`/app` questions on the fast tier (Haiku, `gpt-6-luna`). `/audit`, `/changes` and
+`/rebuild` run on the frontier tier; `/revise`, where a script does the editing, on
+the workhorse tier. The maps are in Models
 and in `app/data/settings.json` under `routing`; turning routing off returns every turn
 to the connection's own model and the effort meter. Each turn's route shows as a faint
 line in the transcript.

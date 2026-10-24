@@ -253,6 +253,16 @@ def expand_range(spec):
     return out
 
 
+def is_subject(run, rel):
+    """True when the run declared this file as the document it improves (subject.py)."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import subject
+        return any(i["path"] == rel and i["role"] == "subject" for i in subject.declared(run))
+    except Exception:            # an unreadable .run.json must not block indexing
+        return False
+
+
 def register(run, target, evidence, notes, summary, nothing_usable,
              leads=None, about_document=False):
     root = ext_dir(run)
@@ -279,7 +289,15 @@ def register(run, target, evidence, notes, summary, nothing_usable,
         sys.exit(f"ERROR {rel} is AI-generated. Register it with --leads N (how many "
                  f"claims you extracted for independent sourcing) and --notes, or "
                  f"--nothing-usable if it yielded none.")
-    if not ai and (leads is not None or about_document):
+    subj = is_subject(run, rel)
+    if subj and ids and not about_document:
+        sys.exit(
+            f"ERROR {rel} is the subject of this run: the document being improved. Its claims "
+            f"are what the run audits, so it cannot be their evidence.\n"
+            f"  A row may cite it only to say what the document states (\"the plan assumes a "
+            f"40% margin\"): register with --about-document. Claims about the world are "
+            f"sourced independently. See .claude/references/revision.md.")
+    if not ai and not subj and (leads is not None or about_document):
         sys.exit(f"ERROR --leads/--about-document apply only to files under "
                  f"{'/, '.join(sorted(AI_DIRS))}/. {rel} is a real document; give it "
                  f"--evidence or --nothing-usable.")
@@ -305,6 +323,10 @@ def register(run, target, evidence, notes, summary, nothing_usable,
         "summary": summary or ("no citable content" if nothing_usable else ""),
         **{k: v for k, v in describe(p, rel).items() if k in ("pages", "lines", "kind")},
     }
+    if subj:
+        rec["role"] = "subject"
+        if ids:
+            rec["evidence_scope"] = "about the document itself, not about the world"
     if ai:
         rec["leads"] = leads or 0
         rec["verification"] = "required: claims must be sourced independently"

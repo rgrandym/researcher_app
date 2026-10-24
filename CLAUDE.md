@@ -103,6 +103,12 @@ their source data. It runs only when the author types it; no other stage,
 `/plagiarism` scores a report's originality against its sources and the web and
 lists the passages to fix; it never edits the report.
 
+**Revision:** `/audit` → `/changes` → the author accepts → `/revise` (Word,
+PowerPoint, Excel, Markdown, edited in place) or `/rebuild` (a PDF, or a new
+design). It improves a document the author supplied in `external_data/`, keeping
+its citation system, styles, fonts, colours, tone and voice; nothing reaches the
+document until the author accepts it. Doctrine: `.claude/references/revision.md`.
+
 Each stage is a skill in `.claude/skills/`. Doctrine shared by several of them
 lives in `.claude/references/` and is **pointed to, never restated**: a rule
 written in five places gets reconciled rather than obeyed.
@@ -131,6 +137,7 @@ for word. A run you cannot trace back to what was asked cannot be audited.
 prompt.md  brief.md  voice.md  coverage.md  evidence.jsonl  blocked.jsonl
 notes/  external_data/  draft.md  verification.md  critique.md  repair-log.md
 report.md  figures/  rounds/rN/  export/<style>/  notebooks/
+subjects/<slug>/  deliverable/<slug>/vN/          (revision runs)
 ```
 
 Keep every intermediate file: they are the reason a claim can be defended six

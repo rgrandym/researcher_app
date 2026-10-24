@@ -900,6 +900,42 @@ python3 .claude/scripts/external_index.py show   outputs/<run> northwind/NW-200_
 
 ---
 
+## Improving a document you already have
+
+A business plan, an investor deck, a cash-flow model, a two-pager: put it in a project's `external_data/` and the workspace can research it, propose changes, and produce a new version that reads and looks like the original.
+
+```text
+/audit     what is right, wrong, stale, missing or weak, with evidence   → report.md
+/changes   a change plan you accept, reject or rewrite line by line
+/revise    a new version of a Word, PowerPoint, Excel or Markdown file
+/rebuild   a new file in the original's design, for a PDF or a new deck
+```
+
+**Name the document in the command.** `/audit the business plan and the cash flow in external_data, for UK angel investors` declares both files as the documents being improved. The audit verifies their claims, checks what a document of that kind needs for its readers, compares figures across the documents, and writes a cited report. `/changes add Activin A as the third target` skips the audit and works from your instruction.
+
+**You accept every change.** In the app, the project's **Changes** button opens the plan: each change shows the text it replaces, the new text, why, and its sources. Accept, reject, or rewrite it in your own words (your wording is used exactly). Then **Apply accepted changes**. For a Word document, choose tracked changes, which appear in Word's review pane under the name you give, or a clean copy. In VS Code, say it in chat ("accept all except C04") and the agent records exactly that. A change the agent edits after you accepted it comes back to you.
+
+**The original is never touched.** Each version is written to `deliverable/<document>/v1/`, `v2/` and so on, rebuilt from the untouched original every time.
+
+**It stays your document.**
+
+- **Citations** follow its system. A plan that links source names in parentheses gets linked source names in parentheses; a footnoted one gets footnotes; a numbered one gets the next number and a reference-list entry.
+- **Voice** follows the document: its "we", its way of writing "500,000 pounds" or "USD 9.7 billion", its terms.
+- **Formatting** comes from the document's own paragraphs, tables and slides. A check fails any version that uses a font, colour or style the original does not use, links to a page nobody fetched, or changes anything you did not accept.
+- **Spreadsheets** keep their formulas and charts, and recalculate when opened.
+
+**A PDF cannot be edited**, so `/rebuild` makes a new deck in its design: its fonts, colours, type sizes, images and motifs, read from the PDF and checked slide by slide against its pages. If you have the `.pptx` or `.docx` the PDF came from, add it instead: editing beats rebuilding.
+
+To copy a design without using a document's content, declare it as a template: put it in `external_data/template/`, or ask for it ("use the two-pager as the template").
+
+```bash
+python3 .claude/scripts/subject.py list   outputs/<run>          # documents declared, and their state
+python3 .claude/scripts/changes.py status outputs/<run>          # proposed, accepted, rejected, stale
+python3 .claude/scripts/run_check.py      outputs/<run> --deliver
+```
+
+---
+
 ## Tables and charts
 
 To improve the charts in a finished report, type `/figures` with what you want:

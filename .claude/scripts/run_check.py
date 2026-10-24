@@ -3,6 +3,7 @@
 
     python3 .claude/scripts/run_check.py <run>            # state of every stage
     python3 .claude/scripts/run_check.py <run> --ship     # exit 1 if not shippable
+    python3 .claude/scripts/run_check.py <run> --deliver  # exit 1 if a revised document is not ready
 
 A stage is judged by its artefact, and an artefact left as the scaffolded
 template counts as a stage that did not run. That distinction is the whole
@@ -41,6 +42,61 @@ def has_rows(md: str) -> bool:
         if any(c and not c.startswith("<") for c in cells):
             rows += 1
     return rows > 0
+
+
+def revision_stages(run, stage):
+    """Stages of a run that improves supplied documents (subject.py). They block only
+    under --deliver: the audit report ships on its own stages."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import changes
+        import subject
+        items = [i for i in subject.declared(run) if i["role"] == "subject"]
+    except Exception:
+        return []
+    if not items:
+        return []
+    missing = []
+
+    def row(label, results):
+        ok = all(r[0] for r in results)
+        detail = "; ".join(f"{slug}: {r[1]}" for slug, r in zip(slugs, results))
+        stage(label, ok, detail, blocking=False)
+        if not ok:
+            missing.append(label)
+
+    slugs = [i["slug"] for i in items]
+    sdir = {s: run / "subjects" / s for s in slugs}
+    row("subject", [((sdir[s] / "model.json").is_file(), "extracted" if (sdir[s] / "model.json").is_file()
+                     else "not extracted") for s in slugs])
+    plans, reviews, decided, built, checked, reviewed = [], [], [], [], [], []
+    for s in slugs:
+        rows = changes.states(run, s)
+        counts = {}
+        for _, st, _ in rows:
+            counts[st] = counts.get(st, 0) + 1
+        plan = sdir[s] / "changes.json"
+        plans.append((bool(rows), f"{len(rows)} change(s)" if rows else "no plan"))
+        rev = sdir[s] / "review.md"
+        fresh = rev.is_file() and plan.is_file() and rev.stat().st_mtime >= plan.stat().st_mtime
+        reviews.append((fresh, "independent review on file" if fresh else "plan not reviewed since it changed"))
+        waiting = counts.get("proposed", 0) + counts.get("stale", 0)
+        decided.append((bool(rows) and not waiting and counts.get("accepted", 0) > 0,
+                        ", ".join(f"{n} {k}" for k, n in sorted(counts.items())) or "nothing to decide"))
+        v = changes.latest_version(run, s)
+        built.append((v is not None, v.name if v else "not built"))
+        chk = changes.load_json(v / "check.json", {}) if v else {}
+        checked.append((bool(chk.get("ok")), "check passed" if chk.get("ok") else
+                        f"{len(chk.get('problems', []))} problem(s)" if chk else "never checked"))
+        reviewed.append((bool(v and (v / "review.md").is_file()), "reviewed" if v and (v / "review.md").is_file()
+                         else "not reviewed"))
+    row("plan", plans)
+    row("plan-review", reviews)
+    row("decided", decided)
+    row("deliverable", built)
+    row("deliverable-check", checked)
+    row("deliverable-review", reviewed)
+    return missing
 
 
 def check(run: Path, ship: bool) -> int:
@@ -116,11 +172,19 @@ def check(run: Path, ship: bool) -> int:
     stage("repair", bool(rep), ", ".join(rep) if rep
           else "findings never dispositioned")
 
+    deliver_missing = revision_stages(run, stage)
+
     width = max(len(s[0]) for s in stages)
     print(f"run: {run}")
     for label, ok, detail in stages:
         print(f"  {'ok ' if ok else 'MISSING'.ljust(3)} {label.ljust(width)}  {detail}")
 
+    if "--deliver" in sys.argv:
+        if deliver_missing:
+            print(f"\nNOT DELIVERABLE: {', '.join(deliver_missing)}")
+            return 1
+        print("\nEvery revised document has an accepted plan, a checked file and a review.")
+        return 0
     if not ship:
         return 0
     if missing:

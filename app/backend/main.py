@@ -29,7 +29,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Res
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from backend import accounts, activity, appearance, autoedits, config, edit_state, final_sections, keychain, render, sessions, usage, workspace
+from backend import accounts, activity, appearance, autoedits, config, edit_state, final_sections, keychain, render, revision, sessions, usage, workspace
 from backend.providers.base import Event, ProviderError
 from backend.turns import TurnManager
 
@@ -594,6 +594,72 @@ async def apply_critique(name: str, body: ApplyCritiqueBody) -> dict[str, str]:
         "Respect final sections, ask about any unresolved author decision before editing it, "
         "and record every finding's disposition."
     )
+    try:
+        await manager.send(session.id, prompt)
+    except ProviderError as exc:
+        raise _bad(exc, 409) from exc
+    return {"session": session.id}
+
+
+@app.get("/api/runs/{name}/subjects")
+def run_subjects(name: str) -> dict[str, Any]:
+    try:
+        return {"subjects": revision.subjects(name)}
+    except (FileNotFoundError, ValueError) as exc:
+        raise _bad(exc, 404) from exc
+
+
+@app.get("/api/runs/{name}/changes/{slug}")
+def run_changes(name: str, slug: str) -> dict[str, Any]:
+    try:
+        return revision.plan(name, slug)
+    except (FileNotFoundError, ValueError) as exc:
+        raise _bad(exc, 404) from exc
+
+
+class DecisionsBody(BaseModel):
+    decisions: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+
+@app.put("/api/runs/{name}/changes/{slug}/decisions")
+def save_decisions(name: str, slug: str, body: DecisionsBody) -> dict[str, Any]:
+    """The author's decisions on a change plan. Only the author writes them."""
+    if _run_busy(name):
+        raise HTTPException(409, "An agent is working on this project; decide once it has finished.")
+    try:
+        return revision.decide(name, slug, body.decisions)
+    except FileNotFoundError as exc:
+        raise _bad(exc, 404) from exc
+    except ValueError as exc:
+        raise _bad(exc, 400) from exc
+
+
+class ApplyChangesBody(BaseModel):
+    slug: str
+    mode: str = "tracked"
+    author: str = ""
+    notes: str = ""
+
+
+@app.post("/api/runs/{name}/apply-changes")
+async def apply_changes(name: str, body: ApplyChangesBody) -> dict[str, str]:
+    """Start /revise (or /rebuild for a PDF) on the accepted changes."""
+    if body.mode not in {"tracked", "clean"}:
+        raise HTTPException(400, "Choose tracked changes or a clean copy.")
+    if _run_busy(name):
+        raise HTTPException(409, "An agent is already working on this run.")
+    try:
+        _, prompt = revision.apply_request(name, body.slug, body.mode, body.author, body.notes)
+    except FileNotFoundError as exc:
+        raise _bad(exc, 404) from exc
+    except ValueError as exc:
+        raise _bad(exc, 400) from exc
+    session = sessions.for_project(name)
+    if session is None:
+        session = sessions.create(name)
+        session.project = name
+        session.runs = [name]
+        sessions.save(session)
     try:
         await manager.send(session.id, prompt)
     except ProviderError as exc:
