@@ -107,14 +107,87 @@ function placeComments(list: Comment[] | undefined, text: string, saved: boolean
   return out;
 }
 
-export function EditPane({ run, path, isMaster, onSaved, popout = false, onPopout }: {
+interface HandEdits {
+  pending: boolean;
+  sections: string[];
+  added: number;
+  removed: number;
+  notes: boolean;
+  auto: boolean;
+}
+
+/** Saved hand edits no agent has absorbed: keep them as written, or have the agent absorb them. */
+function HandEditsBar({ run, path, dirty, onAbsorb }: { run: string; path: string; dirty: boolean; onAbsorb?: (session: string) => void }) {
+  const client = useQueryClient();
+  const edits = useQuery({
+    queryKey: ["edits", run, path],
+    queryFn: () => api.get<HandEdits>(`/api/runs/${encodeURIComponent(run)}/edits?${q({ doc: path })}`),
+    refetchInterval: 10_000,
+  });
+  const [note, setNote] = useState("");
+  const keep = useMutation({
+    mutationFn: () => api.post<{ learned: string[] }>(`/api/runs/${encodeURIComponent(run)}/edits/keep`, { doc: path }),
+    onSuccess: () => {
+      setNote("Kept as written. No agent turn ran; your text is now the baseline the next round works from.");
+      void client.invalidateQueries({ queryKey: ["edits", run, path] });
+    },
+  });
+  const absorb = useMutation({
+    mutationFn: () => api.post<{ session: string }>(`/api/runs/${encodeURIComponent(run)}/edits/absorb`, { doc: path }),
+    onSuccess: (r) => {
+      setNote("Started /user-edits in the project's Chat tab.");
+      void client.invalidateQueries({ queryKey: ["edits", run, path] });
+      onAbsorb?.(r.session);
+    },
+  });
+  const e = edits.data;
+  if (!e?.pending) {
+    return note ? <div className="border-b border-border px-4 py-1.5 text-[0.75rem] text-good">{note}</div> : null;
+  }
+  const busy = keep.isPending || absorb.isPending;
+  const where = e.sections.length ? e.sections.slice(0, 4).join(", ") + (e.sections.length > 4 ? ` and ${e.sections.length - 4} more` : "") : "the document";
+  return (
+    <div className="border-b border-border bg-panel/60 px-4 py-2 text-[0.75rem]">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="h-2 w-2 shrink-0 rounded-full bg-warn" />
+        <span className="min-w-0 flex-1">
+          Your edits since the agent last wrote: <span className="font-medium">{where}</span>
+          <span className="text-faint"> · +{e.added} / −{e.removed} words</span>
+        </span>
+        <button
+          onClick={() => keep.mutate()}
+          disabled={dirty || busy}
+          title={dirty ? "Save first" : "For finished, precise edits: closes them by script, with no agent turn"}
+          className={clsx("rounded-md px-2.5 py-1 disabled:opacity-40", e.notes ? "border border-border hover:border-accent" : "bg-accent text-white")}
+        >
+          {keep.isPending ? "Keeping…" : "Keep as written"}
+        </button>
+        <button
+          onClick={() => absorb.mutate()}
+          disabled={dirty || busy}
+          title={dirty ? "Save first" : "For notes, stubs and inserted pieces: /user-edits works them into the document"}
+          className={clsx("rounded-md px-2.5 py-1 disabled:opacity-40", e.notes ? "bg-accent text-white" : "border border-border hover:border-accent")}
+        >
+          {absorb.isPending ? "Starting…" : "Absorb with the agent"}
+        </button>
+      </div>
+      {e.notes && <div className="mt-1 text-muted">Part of what you added reads like a note for the agent, so absorbing it is suggested.</div>}
+      {dirty && <div className="mt-1 text-muted">Save first: these act on the saved file.</div>}
+      {(keep.isError || absorb.isError) && <pre className="mt-1 whitespace-pre-wrap text-bad">{((keep.error ?? absorb.error) as Error).message}</pre>}
+    </div>
+  );
+}
+
+export function EditPane({ run, path, isMaster, onSaved, popout = false, onPopout, onAbsorb }: {
   run: string;
   path: string;
   isMaster: boolean;
   onSaved: () => void;
   popout?: boolean;
   onPopout?: () => void;
+  onAbsorb?: (session: string) => void;
 }) {
+  const client = useQueryClient();
   const kept = place(run).drafts[path];
   const [text, setText] = useState(kept?.text ?? "");
   const [original, setOriginal] = useState(kept?.original ?? "");
@@ -193,7 +266,8 @@ export function EditPane({ run, path, isMaster, onSaved, popout = false, onPopou
     onSuccess: (r) => {
       setMtime(r.mtime);
       setOriginal(text);
-      setMessage("Saved. The HTML view re-renders from this file. A minute after your last save, an agent absorbs the edit into the report (/user-edits) by itself.");
+      setMessage("Saved. The HTML view re-renders from this file.");
+      void client.invalidateQueries({ queryKey: ["edits", run, path] });
       onSaved();
       post({ type: "saved", run, path });
       void finalSections.refetch();
@@ -256,6 +330,7 @@ export function EditPane({ run, path, isMaster, onSaved, popout = false, onPopou
         </div>
       )}
       {setFinal.isError && <div className="border-b border-border px-4 py-1 text-[0.75rem] text-bad">{(setFinal.error as Error).message}</div>}
+      {isMaster && <HandEditsBar run={run} path={path} dirty={dirty} onAbsorb={onAbsorb} />}
       <div className="relative flex min-h-0 flex-1">
         <div className={`min-h-0 ${CENTER}`}>
           {path.endsWith(".md") ? (
@@ -1201,6 +1276,11 @@ export default function RunView({ name, file }: { name: string; file?: string })
               onSaved={onSaved}
               onPopout={() => {
                 if (openPopout(name, editing)) setTab("html");
+              }}
+              onAbsorb={(session) => {
+                setChat(session);
+                setTab("chat");
+                void client.invalidateQueries({ queryKey: ["sessions"] });
               }}
             />
           ))}

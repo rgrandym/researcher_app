@@ -94,6 +94,21 @@ The workspace records a hash of every section when it finishes a round, so it ca
 tell your edits from its own and prove that later work left the rest of the
 document alone.
 
+### Keep as written, or absorb with the agent
+
+Most hand edits need no agent: a corrected figure, a reworded sentence, a cut you have already tidied. Some do: a note such as *"say something about core facilities here"*, a rough sentence, or a fragment pasted in to be worked into the text. The app treats the two differently, and you choose.
+
+After you save in the app's **Edit** tab, a bar shows what you changed since an agent last wrote: the sections and the number of words added and removed. It offers two buttons:
+
+- **Keep as written** is for finished, precise edits. Your text stands exactly as saved and no agent turn runs. The app closes the edit with the same mechanical steps a `/user-edits` round ends with: it files your finished prose for style learning, checks citations, figures and your writing rules, and records your text as the baseline the next agent round starts from. If the edit broke something those checks catch, such as a figure whose values no longer match its categories, nothing is kept and the bar shows what failed; fix it, or absorb it with the agent.
+- **Absorb with the agent** is for notes, stubs and inserted pieces. It starts `/user-edits` in the project's Chat tab, which works your additions into the document as described below.
+
+When part of what you added reads like a note for the agent (a TODO, a line starting "Add", "Say", "Expand" or "Check", or text in `[[ ]]`), the bar says so and suggests absorbing.
+
+You do not have to decide after every save. Saves add up: the bar covers everything since the agent last wrote, so a day of small edits can be kept, or absorbed, in one go. Edits made in VS Code show in the bar too.
+
+The app no longer runs `/user-edits` after every save by itself, because each run is an agent turn. To have it do so, turn on **Absorb every save automatically** under Models.
+
 **A `/user-edits` round is an editing round.** It takes what you wrote as it
 stands and repairs the document around it: grammar, sentence flow, the
 transitions between paragraphs, repeated words, reference and exhibit numbers,
@@ -709,7 +724,7 @@ Two halves, and they work differently:
 - **Rules you state** live in `.claude/voice/profile.md`, and the ones a script can check are enforced mechanically through patterns in `.claude/voice/rules.py`, on top of the house rules in `voice.py`. Tell the agent a new rule and ask it to record it; a rule that lives only in a conversation is lost by the next session.
 - **Cadence it observes** is measured from your own sentences: how often you reach for a semicolon, how long your sentences run, how much you bold. This is reported, never enforced, because cadence is a tendency rather than a rule.
 
-The loop runs by itself. An agent writes, then records what it wrote. You edit the document by hand. The next time `/user-edits` runs, it separates your sentences from the agent's, files yours into a corpus, and re-measures. Over a few rounds the cadence targets move toward you.
+The loop runs by itself. An agent writes, then records what it wrote. You edit the document by hand. The next time `/user-edits` runs, or you choose **Keep as written**, your sentences are separated from the agent's and filed into a corpus, and the targets are re-measured. Over a few rounds the cadence targets move toward you.
 
 Two things to know about it:
 

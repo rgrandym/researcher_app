@@ -788,6 +788,51 @@ class RunFileBody(BaseModel):
     mtime: float | None = None
 
 
+@app.get("/api/runs/{name}/edits")
+def hand_edits(name: str, doc: str | None = None) -> dict[str, Any]:
+    """What the author changed by hand since the last agent write, for the Edit tab."""
+    try:
+        return autoedits.status(name, _doc(name, doc))
+    except (FileNotFoundError, ValueError) as exc:
+        raise _bad(exc, 404 if isinstance(exc, FileNotFoundError) else 400) from exc
+
+
+class EditsBody(BaseModel):
+    doc: str | None = None
+
+
+@app.post("/api/runs/{name}/edits/keep")
+async def keep_edits(name: str, body: EditsBody) -> dict[str, Any]:
+    """Keep the author's edit as written: closed by script, no agent turn."""
+    if _run_busy(name):
+        raise HTTPException(409, "An agent is working on this run. Try when its turn finishes.")
+    try:
+        target = _doc(name, body.doc)
+        result = await asyncio.to_thread(autoedits.keep, name, target)
+        return {**result, "status": autoedits.status(name, target)}
+    except autoedits.KeepRefused as exc:
+        raise _bad(exc, 422) from exc
+    except (FileNotFoundError, ValueError, subprocess.TimeoutExpired) as exc:
+        raise _bad(exc) from exc
+
+
+@app.post("/api/runs/{name}/edits/absorb")
+async def absorb_edits(name: str, body: EditsBody) -> dict[str, Any]:
+    """Start /user-edits on the author's edit, in the project's conversation."""
+    if _run_busy(name):
+        raise HTTPException(409, "An agent is working on this run. Try when its turn finishes.")
+    try:
+        master = workspace.run_file(name, _doc(name, body.doc))
+        if not autoedits.status(name, master.name)["pending"]:
+            raise ValueError("There is no unabsorbed edit to absorb.")
+        session = await watcher.absorb(name, master, master.stat().st_mtime, asked=True)
+    except ProviderError as exc:
+        raise _bad(exc, 409) from exc
+    except (FileNotFoundError, ValueError) as exc:
+        raise _bad(exc) from exc
+    return {"session": session}
+
+
 @app.get("/api/runs/{name}/final-sections")
 def run_final_sections(name: str) -> list[dict[str, str | bool]]:
     try:

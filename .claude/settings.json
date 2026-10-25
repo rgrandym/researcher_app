@@ -1,4 +1,48 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(python3 .claude/scripts/*)",
+      "Bash(python3 -)",
+      "Bash(curl -s -X POST -H 'X-App-Token: __TRACKED_VAR__' http://127.0.0.1:58111/api/restart)",
+      "Bash(uv run *)"
+    ],
+    "ask": [
+      "Bash(rm *)",
+      "Bash(rmdir *)",
+      "Bash(unlink *)",
+      "Bash(trash *)",
+      "Bash(shred *)",
+      "Bash(git rm *)",
+      "Bash(git clean *)",
+      "Bash(find * -delete*)",
+      "Bash(find * -exec rm *)",
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(git push * --force*)",
+      "Bash(git push * -f*)",
+      "Bash(git reset --hard*)",
+      "Bash(git reset * --hard*)",
+      "Bash(*DROP TABLE*)",
+      "Bash(*DROP DATABASE*)",
+      "Bash(*TRUNCATE*)",
+      "Bash(*drop table*)",
+      "Bash(*drop database*)",
+      "Bash(*truncate table*)",
+      "Bash(supabase db reset*)",
+      "Bash(vercel --prod*)",
+      "Bash(vercel * --prod*)",
+      "Bash(chmod -R 777*)",
+      "Bash(chmod * 777*)",
+      "Bash(sh)",
+      "Bash(bash)",
+      "Bash(zsh)",
+      "Bash(sh -s*)",
+      "Bash(bash -s*)"
+    ]
+  },
+  "skillOverrides": {
+    "anthropic-skills:deep-research": "user-invocable-only"
+  },
   "hooks": {
     "PostToolUse": [
       {
@@ -13,9 +57,6 @@
         ]
       }
     ]
-  },
-  "skillOverrides": {
-    "anthropic-skills:deep-research": "user-invocable-only"
   },
   "statusLine": {
     "type": "command",
@@ -54,43 +95,5 @@
         "repo": "OneWave-AI/claude-code-mods"
       }
     }
-  },
-  "permissions": {
-    "allow": [
-      "Bash(python3 .claude/scripts/*)"
-    ],
-    "ask": [
-      "Bash(rm *)",
-      "Bash(rmdir *)",
-      "Bash(unlink *)",
-      "Bash(trash *)",
-      "Bash(shred *)",
-      "Bash(git rm *)",
-      "Bash(git clean *)",
-      "Bash(find * -delete*)",
-      "Bash(find * -exec rm *)",
-      "Bash(git push --force*)",
-      "Bash(git push -f*)",
-      "Bash(git push * --force*)",
-      "Bash(git push * -f*)",
-      "Bash(git reset --hard*)",
-      "Bash(git reset * --hard*)",
-      "Bash(*DROP TABLE*)",
-      "Bash(*DROP DATABASE*)",
-      "Bash(*TRUNCATE*)",
-      "Bash(*drop table*)",
-      "Bash(*drop database*)",
-      "Bash(*truncate table*)",
-      "Bash(supabase db reset*)",
-      "Bash(vercel --prod*)",
-      "Bash(vercel * --prod*)",
-      "Bash(chmod -R 777*)",
-      "Bash(chmod * 777*)",
-      "Bash(sh)",
-      "Bash(bash)",
-      "Bash(zsh)",
-      "Bash(sh -s*)",
-      "Bash(bash -s*)"
-    ]
   }
 }

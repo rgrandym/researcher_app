@@ -455,6 +455,17 @@ export default function ModelsView() {
             </section>
 
             <section>
+              <h2 className="mb-1 text-[0.875rem] font-medium">Your hand edits</h2>
+              <p className="mb-2 text-[0.7812rem] text-muted">
+                Off: after you save, the Edit tab offers Keep as written (no model call) or Absorb with the agent (/user-edits). On: every save starts /user-edits by itself once the file has been quiet for a minute, which costs an agent turn each time.
+              </p>
+              <label className="flex items-center gap-2 text-[0.8125rem]">
+                <input type="checkbox" checked={Boolean(s.auto_user_edits?.enabled)} onChange={(e) => void put({ auto_user_edits: { quiet_seconds: s.auto_user_edits?.quiet_seconds ?? 60, enabled: e.target.checked } })} />
+                Absorb every save automatically
+              </label>
+            </section>
+
+            <section>
               <h2 className="mb-1 text-[0.875rem] font-medium">Hand over early</h2>
               <p className="mb-2 text-[0.7812rem] text-muted">When a plan window passes this share after a turn, the app offers to hand over before the provider fails mid-step.</p>
               <NumberField label="Offer at" value={s.handover_threshold} onChange={(v) => void put({ handover_threshold: v })} suffix="% used" />

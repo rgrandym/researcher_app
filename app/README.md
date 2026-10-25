@@ -122,6 +122,17 @@ Markdown, the source of every format; a save is refused if the file changed on d
 meanwhile, and the HTML re-renders from the saved file. No model call is involved in any
 of this.
 
+**Hand edits** (`backend/autoedits.py`). When a master has saves no agent has absorbed (it is
+newer than its `.voice-mirror-*`, or the app's edit record is pending), the Edit tab shows
+what changed and offers **Keep as written** (`POST /api/runs/{name}/edits/keep`) or **Absorb
+with the agent** (`.../edits/absorb`, which sends `/user-edits` to the project's
+conversation). Keep runs the closing steps of a `/user-edits` round by script, with no model
+call: `edit_state capture`, then `audit_citations`, `figures check` and `voice lint` (a check
+that fails now but passed on the pre-edit baseline refuses the keep), then `voice learn`,
+`section_guard snapshot`, `voice mark`, `edit_state acknowledge` and `voice profile
+--rebuild`. Added text that reads like notes for the agent is flagged. The old behaviour,
+`/user-edits` after every quiet save, is `auto_user_edits.enabled` (Models), off by default.
+
 **Comments** (`backend/comments.py`). In the HTML tab, select text and choose Comment, or
 open Comments and click a figure or a table. A comment is kept in `<run>/.comments.json`,
 never in the master, anchored to the Markdown it covers and to the text either side, so it

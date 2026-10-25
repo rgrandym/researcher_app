@@ -79,9 +79,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "activity_open": True,
         "run_panel_open": True,
     },
-    # A hand edit saved to a run's master (here or in VS Code) starts /user-edits by itself,
-    # once the file has been quiet this long and no agent is working on the run.
-    "auto_user_edits": {"enabled": True, "quiet_seconds": 60},
+    # When on, a hand edit saved to a run's master (here or in VS Code) starts /user-edits by
+    # itself, once the file has been quiet this long and no agent is working on the run. Off:
+    # the Edit tab offers Keep as written (no model call) or Absorb with the agent.
+    "auto_user_edits": {"enabled": False, "quiet_seconds": 60},
     # Workspace commands this app does not offer: they leave the menu, and a typed one is
     # refused. Empty by default.
     "hidden_commands": [],

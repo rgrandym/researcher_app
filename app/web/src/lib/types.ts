@@ -166,6 +166,7 @@ export interface Settings {
   routing: Routing;
   staged_pipeline: boolean;
   permission_mode: string;
+  auto_user_edits: { enabled: boolean; quiet_seconds: number };
 }
 
 export type Tier = "frontier" | "workhorse" | "fast";
