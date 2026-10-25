@@ -79,6 +79,9 @@ def claude_binary() -> str | None:
 # ------------------------------------------------------------------ parsing
 
 
+# What a question turn cannot use: writing, running commands, subagents and skills.
+READ_ONLY_OFF = ("Write", "Edit", "MultiEdit", "NotebookEdit", "Bash", "Agent", "Task", "Skill", "SlashCommand")
+
 class ClaudeParser:
     """Normalises one turn's stream-json messages into `Event`s."""
 
@@ -389,6 +392,8 @@ class ClaudeProvider:
                 "--disallowedTools",
                 "WebSearch,WebFetch,Bash,Write",
             ]
+        elif options.read_only:
+            cmd += ["--disallowedTools", ",".join(READ_ONLY_OFF)]
         if options.ask_rules:
             cmd += ["--settings", json.dumps({"permissions": {"ask": options.ask_rules}})]
         if options.system_append:

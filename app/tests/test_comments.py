@@ -269,3 +269,38 @@ def test_a_caption_below_its_table_still_names_and_styles_it(root: Path) -> None
         body = z.read("word/document.xml").decode()
     first_table = body[body.index("<w:tbl>") : body.index("</w:tbl>")]
     assert 'w:fill="0F4C81"' in first_table
+
+
+@pytest.mark.skipif(not shutil.which("pandoc"), reason="pandoc not installed")
+def test_highlights_show_in_the_app_and_stay_out_of_exports(root: Path) -> None:
+    _report(root)
+    mark = comments.create(
+        RUN,
+        "report.md",
+        "",
+        "R G",
+        selection={"text": "Producers expect the decline"},
+        highlight=True,
+        color="green",
+    )
+    assert mark["type"] == "highlight" and mark["text"] == ""
+    with pytest.raises(ValueError):
+        comments.create(
+            RUN,
+            "report.md",
+            "",
+            "",
+            selection={"text": "spot prices"},
+            highlight=True,
+            color="purple",
+        )
+    note = comments.create(RUN, "report.md", "Why?", "", selection={"text": "costs less each year"})
+    html = Path(render.preview(RUN, None, "meridian", False)["html"]).read_text()
+    assert f'<mark class="hl hl-green" data-c="{mark["id"]}">' in html
+    assert html.count('class="cmt-note"') == 1 and "hl-start" not in html
+    result = render.export(RUN, None, "meridian", False, ["docx", "html"])
+    assert result["comments"] == 1
+    exported = (root / next(f for f in result["files"] if f.endswith(".html"))).read_text()
+    assert mark["id"] not in exported and note["id"] in exported
+    # Words turn a highlight into a comment.
+    assert comments.update(RUN, mark["id"], text="Check this")["type"] == "comment"

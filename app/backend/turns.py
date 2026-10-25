@@ -72,6 +72,20 @@ def stage_missing(run: str, stage: str) -> list[str]:
     return missing
 
 
+QUESTION = (
+    "The author sent this message without a command, so it is a question: answer it "
+    "directly and briefly. Use what you know, the project's files (Read, Grep, Glob) and at "
+    "most a few web searches. This turn cannot write or edit files, run commands, start "
+    "subagents or load skills; those tools are switched off. Do not resume a task from "
+    "earlier in this conversation. If the question needs research or a change to the "
+    "document, say so in one line and name the command that would do it (/research, "
+    "/expand, /verify, /repair, /user-edits), /do for a one-off task, or /continue to resume "
+    "the work in progress."
+)
+CONTINUE = "continue"
+DO = "do"  # a one-off task with every tool, on the chat route: "/do make the headers lighter"
+
+
 def project_note(run: str) -> str:
     """What a new agent conversation opened from a project's Chat tab is told."""
     master = ""
@@ -326,8 +340,9 @@ class TurnManager:
         if not prompt:
             return
         # A failover carries words already shown in the transcript: route on them, unechoed.
+        # A handoff packet carries work in progress: it is never a question.
         await self._start(
-            session, seg, prompt, user_text=pending if echo else None, route_text=pending
+            session, seg, prompt, user_text=pending if echo else None, route_text=pending, work=bool(packet)
         )
 
     def _segment(self, connection: str, settings: dict[str, Any]) -> Segment:
@@ -380,6 +395,7 @@ class TurnManager:
         prompt: str,
         user_text: str | None,
         route_text: str | None = None,
+        work: bool = False,
     ) -> None:
         conflict = self._take_locks(session)
         if conflict:
@@ -397,11 +413,11 @@ class TurnManager:
         # The route follows the author's own words; a handoff packet wrapped around them
         # does not change which command they typed.
         route_text = route_text or (user_text if user_text is not None else prompt)
-        running.task = asyncio.create_task(self._run(session.id, prompt, running, route_text))
+        running.task = asyncio.create_task(self._run(session.id, prompt, running, route_text, work))
         await self.hub.publish(session.id, {"type": "state", "running": True})
 
     async def _run(
-        self, session_id: str, prompt: str, running: Running, route_text: str = ""
+        self, session_id: str, prompt: str, running: Running, route_text: str = "", work: bool = False
     ) -> None:
         session = sessions.load(session_id)
         seg = session.current()
@@ -410,7 +426,16 @@ class TurnManager:
         running.request = route_text or prompt
         # Model and effort as set now, so a change between turns (Models, the routing
         # table, the effort meter) applies to the next turn on either provider.
-        picked = await self._route(provider, seg.provider, route_text, seg.route_key)
+        # Only a command starts work. /continue resumes the command this conversation was
+        # working on; any other message without a command is a question, answered read-only.
+        continuing = router.command_of(route_text) == CONTINUE
+        doing = router.command_of(route_text) == DO
+        question = not (continuing or doing or work) and router.command_of(route_text) is None and route_text == prompt
+        if continuing and route_text == prompt:
+            prompt = route_text.strip()[len(CONTINUE) + 1 :].strip() or "Carry on with the task in progress."
+        if doing and route_text == prompt:
+            prompt = route_text.strip()[len(DO) + 1 :].strip() or "Ask the author what to do."
+        picked = await self._route(provider, seg.provider, route_text, seg.route_key if continuing else "")
         seg.model, seg.effort = picked.model, picked.effort
         # A typed command starts a fresh native session, unless the author's words arrive
         # inside a handoff packet: that packet is the context the new agent needs.
@@ -430,13 +455,20 @@ class TurnManager:
                     f"\n\n(This app session has worked on {runs}. "
                     "Use it if the command names no run.)"
                 )
-        if session.project and native is None and route_text == prompt:
+        if session.project and native is None and (route_text == prompt or continuing):
             prompt += project_note(session.project)
+        if question and router.runtime_of(seg.provider) == "codex":
+            prompt += f"\n\n({QUESTION})"  # Codex takes no system note; its sandbox is read-only
         if picked.command and picked.key == "research-pipeline":
             prompt = self._stage_pipeline(session, route_text, prompt)
         sessions.save(session)
         if picked.key:
-            label = "Chat" if picked.key == "chat" else f"/{picked.key}"
+            label = (
+                "Question (read-only)" if question
+                else "/do" if doing
+                else "Chat" if picked.key == "chat"
+                else f"/{picked.key}"
+            )
             if picked.key != "chat" and not picked.command:
                 label += " (continued)"
             at = f" at {picked.effort} effort" if picked.effort else ""
@@ -456,6 +488,8 @@ class TurnManager:
             effort=seg.effort,
             permission_mode=str(config.load_settings().get("permission_mode") or ""),
             ask_rules=[str(r) for r in config.load_settings().get("ask_rules") or []],
+            read_only=question,
+            system_append=QUESTION if question else "",
         )
         if seg.provider.startswith("codex") and seg.native_session_id and activity.cap_reached(seg):
             options.web_off = True
@@ -578,19 +612,24 @@ class TurnManager:
         events = sessions.transcript(session_id)
         prefix = "The author clicked Retry for the previous prompt."
         old_prefix = "Carry on with the task from before; its last attempt ended before it finished."
+        def own(text: str) -> str:
+            return text[len(CONTINUE) + 2 :] if text.startswith(f"/{CONTINUE} ") else text
+
         last = next(
             (
                 e for e in reversed(events)
                 if e.type == "user"
-                and not str(e.data.get("text") or "").startswith((prefix, old_prefix))
+                and not own(str(e.data.get("text") or "")).startswith((prefix, old_prefix))
             ),
             None,
         )
         if last is None:
             raise ProviderError("There is no prompt to retry in this session.")
-        request = str(last.data.get("text") or "")
+        request = own(str(last.data.get("text") or ""))
+        # A retried command resumes its work; a retried question stays a question.
         text = (
-            prefix + " "
+            (f"/{CONTINUE} " if router.command_of(request) else "")
+            + prefix + " "
             "Re-read the current command instructions. Reassess the request against "
             "the current state, finish what remains, and "
             "avoid repeating completed steps or creating duplicate rounds."
@@ -765,7 +804,7 @@ class TurnManager:
         if missing:
             await note(
                 f"Waiting on you: the {stage} stage is not complete yet "
-                f"(missing: {', '.join(missing)}). Reply to continue it."
+                f"(missing: {', '.join(missing)}). Reply with /continue to carry it on; a message without it is answered as a question."
             )
             return None
         i = PIPELINE.index(stage)

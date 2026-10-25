@@ -140,7 +140,24 @@ async def stop_all_turns() -> dict[str, Any]:
 @app.get("/api/commands")
 def commands() -> list[dict[str, str]]:
     hidden = set(config.load_settings().get("hidden_commands") or [])
-    return [c for c in workspace.commands() if c["name"] not in hidden]
+    # The app's own command: a message without a command is a read-only question (turns.py).
+    own = [
+        {
+            "name": "continue",
+            "description": "Resume the work in progress (the last command's task) with your reply. "
+            "A message without a command is answered as a quick, read-only question.",
+            "kind": "app",
+            "path": "",
+        },
+        {
+            "name": "do",
+            "description": "Carry out a one-off task that no other command covers (make a style, "
+            "fix a table header), with every tool, on the chat model.",
+            "kind": "app",
+            "path": "",
+        },
+    ]
+    return sorted([*(c for c in workspace.commands() if c["name"] not in hidden), *own], key=lambda c: c["name"])
 
 
 @app.get("/api/guide", response_class=PlainTextResponse)
@@ -1024,12 +1041,16 @@ class CommentBody(BaseModel):
     author: str = ""
     selection: dict[str, Any] | None = None
     element: dict[str, Any] | None = None
+    highlight: bool = False
+    color: str = "yellow"
 
 
 @app.post("/api/runs/{name}/comments")
 def add_comment(name: str, body: CommentBody) -> dict[str, Any]:
     try:
-        return comments.create(name, _doc(name, body.doc), body.text, body.author, body.selection, body.element)
+        return comments.create(
+            name, _doc(name, body.doc), body.text, body.author, body.selection, body.element, body.highlight, body.color
+        )
     except (FileNotFoundError, ValueError) as exc:
         raise _bad(exc) from exc
 
@@ -1037,12 +1058,13 @@ def add_comment(name: str, body: CommentBody) -> dict[str, Any]:
 class CommentPatch(BaseModel):
     text: str | None = None
     resolved: bool | None = None
+    color: str | None = None
 
 
 @app.patch("/api/runs/{name}/comments/{cid}")
 def edit_comment(name: str, cid: str, body: CommentPatch) -> dict[str, Any]:
     try:
-        return comments.update(name, cid, body.text, body.resolved)
+        return comments.update(name, cid, body.text, body.resolved, body.color)
     except FileNotFoundError as exc:
         raise _bad(exc, 404) from exc
     except ValueError as exc:

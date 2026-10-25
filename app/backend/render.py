@@ -171,6 +171,7 @@ def build(
     figures_dir: Path,
     with_comments: bool = True,
     text: str | None = None,
+    with_highlights: bool = False,
 ) -> dict[str, Any]:
     """Render one document into `out`: <stem>.md (reader copy), style.css, <stem>.html.
     With `text`, renders that in place of the saved document (the editor's unsaved copy)."""
@@ -192,7 +193,7 @@ def build(
         effective_path.write_text(json.dumps(custom))
         style_arg = str(effective_path)
     stem = "report" if src.name in ("report.md", "draft.md") else src.stem
-    noted = comments.open_for(run_name, master.name) if with_comments else []
+    noted = comments.open_for(run_name, master.name, with_comments, with_highlights)
     py = config.python()
     styled = out / "_styled.md"
     reader = out / f"{stem}.md"
@@ -314,7 +315,7 @@ def build(
         "source": src,
         "style_arg": style_arg,
         "cited": cited,
-        "comments": len(placed),
+        "comments": sum(1 for c in placed.values() if not comments.is_highlight(c)),
         "table_ids": table_ids,
         "table_sides": sides,
         "table_overrides": table_overrides,
@@ -395,7 +396,7 @@ def preview(run_name: str, doc: str | None, style: str, cite: bool) -> dict[str,
             return {**meta, "figures": figures(cache / "figures"), "cached": True}
     except (OSError, ValueError, KeyError):
         pass
-    result = build(run_name, doc, style, cite, cache / "out", cache / "figures")
+    result = build(run_name, doc, style, cite, cache / "out", cache / "figures", with_highlights=True)
     meta = {
         "source": src.name,
         "appearance_hash": appearance_hash,
@@ -418,7 +419,9 @@ def live(run_name: str, doc: str | None, style: str, cite: bool, text: str) -> d
     base = _cache(run_name, style, cite) / "live"
     lock = _live_locks.setdefault(f"{run_name}/{style}/{cite}", threading.Lock())
     with lock:
-        result = build(run_name, doc, style, cite, base / "out", base / "figures", text=text)
+        result = build(
+            run_name, doc, style, cite, base / "out", base / "figures", text=text, with_highlights=True
+        )
     return {
         "source": result["source"].name,
         "built": time.time(),

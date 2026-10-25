@@ -20,6 +20,8 @@ export interface Prefs {
   export_links?: Record<string, string[]>;
   // The name on comments, as Word shows it.
   comment_author?: string;
+  // The highlight colour last used, offered first.
+  highlight_color?: string;
   // Whether exports carry the comments (Word comments, PDF footnotes, HTML highlights).
   export_comments?: boolean;
   // Each project's place (lib/places) and the view last open, to resume the next session there.

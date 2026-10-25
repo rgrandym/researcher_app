@@ -130,7 +130,9 @@ dropped. The Edit tab highlights each commented passage and lists the comments b
 text; a click in either view finds the comment in the other. At render time open comments
 become pandoc comment spans: Word comments in the .docx, highlighted passages with numbered
 notes in the HTML, footnotes in the PDF. Resolved comments stay in the list and leave the
-outputs, and "Comments in exports" leaves them all out of an export.
+outputs, and "Comments in exports" leaves them all out of an export. A highlight is the
+same record with no text (`type: "highlight"`, a colour): the preview and the Edit tab
+show it, and no export carries it. Given a note, it becomes a comment.
 
 **Tables.** Palette and layout styles any captioned table (caption above or below it):
 colours, font, size, padding, width, rule weight, line type (solid, dashed, dotted,
@@ -233,8 +235,16 @@ to the connection's own model and the effort meter. Each turn's route shows as a
 line in the transcript.
 
 A typed command also starts a fresh conversation with the agent, because every command
-works from its run folder; the prompt names the session's run. A reply without a command
-continues that conversation on the command's tier. Both behaviours are switches in Models.
+works from its run folder; the prompt names the session's run (a switch in Models).
+
+Only a command starts work. A message without one is a question (`turns.py`, `QUESTION`):
+it takes the `chat` route, and the turn is read-only. Claude Code runs it with
+`--disallowedTools` for Write, Edit, NotebookEdit, Bash, Agent/Task and Skill, plus a note
+saying why; Codex runs it in its `read-only` sandbox. The conversation keeps its command,
+so `/continue <reply>` (the app's own command, listed in the prompt bar) resumes that work on
+the command's tier with every tool, and `/do <request>` (also the app's own) runs a one-off task
+with every tool on the `chat` route. Retry of a command continues it; retry of a question
+stays a question. A handoff to another account carries work and is never a question.
 
 A project's **Chat** tab holds a conversation tied to that run (`project` on the session):
 each new agent conversation in it is told the run and its master, so nothing needs naming.
@@ -244,7 +254,7 @@ each new agent conversation in it is told the run and its master, so nothing nee
 With `staged_pipeline` on (Models), `/research-pipeline` runs one stage per fresh
 conversation: gather, draft, review, finish. When a turn ends, `turns.py` checks the run's
 files through `run_check.py`; a complete stage starts the next, an incomplete one waits for
-the author. The session's `pipeline` field records where it is.
+the author, who carries it on with `/continue`. The session's `pipeline` field records where it is.
 
 Commands listed under `hidden_commands` in `app/data/settings.json` leave the command
 menu and are refused if typed; the list is empty by default.

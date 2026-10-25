@@ -15,7 +15,7 @@ import type { AppearanceResponse, AppearanceValues } from "./AppearancePanel";
 import SessionView from "./SessionView";
 import CritiqueQuestionsDialog, { type CritiqueAnswers, type CritiqueQuestion } from "./CritiqueQuestionsDialog";
 import ChangesDialog, { type Subject } from "./ChangesDialog";
-import CommentsPanel, { CommentList, useComments, type Anchor, type Comment } from "./CommentsPanel";
+import CommentsPanel, { ColourDots, CommentList, useComments, useHighlight, type Anchor, type Comment } from "./CommentsPanel";
 import type { EditorMark } from "./MarkdownEditor";
 import { listen, openPopout, post } from "../lib/live";
 
@@ -101,7 +101,8 @@ function placeComments(list: Comment[] | undefined, text: string, saved: boolean
       from = best;
       to = best + c.quote.length;
     }
-    out.push({ id: c.id, from, to, title: `${c.author}: ${c.text}`, active: c.id === active });
+    const highlight = c.type === "highlight";
+    out.push({ id: c.id, from, to, title: highlight ? "Highlight" : `${c.author}: ${c.text}`, active: c.id === active, tone: highlight ? c.color ?? "yellow" : undefined });
   }
   return out;
 }
@@ -380,7 +381,7 @@ function elementAnchor(target: Element): Anchor | null {
 
 const PICKING_CSS = `
 body.cmt-picking figure:hover, body.cmt-picking table:hover { outline: 2px dashed #E5B300; outline-offset: 3px; cursor: copy; }
-mark.cmt, sup.cmt-ref { cursor: pointer; }
+mark.cmt, mark.hl, sup.cmt-ref { cursor: pointer; }
 `;
 
 function HtmlPane({ run, doc, version }: { run: string; doc: string | undefined; version: number }) {
@@ -409,6 +410,11 @@ function HtmlPane({ run, doc, version }: { run: string; doc: string | undefined;
   const commentsOpenRef = useRef(commentsOpen);
   const [anchor, setAnchor] = useState<Anchor | null>(null);
   const [bubble, setBubble] = useState<{ x: number; y: number; anchor: Anchor } | null>(null);
+  const addHighlight = useHighlight(run, doc, (c) => {
+    frame.current?.contentDocument?.getSelection()?.removeAllRanges();
+    activeRef.current = c.id;
+    setActiveComment(c.id);
+  });
   const [activeComment, setActiveComment] = useState<string | null>(null);
   const activeRef = useRef<string | null>(null);
   // The unsaved text of an editor popped out into another window, rendered as it changes.
@@ -434,7 +440,7 @@ function HtmlPane({ run, doc, version }: { run: string; doc: string | undefined;
     if (!page) return;
     page.querySelectorAll(".cmt-active").forEach((el) => el.classList.remove("cmt-active"));
     if (!id) return;
-    const marks = Array.from(page.querySelectorAll<HTMLElement>("mark.cmt")).filter((m) => (m.dataset.c ?? "").split(" ").includes(id));
+    const marks = Array.from(page.querySelectorAll<HTMLElement>("mark.cmt, mark.hl")).filter((m) => (m.dataset.c ?? "").split(" ").includes(id));
     marks.forEach((m) => m.classList.add("cmt-active"));
     if (scroll) marks[0]?.scrollIntoView({ block: "center", behavior: "smooth" });
   };
@@ -529,14 +535,14 @@ function HtmlPane({ run, doc, version }: { run: string; doc: string | undefined;
           const rect = range.getBoundingClientRect();
           const at = frame.getBoundingClientRect();
           setBubble({
-            x: Math.min(Math.max(at.left - box.left + rect.right - 40, 8), box.width - 110),
+            x: Math.min(Math.max(at.left - box.left + rect.right - 80, 8), box.width - 200),
             y: Math.min(Math.max(at.top - box.top + rect.bottom + 8, 8), box.height - 40),
             anchor: found,
           });
           return;
         }
         const target = event.target as Element | null;
-        const mark = target?.closest?.("mark.cmt, sup.cmt-ref") as HTMLElement | null;
+        const mark = target?.closest?.("mark.cmt, mark.hl, sup.cmt-ref") as HTMLElement | null;
         const id = mark?.dataset.c?.split(" ")[0];
         if (id) {
           if (!commentsOpenRef.current) openRef.current(true);
@@ -735,14 +741,25 @@ function HtmlPane({ run, doc, version }: { run: string; doc: string | undefined;
           {data && <iframe ref={frame} key={`${data.html}@${data.built}`} title="HTML" src={renderedUrl(run, style, cite, data.html, false, data.built)} onLoad={(e) => onFrameLoad(e.currentTarget)} className="h-full w-full border-0" />}
         </div>
         {bubble && (
-          <button
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => { setAnchor(bubble.anchor); setBubble(null); if (!commentsOpen) setCommentsOpen(true); }}
-            style={{ left: bubble.x, top: bubble.y }}
-            className="absolute z-40 flex items-center gap-1 rounded-md bg-accent px-2.5 py-1 text-[0.75rem] text-white shadow-lg"
-          >
-            <MessageSquarePlus size="0.8125rem" /> Comment
-          </button>
+          <div style={{ left: bubble.x, top: bubble.y }} className="absolute z-40 flex items-center gap-2 rounded-md border border-border bg-surface py-1 pl-2 pr-1 shadow-lg">
+            <ColourDots
+              current={prefs().highlight_color ?? "yellow"}
+              onPick={(color) => { addHighlight.mutate({ anchor: bubble.anchor, color }); setBubble(null); }}
+            />
+            <button
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => { setAnchor(bubble.anchor); setBubble(null); if (!commentsOpen) setCommentsOpen(true); }}
+              className="flex items-center gap-1 rounded bg-accent px-2 py-0.5 text-[0.75rem] text-white"
+            >
+              <MessageSquarePlus size="0.8125rem" /> Comment
+            </button>
+          </div>
+        )}
+        {addHighlight.isError && (
+          <div className="absolute left-3 top-3 z-40 max-w-md rounded-md border border-bad bg-surface px-3 py-1.5 text-[0.75rem] text-bad shadow">
+            {(addHighlight.error as Error).message}
+            <button onClick={() => addHighlight.reset()} className="ml-2 underline">Close</button>
+          </div>
         )}
         {commentsOpen && doc && (
           <Panel size={PANELS.comments} side="right" overlayBelow={760} onClose={() => setCommentsOpen(false)} className="bg-panel">

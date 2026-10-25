@@ -305,7 +305,7 @@ function RoutingPanel({ routing, all, put }: { routing: Routing; all: Connection
         <input type="checkbox" checked={routing.enabled} onChange={(e) => void put({ routing: { ...routing, enabled: e.target.checked } })} />
         Route each turn by its command
       </label>
-      <label className="mb-3 flex items-center gap-2 text-[0.8125rem]" title="A command works from the run folder, so it does not need the conversation before it. A reply without a command continues the command's conversation, on its tier.">
+      <label className="mb-3 flex items-center gap-2 text-[0.8125rem]" title="A command works from the run folder, so it does not need the conversation before it. /continue resumes the command's conversation, on its tier; a message without a command is a read-only question.">
         <input type="checkbox" checked={routing.fresh} onChange={(e) => void put({ routing: { ...routing, fresh: e.target.checked } })} />
         Start each command in a fresh conversation
       </label>
@@ -446,7 +446,7 @@ export default function ModelsView() {
             <section>
               <h2 className="mb-1 text-[0.875rem] font-medium">Research pipeline</h2>
               <p className="mb-2 text-[0.7812rem] text-muted">
-                Run /research-pipeline one stage per fresh conversation: gather, draft, review, finish. The app starts each stage when the one before has left its files, and waits whenever a stage asks you something. Stop ends the chain; /research-pipeline stage=draft run=… re-runs one stage.
+                Run /research-pipeline one stage per fresh conversation: gather, draft, review, finish. The app starts each stage when the one before has left its files, and waits whenever a stage asks you something (reply with /continue). Stop ends the chain; /research-pipeline stage=draft run=… re-runs one stage.
               </p>
               <label className="flex items-center gap-2 text-[0.8125rem]">
                 <input type="checkbox" checked={s.staged_pipeline} onChange={(e) => void put({ staged_pipeline: e.target.checked })} />

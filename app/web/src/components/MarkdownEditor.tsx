@@ -68,6 +68,7 @@ export interface EditorMark {
   to: number;
   title: string;
   active: boolean;
+  tone?: string; // a highlight's colour; comments have none
 }
 
 // The highlights move with the text as it is edited; a new set replaces them.
@@ -82,7 +83,10 @@ const marksField = StateField.define<DecorationSet>({
       marks = Decoration.set(
         effect.value
           .filter((m) => m.from < m.to && m.to <= length)
-          .map((m) => Decoration.mark({ class: m.active ? "cm-comment cm-comment-active" : "cm-comment", attributes: { "data-cid": m.id, title: m.title } }).range(m.from, m.to)),
+          .map((m) => Decoration.mark({
+            class: [m.tone ? `cm-hl cm-hl-${m.tone}` : "cm-comment", m.active ? "cm-comment-active" : ""].join(" ").trim(),
+            attributes: { "data-cid": m.id, title: m.title },
+          }).range(m.from, m.to)),
         true,
       );
     }
@@ -121,7 +125,12 @@ const editorTheme = EditorView.theme({
   },
   ".cm-lintRange-error": { textDecoration: "underline wavy var(--bad)" },
   ".cm-comment": { backgroundColor: "rgba(255, 212, 59, 0.28)", borderBottom: "2px solid rgba(214, 160, 0, 0.75)", cursor: "pointer" },
-  ".cm-comment-active": { backgroundColor: "rgba(255, 196, 0, 0.55)" },
+  ".cm-hl": { cursor: "pointer", borderRadius: "2px" },
+  ".cm-hl-yellow": { backgroundColor: "rgba(255, 230, 80, 0.45)" },
+  ".cm-hl-green": { backgroundColor: "rgba(110, 210, 100, 0.35)" },
+  ".cm-hl-blue": { backgroundColor: "rgba(90, 160, 255, 0.3)" },
+  ".cm-hl-pink": { backgroundColor: "rgba(255, 110, 170, 0.3)" },
+  ".cm-comment-active": { backgroundColor: "rgba(255, 196, 0, 0.55)", outline: "1px solid rgba(214, 160, 0, 0.9)" },
 });
 
 interface Props {

@@ -36,7 +36,7 @@ export default function PromptBar({
   connection,
   onConnection,
   contextPercent,
-  placeholder = "Ask a question, or type / for a command",
+  placeholder = "Ask a quick question, or type / for a command to start work (/continue resumes it)",
   autoFocus = false,
 }: {
   onSend: (text: string, files: Attached[]) => void;

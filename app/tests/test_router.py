@@ -87,7 +87,7 @@ def test_stored_routing_overrides_entry_by_entry(data: Path) -> None:
     assert s["commands"]["research"] == ["frontier", "medium"] and s["enabled"] is True
 
 
-def test_reply_keeps_the_route_of_the_command_that_started_it(root: Path) -> None:
+def test_continue_keeps_the_route_of_the_command_that_started_it(root: Path) -> None:
     claude = FakeProvider("claude-sub", ["claude_subagent.jsonl"])
     m = TurnManager({"claude-sub": claude})
 
@@ -95,7 +95,7 @@ def test_reply_keeps_the_route_of_the_command_that_started_it(root: Path) -> Non
         s = sessions.create()
         await m.send(s.id, "/research lithium prices in 2026", "claude-sub")
         await _settle(m, s.id)
-        await m.send(s.id, "only list prices, please", "claude-sub")
+        await m.send(s.id, "/continue only list prices, please", "claude-sub")
         await _settle(m, s.id)
         assert [(o.model, o.effort) for o in claude.options] == [("opus", "medium")] * 2
         seg = sessions.load(s.id).segments[0]
@@ -150,7 +150,7 @@ def test_hidden_commands_leave_the_menu_and_are_refused(root: Path) -> None:
     config.save_settings({"hidden_commands": sorted(hidden)})
     offered = {c["name"] for c in main.commands()}
     assert offered.isdisjoint(hidden)
-    assert offered == {c["name"] for c in workspace.commands()} - hidden
+    assert offered == ({c["name"] for c in workspace.commands()} - hidden) | {"continue", "do"}
 
     claude = FakeProvider("claude-sub", ["claude_subagent.jsonl"])
     m = TurnManager({"claude-sub": claude})
@@ -204,3 +204,57 @@ def test_interface_preferences_are_kept_in_settings(data: Path) -> None:
     }
     config.save_settings({"ui": ui})
     assert config.load_settings()["ui"] == ui
+
+
+def test_a_message_without_a_command_is_a_read_only_question(root: Path) -> None:
+    claude = FakeProvider("claude-sub", ["claude_subagent.jsonl"])
+    m = TurnManager({"claude-sub": claude})
+
+    async def go() -> None:
+        s = sessions.create()
+        await m.send(s.id, "/research lithium prices in 2026", "claude-sub")
+        await _settle(m, s.id)
+        await m.send(s.id, "what does the gate check?", "claude-sub")
+        await _settle(m, s.id)
+        work, question = claude.options
+        assert not work.read_only and work.model == "opus"
+        assert question.read_only and question.model == "sonnet" and "without a command" in question.system_append
+        assert sessions.load(s.id).segments[0].route_key == "research"  # the work stays resumable
+        await m.send(s.id, "/continue only list prices, please", "claude-sub")
+        await _settle(m, s.id)
+        resumed = claude.options[2]
+        assert not resumed.read_only and resumed.model == "opus"
+        assert claude.prompts[2][0].startswith("only list prices, please")
+        routes = [e.data["text"] for e in sessions.transcript(s.id) if e.data.get("kind") == "route"]
+        assert routes[1].startswith("Question (read-only)") and routes[2].startswith("/research (continued)")
+
+    asyncio.run(go())
+
+
+def test_read_only_turns_switch_off_the_tools_that_do_work() -> None:
+    from backend.providers.base import TurnOptions
+    from backend.providers.claude import ClaudeProvider
+    from backend.providers.codex import CodexProvider
+
+    cmd = ClaudeProvider("claude-sub").command("claude", None, TurnOptions(read_only=True))
+    off = cmd[cmd.index("--disallowedTools") + 1].split(",")
+    assert {"Write", "Edit", "Bash", "Agent", "Task", "Skill"} <= set(off)
+    assert "--disallowedTools" not in ClaudeProvider("claude-sub").command("claude", None, TurnOptions())
+    assert 'sandbox_mode="read-only"' in CodexProvider("codex-plan").command("codex", None, TurnOptions(read_only=True))
+
+
+def test_do_carries_out_a_one_off_task_with_every_tool(root: Path) -> None:
+    claude = FakeProvider("claude-sub", ["claude_subagent.jsonl"])
+    m = TurnManager({"claude-sub": claude})
+
+    async def go() -> None:
+        s = sessions.create()
+        await m.send(s.id, "/do make the table headers lighter in meridian", "claude-sub")
+        await _settle(m, s.id)
+        options, (prompt, _) = claude.options[0], claude.prompts[0]
+        assert not options.read_only and options.model == "sonnet"
+        assert prompt.startswith("make the table headers lighter")
+        routes = [e.data["text"] for e in sessions.transcript(s.id) if e.data.get("kind") == "route"]
+        assert routes[0].startswith("/do:")
+
+    asyncio.run(go())

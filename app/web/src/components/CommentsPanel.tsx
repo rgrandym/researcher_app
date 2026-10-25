@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Check, MessageSquarePlus, Pencil, RotateCcw, Trash2, X } from "lucide-react";
+import { Check, Highlighter, MessageSquarePlus, Pencil, RotateCcw, Trash2, X } from "lucide-react";
 import { api, q } from "../lib/api";
 import { post } from "../lib/live";
 import { prefs, setPref } from "../lib/prefs";
@@ -16,6 +16,8 @@ export interface Comment {
   author: string;
   created: string;
   resolved: boolean;
+  type?: "comment" | "highlight";
+  color?: string;
   found: boolean;
   start: number | null;
   end: number | null;
@@ -36,6 +38,49 @@ export function useComments(run: string, doc: string | undefined, enabled = true
     enabled: enabled && Boolean(doc),
     refetchInterval: 15_000,
   });
+}
+
+// Highlight colours: the passage's tint in the page, and a stronger edge for the list.
+export const HIGHLIGHTS: { name: string; fill: string; edge: string }[] = [
+  { name: "yellow", fill: "#FFF3A0", edge: "#E5B300" },
+  { name: "green", fill: "#C9F2C3", edge: "#3FA34D" },
+  { name: "blue", fill: "#CFE5FF", edge: "#3B82D6" },
+  { name: "pink", fill: "#FFD4E8", edge: "#D6458B" },
+];
+export const highlightEdge = (c: Comment) => HIGHLIGHTS.find((h) => h.name === c.color)?.edge ?? "#E5B300";
+export const isHighlight = (c: Comment) => c.type === "highlight";
+
+/** Highlight a passage, figure or table straight away, with no words. */
+export function useHighlight(run: string, doc: string | undefined, onDone?: (c: Comment) => void) {
+  const changed = useCommentChanged(run);
+  return useMutation({
+    mutationFn: ({ anchor, color }: { anchor: Anchor; color: string }) => {
+      setPref("highlight_color", color);
+      return api.post<Comment>(`/api/runs/${encodeURIComponent(run)}/comments`, {
+        doc, text: "", author: prefs().comment_author ?? "", highlight: true, color, selection: anchor.selection, element: anchor.element,
+      });
+    },
+    onSuccess: (c) => { changed(); onDone?.(c); },
+  });
+}
+
+/** Four colour dots; the one last used is ringed. */
+export function ColourDots({ onPick, current, size = "0.875rem" }: { onPick: (color: string) => void; current?: string; size?: string }) {
+  return (
+    <span className="flex items-center gap-1">
+      {HIGHLIGHTS.map((h) => (
+        <button
+          key={h.name}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={(e) => { e.stopPropagation(); onPick(h.name); }}
+          title={`Highlight ${h.name}`}
+          aria-label={`Highlight ${h.name}`}
+          style={{ width: size, height: size, background: h.fill, borderColor: h.edge }}
+          className={clsx("rounded-full border", current === h.name && "ring-2 ring-accent ring-offset-1")}
+        />
+      ))}
+    </span>
+  );
 }
 
 function useCommentChanged(run: string) {
@@ -68,7 +113,7 @@ function CommentCard({ run, comment, active, onSelect }: { run: string; comment:
     if (active) card.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [active]);
   const patch = useMutation({
-    mutationFn: (body: { text?: string; resolved?: boolean }) => api.patch(`/api/runs/${encodeURIComponent(run)}/comments/${comment.id}`, body),
+    mutationFn: (body: { text?: string; resolved?: boolean; color?: string }) => api.patch(`/api/runs/${encodeURIComponent(run)}/comments/${comment.id}`, body),
     onSuccess: () => { setEditing(false); changed(); },
   });
   const remove = useMutation({
@@ -85,16 +130,22 @@ function CommentCard({ run, comment, active, onSelect }: { run: string; comment:
         comment.resolved && "opacity-60",
       )}
     >
-      <div className={clsx("mb-1 border-l-2 pl-2 text-[0.7188rem] text-muted", comment.found ? "border-[#E5B300]" : "border-bad")}>
+      <div style={comment.found && isHighlight(comment) ? { borderColor: highlightEdge(comment) } : undefined} className={clsx("mb-1 border-l-2 pl-2 text-[0.7188rem] text-muted", comment.found ? "border-[#E5B300]" : "border-bad")}>
         {comment.found ? snippet(comment) : <span className="text-bad">The passage is no longer in the document: “{snippet(comment)}”</span>}
       </div>
       {editing ? (
         <div onClick={(e) => e.stopPropagation()}>
-          <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} autoFocus className="w-full resize-y rounded border border-border bg-bg p-1.5 outline-none focus:border-accent" />
+          <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} autoFocus placeholder={isHighlight(comment) ? "A note turns the highlight into a comment" : undefined} className="w-full resize-y rounded border border-border bg-bg p-1.5 outline-none focus:border-accent" />
           <div className="mt-1 flex gap-1.5">
             <button onClick={() => patch.mutate({ text })} disabled={!text.trim() || patch.isPending} className="rounded bg-accent px-2 py-0.5 text-white disabled:opacity-40">Save</button>
             <button onClick={() => { setEditing(false); setText(comment.text); }} className="rounded border border-border px-2 py-0.5">Cancel</button>
           </div>
+        </div>
+      ) : isHighlight(comment) ? (
+        <div className="flex items-center gap-2 text-faint" onClick={(e) => e.stopPropagation()}>
+          <Highlighter size="0.75rem" /> Highlight
+          <div className="flex-1" />
+          <ColourDots current={comment.color} size="0.75rem" onPick={(color) => patch.mutate({ color })} />
         </div>
       ) : (
         <div className="whitespace-pre-wrap">{comment.text}</div>
@@ -103,12 +154,12 @@ function CommentCard({ run, comment, active, onSelect }: { run: string; comment:
         <span className="truncate">{comment.author} · {when(comment.created)}{comment.line ? ` · line ${comment.line}` : ""}</span>
         <div className="flex-1" />
         {!editing && (
-          <button onClick={(e) => { e.stopPropagation(); setEditing(true); }} title="Edit the comment" aria-label="Edit the comment" className="rounded p-0.5 hover:text-fg"><Pencil size="0.75rem" /></button>
+          <button onClick={(e) => { e.stopPropagation(); setEditing(true); }} title={isHighlight(comment) ? "Add a note: it becomes a comment" : "Edit the comment"} aria-label={isHighlight(comment) ? "Add a note" : "Edit the comment"} className="rounded p-0.5 hover:text-fg"><Pencil size="0.75rem" /></button>
         )}
-        <button onClick={(e) => { e.stopPropagation(); patch.mutate({ resolved: !comment.resolved }); }} title={comment.resolved ? "Reopen" : "Resolve: keep it, but take it out of the document and the exports"} aria-label={comment.resolved ? "Reopen" : "Resolve"} className="rounded p-0.5 hover:text-fg">
+        {!isHighlight(comment) && <button onClick={(e) => { e.stopPropagation(); patch.mutate({ resolved: !comment.resolved }); }} title={comment.resolved ? "Reopen" : "Resolve: keep it, but take it out of the document and the exports"} aria-label={comment.resolved ? "Reopen" : "Resolve"} className="rounded p-0.5 hover:text-fg">
           {comment.resolved ? <RotateCcw size="0.75rem" /> : <Check size="0.75rem" />}
-        </button>
-        <button onClick={(e) => { e.stopPropagation(); if (window.confirm("Delete this comment?")) remove.mutate(); }} title="Delete" aria-label="Delete the comment" className="rounded p-0.5 hover:text-bad"><Trash2 size="0.75rem" /></button>
+        </button>}
+        <button onClick={(e) => { e.stopPropagation(); if (isHighlight(comment) || window.confirm("Delete this comment?")) remove.mutate(); }} title={isHighlight(comment) ? "Remove the highlight" : "Delete"} aria-label={isHighlight(comment) ? "Remove the highlight" : "Delete the comment"} className="rounded p-0.5 hover:text-bad"><Trash2 size="0.75rem" /></button>
       </div>
       {(patch.isError || remove.isError) && <div className="mt-1 text-bad">{((patch.error ?? remove.error) as Error).message}</div>}
     </div>
@@ -142,6 +193,7 @@ function Composer({ run, doc, anchor, onDone }: { run: string; doc: string; anch
   const changed = useCommentChanged(run);
   const [text, setText] = useState("");
   const [author, setAuthor] = useState(() => prefs().comment_author ?? "");
+  const highlight = useHighlight(run, doc, (c) => onDone(c.id));
   const create = useMutation({
     mutationFn: () => api.post<Comment>(`/api/runs/${encodeURIComponent(run)}/comments`, { doc, text, author, selection: anchor.selection, element: anchor.element }),
     onSuccess: (c) => {
@@ -167,13 +219,17 @@ function Composer({ run, doc, anchor, onDone }: { run: string; doc: string; anch
         placeholder="What should change here?"
         className="w-full resize-y rounded border border-border bg-bg p-1.5 outline-none focus:border-accent"
       />
+      <div className="mt-1.5 flex items-center gap-1.5 text-[0.7188rem] text-muted">
+        <Highlighter size="0.75rem" /> Or just highlight it:
+        <ColourDots current={prefs().highlight_color ?? "yellow"} onPick={(color) => highlight.mutate({ anchor, color })} />
+      </div>
       <div className="mt-1.5 flex items-center gap-1.5">
         <input value={author} onChange={(e) => setAuthor(e.target.value)} placeholder="Your name" aria-label="Your name" maxLength={80} className="min-w-0 flex-1 rounded border border-border bg-bg px-1.5 py-0.5 outline-none focus:border-accent" />
         <button onClick={() => create.mutate()} disabled={!text.trim() || create.isPending} title="Add the comment (⌘ Enter)" className="rounded bg-accent px-2.5 py-0.5 text-white disabled:opacity-40">
           {create.isPending ? "Adding…" : "Comment"}
         </button>
       </div>
-      {create.isError && <div className="mt-1 text-bad">{(create.error as Error).message}</div>}
+      {(create.isError || highlight.isError) && <div className="mt-1 text-bad">{((create.error ?? highlight.error) as Error).message}</div>}
     </div>
   );
 }
@@ -198,7 +254,7 @@ export default function CommentsPanel({ run, doc, anchor, active, onAnchorDone, 
         <button onClick={onClose} title="Close the comments panel" aria-label="Close the comments panel" className="rounded p-0.5 text-faint hover:text-fg"><X size="0.8125rem" /></button>
       </div>
       <p className="mb-3 text-[0.7188rem] text-muted">
-        Select text in the document and choose Comment, or click a figure or a table. Comments show in the Edit tab and travel to Word as Word comments, and to the PDF as footnotes.
+        Select text in the document, then pick a colour to highlight it or choose Comment; or click a figure or a table. Both show in the Edit tab. Comments travel to Word as Word comments and to the PDF as footnotes; highlights are yours alone and stay out of exports.
       </p>
       {anchor && <Composer key={anchor.label} run={run} doc={doc} anchor={anchor} onDone={onAnchorDone} />}
       {comments.isError && <div className="text-[0.75rem] text-bad">{(comments.error as Error).message}</div>}

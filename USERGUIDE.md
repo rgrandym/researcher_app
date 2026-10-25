@@ -8,13 +8,15 @@ The design assumption: an AI writing research prose unaided will be fluent, plau
 
 ## Quick start
 
-Just describe what you want researched:
+Start a research run with a command:
 
 ```
-Research how EU battery labelling rules changed in 2026 and write it up.
+/research-pipeline how EU battery labelling rules changed in 2026
 ```
 
-Claude picks up `/research-pipeline` and runs the whole thing. When you want to drive a single stage yourself, type the slash command:
+It runs the whole thing: research, draft, verification, critique and repair. Work starts only from a command, because a run is slow and costs real money. A message without one is a question, and gets a quick answer; in the app that turn is read-only, so it cannot start a run (see **[Research runs only when you type a command](#research-runs-only-when-you-type-a-command)**).
+
+When you want to drive a single stage yourself, type its slash command:
 
 ```
 /research    grid battery storage economics in Spain
@@ -26,9 +28,11 @@ Claude picks up `/research-pipeline` and runs the whole thing. When you want to 
 /expand      go deeper on the permitting timeline
 /user-edits  I rewrote the intro and added a note in §3 — finish it
 /brain_storm  Would a more personal opening help this argument?
+/do          make the table headers in Meridian a shade lighter
+/continue    yes, use the 2025 figures
 ```
 
-Every stage works standalone. You can hand `/verify` someone else's document and get a fact-check with no research run behind it.
+Every stage works standalone. You can hand `/verify` someone else's document and get a fact-check with no research run behind it. `/do` carries out a one-off task that no stage covers, and `/continue` lets the agent carry on with the task in progress, for instance after it asks you something.
 
 `/polish` rewrites a passage in your voice without changing what it claims. To teach the agents how you write, and what you don't want to read, see **[Teaching it your style over time](#teaching-it-your-style-over-time)**.
 
@@ -76,7 +80,7 @@ Your stated feelings and opinions are treated as your views. `/user-edits` may s
 
 In the app's Edit tab, choose a report section and **Mark final** once you have approved it. Later agent rounds must leave that section byte-identical. If a new edit calls for a change there, the agent explains the proposed change; use **Reopen section** when you decide to revise it. The app also blocks saves that alter a final section until it is reopened. The HTML tab has controls to zoom the rendered report, and Markdown editors underline spelling and Markdown errors with suggestions or fixes. Comments, editing in a second window, and Word export from the app are in **[Commenting and editing in the app](#commenting-and-editing-in-the-app)**.
 
-**`/narrator`** — Decides who the report is written for, and holds your writing style. Two narration modes: **scientific** for specialists in the field, and **explanatory** for readers who are technically literate but not scientists. Both carry the same claims, the same citations, the same caveats and the same confidence; they differ in how much of each mechanism gets built for the reader. It also runs the style-learning loop described below. Ask for it directly ("write this for non-scientists", "this reads like AI, fix the voice"), or let `/report` invoke it before drafting.
+**`/narrator`** — Decides who the report is written for, and holds your writing style. Two narration modes: **scientific** for specialists in the field, and **explanatory** for readers who are technically literate but not scientists. Both carry the same claims, the same citations, the same caveats and the same confidence; they differ in how much of each mechanism gets built for the reader. It also runs the style-learning loop described below. Ask for it with the command (`/narrator write this for non-scientists`, `/narrator this reads like AI, fix the voice`), or let `/report` invoke it before drafting.
 
 One supporting skill fires on its own: **`/visualize`** — which findings earn a chart, and how figures are written. Context and delegation discipline is standing policy in `CLAUDE.md`, not a skill you invoke.
 
@@ -108,7 +112,7 @@ can see where each one landed.
 | A rough sentence | Keeps the point, tidies the sentence, connects it to what sits either side |
 | A deletion | Respects it, then repairs what depended on it: cross-references, an orphaned source entry, a dangling "as shown above" |
 | A typo fix | Nothing to do |
-| A fact, with no citation | Leaves it as you wrote it and tells you it is uncited. Say the word and it researches it |
+| A fact, with no citation | Leaves it as you wrote it and tells you it is uncited. Reply `/continue research it` and it researches it |
 | An idea, a stub, or a note like *"say something about core facilities here"* | A note addressed to it **is** a request to write that spot, so it researches and writes it there, then removes your note |
 | A question in the text | Answers it from the report's own evidence if it can; otherwise puts the question back to you |
 | A reframing — a new angle, a changed emphasis, a different direction | Treats it as a **pivot**: names every section it affects, shows you that list, then rewrites the thesis, section order and headings to match |
@@ -116,8 +120,8 @@ can see where each one landed.
 To get the other two behaviours, ask for them:
 
 ```
-you   I edited §3. Check what I added is right.        → validates your claims
-you   I edited §3, and research the point I made.      → researches and sources it
+you   /user-edits I edited §3. Check what I added is right.     → validates your claims
+you   /user-edits I edited §3, and research the point I made.   → researches and sources it
 ```
 
 If you delete a citation, its entry comes out of `## Sources` — but evidence IDs
@@ -152,7 +156,7 @@ Traction evidence is thin but no longer exclusively company-originated: …
 Then, in chat:
 
 ```
-you   I edited 3.3, have a look
+you   /user-edits I edited 3.3, have a look
 ```
 
 What comes back:
@@ -187,8 +191,8 @@ If you had instead written a *finished* sentence, in your own voice, it would ha
 #### Changing direction
 
 ```
-you   I edited the intro. The consistency argument should lead, not the
-      cost argument. Cost is the supporting evidence.
+you   /user-edits I edited the intro. The consistency argument should lead,
+      not the cost argument. Cost is the supporting evidence.
 ```
 
 That is a pivot, so the blast radius comes first and you get to approve it:
@@ -204,13 +208,13 @@ That is a pivot, so the blast radius comes first and you get to approve it:
       Proceed?
 ```
 
-Say yes and it runs in that order. Say no to any line and it stays out of scope, provably.
+Say yes (`/continue yes` in the app) and it runs in that order. Say no to any line and it stays out of scope, provably.
 
 ---
 
 ## Commenting and editing in the app
 
-The app lets you mark up a report as you would a Word document, then edit with the comments in view. Everything here works without a model call.
+The app lets you mark up a report as you would a Word document, with comments and highlights, then edit with them in view. Everything here works without a model call.
 
 ### Commenting on the report
 
@@ -220,6 +224,14 @@ Open the report's **HTML** tab.
 - **On a figure or a table:** select **Comments**, then click the figure or the table. A captioned table or figure is named by its number; an uncaptioned table is found by its header row.
 
 Write the comment and select **Comment** (or press ⌘ Enter). Your name goes with it, as Word shows it; the app remembers it. The passage turns yellow with a numbered marker, and the comment joins the list in the **Comments** panel. Click a highlight to find its comment in the list, or a comment to scroll the page to its passage.
+
+### Highlighting
+
+To mark a passage to come back to, without writing anything, select it and click one of the four colour dots (yellow, green, blue, pink) beside **Comment**. The passage takes that colour at once. For a figure or a table, open **Comments**, click it, and pick a colour under **Or just highlight it**. The colour you used last is ringed.
+
+Highlights sit in the **Comments** list with the comments and show in the **Edit** tab in their colour, so you can find them the same way. Change a highlight's colour from its card, or remove it with the bin. Adding a note with the pencil turns it into a comment. Highlights are for you: they stay out of every export, while comments go into the exports.
+
+### Managing comments
 
 Each comment can be edited, resolved or deleted from its card. A resolved comment stays in the list (select **Show resolved**) and leaves the document and the exports. Reopen it to bring it back.
 
@@ -245,7 +257,7 @@ The HTML tab exports in the style and citation form shown: **Export HTML**, **Ex
 | PDF | highlighted passages with the comments as numbered footnotes |
 | HTML | highlighted passages with numbered markers; hover a marker to read the comment |
 
-Untick **Comments in exports** for a clean copy to send. Table settings and designs reach all three formats. Each export runs the loss check described under **[Exporting](#exporting)**, and the app shows its result.
+Highlights never appear in exports. Untick **Comments in exports** for a clean copy to send. Table settings and designs reach all three formats. Each export runs the loss check described under **[Exporting](#exporting)**, and the app shows its result.
 
 `report.md` is the source of every format. Work done in an exported Word file, comments and tracked changes included, does not come back into the report by itself.
 
@@ -414,15 +426,17 @@ Two things this deliberately does *not* do. A small question never produces a si
 
 ### Research runs only when you type a command
 
-A message without a command is a chat question, answered directly with a few searches at most. `/research`, `/research-pipeline`, `/expand`, `/verify` and the other stages start only when you type them; the agent can no longer start them on its own. Every command works by itself or inside the pipeline, so after a report ships you can type `/verify <run> E42` or `/repair <run> §3` for one claim or one section, and only that part is read and checked, at the full standard.
+A message without a command is a question. In the app it gets a quick answer, on the cheaper chat model, and the turn is read-only: the agent can read the project's files and run a few web searches, but the tools that write or edit files, run scripts, start subagents or load skills are switched off for that turn. So a question cannot turn into research or a repair, even inside a conversation that was doing one. If the question deserves more, the answer names the command that would do it. Each such turn shows as **Question (read-only)** in the transcript.
+
+`/research`, `/research-pipeline`, `/expand`, `/verify` and the other stages start only when you type them; the agent cannot start them on its own. To carry on with work in progress, for instance to answer something the agent asked while repairing, or to let a waiting pipeline stage go on, type **`/continue`** followed by your reply. It resumes the last command's conversation on that command's model, with every tool. For a one-off task that no stage covers, such as making a style or fixing one table, type **`/do`** followed by the request; it runs with every tool on the chat model. Every command works by itself or inside the pipeline, so after a report ships you can type `/verify <run> E42` or `/repair <run> §3` for one claim or one section, and only that part is read and checked, at the full standard.
 
 ### Where the tokens go now
 
 Most of a run's cost used to be one long conversation re-reading itself on every step: the main thread held the draft and every repair, and was re-read in full on each of a few hundred calls. That is what changed:
 
 - **The document stays out of the main conversation.** The `report-writer` agent drafts, repairs and integrates expansion rounds in its own context and hands back a short summary; reviewers read the file from disk.
-- **Each command starts a fresh conversation in the app**, working from the run folder. A reply without a command continues that conversation on the command's model, so answering the pipeline's question does not drop it to a cheaper one.
-- **`/research-pipeline` runs one stage per conversation in the app**: gather, draft, review, finish. The app starts each stage when the previous one has left its files, and waits when a stage asks you something. Stop ends the chain; `/research-pipeline stage=review run=outputs/<run>` re-runs one stage. Switch it off under Models.
+- **Each command starts a fresh conversation in the app**, working from the run folder. `/continue` continues that conversation on the command's model, so answering the pipeline's question does not drop it to a cheaper one; a message without a command is a read-only question on the chat model.
+- **`/research-pipeline` runs one stage per conversation in the app**: gather, draft, review, finish. The app starts each stage when the previous one has left its files, and waits when a stage asks you something; reply with `/continue` to carry it on. Stop ends the chain; `/research-pipeline stage=review run=outputs/<run>` re-runs one stage. Switch it off under Models.
 - **Long reports are read by section.** `python3 .claude/scripts/section_map.py <run>` prints each section's lines, length and sources; `--show "<heading>"` prints one section.
 - **Pages are fetched once, for every run.** Scouts read sources through `library.py`, which keeps the page text in `library/` (never committed). A page any run has read costs nothing the next time, and a quote found verbatim in the stored copy is confirmed by a script instead of a re-fetch. Pages built by JavaScript, or behind a login, still go through WebFetch.
 - **New research starts from what earlier runs found.** Before scaffolding, `/research` checks `kb.py runs` for an existing report on the same ground and asks whether to extend it instead; scout briefs list rows already established (`kb.py search "<terms>"`).
@@ -434,14 +448,14 @@ In the app, the command a message starts with picks the model, on Claude and on 
 | Tier | Claude | Codex | Commands |
 |---|---|---|---|
 | Frontier | Opus | `gpt-6-astra` | `/research`, `/research-pipeline`, `/expand`, `/critique`, `/report`, `/repair`, `/user-edits`, `/figures`, `/narrator`, `/polish`, `/brain_storm` |
-| Workhorse | Sonnet | `gpt-6.1-sol` | `/verify`, `/plagiarism`, `/export`, `/visualize`, `/voice-rule`, and plain chat |
+| Workhorse | Sonnet | `gpt-6.1-sol` | `/verify`, `/plagiarism`, `/export`, `/visualize`, `/voice-rule`, `/do`, and questions (messages with no command) |
 | Fast | Haiku (the latest, through the `haiku` alias) | `gpt-6-luna` | `/app`: questions about the app, answered from this guide |
 
 Inside a run, scouts and the fact-checker run on Sonnet; the critic and the writer run on Opus. Change the maps, or switch routing off, under Models. `python3 .claude/scripts/cost_report.py --last 1` shows where the last session's tokens went.
 
 ### Chatting inside a project
 
-Open a project and choose **Chat**. The conversation is tied to that run: the agent is told which project it is in, so a question needs no run named, and a command acts on the project. The tab reopens the same conversation next time; **New conversation** starts another on the same project, and **Open full** shows it with its activity panel.
+Open a project and choose **Chat**. The conversation is tied to that run: the agent is told which project it is in, so a question needs no run named, and a command acts on the project. Questions here are read-only like everywhere else in the app; type a command to change the project. The tab reopens the same conversation next time; **New conversation** starts another on the same project, and **Open full** shows it with its activity panel.
 
 ---
 
@@ -473,8 +487,8 @@ the last:
 The hybrid runs Title and subtitle → a standalone 150–200 word abstract →
 introduction → thematic sections named by topic rather than by finding →
 a conclusion that synthesises rather than recaps → notes if the citation system
-uses them → the reference list. Ask for it by name ("write this as an article",
-"I want an essay"), or let the register rules pick it when the brief asks for a
+uses them → the reference list. Ask for it by name (`/report write this as an article`,
+`/report I want an essay`), or let the register rules pick it when the brief asks for a
 piece to be read straight through.
 
 It carries the same evidence standards as the other two. An article that reads
@@ -711,7 +725,7 @@ without being asked, because a rule left in the conversation is gone by the next
 session:
 
 ```
-you   I never write "leverage" as a verb. Record that.
+you   /voice-rule I never write "leverage" as a verb.
 
       Added to .claude/voice/profile.md under Stated rules (2026-08-15) and to
       the HARD list in .claude/voice/rules.py. It now fails the gate rather
@@ -882,8 +896,8 @@ This is the common case: the report is finished, it has a hole in it, and you go
 *The transcripts below show the shape of an exchange, not a record of one. Evidence IDs in them are illustrative.*
 
 ```
-you   I dropped the Northwind datasheets into external_data. Use them to
-      close the NW-200 questions in section 1.2.
+you   /expand I dropped the Northwind datasheets into external_data. Use
+      them to close the NW-200 questions in section 1.2.
 ```
 
 The scan runs first, and it reports only what is unread:
@@ -930,7 +944,7 @@ You do not have to wait for a stage boundary:
 ```
 you   adding a few more PDFs now, hold on
       … drop files …
-      ok, added three from MedChemExpress
+      /continue ok, added three from MedChemExpress
 ```
 
 The next scan picks up exactly those three. Everything already mined stays closed. This is what makes it safe to keep feeding a run over weeks: the cost of adding the fortieth file is the cost of reading one file, not forty.
@@ -1080,8 +1094,8 @@ Style is a parameter of the export, not of the research. Name it whenever you as
 ```
 /export pdf, Meridian
 /export docx and pdf in Graphite
-give me a Word version, Ember
-export the deck — Helix
+/export a Word version, Ember
+/export the deck, Helix
 ```
 
 Format and style can arrive in any order, in any phrasing. If you name neither, Claude asks once — both in the same question — and waits. If you name a format but not a style, it asks only for the style.
@@ -1098,7 +1112,7 @@ python3 .claude/scripts/style.py swatch verdant -o /tmp/verdant.png  # the palet
 python3 .claude/scripts/figures.py demo --style verdant -o /tmp/v    # eight real charts in that style
 ```
 
-Or just ask: *"show me what Ember and Graphite look like"* — Claude runs these and shows you the images.
+Or type `/do show me what Ember and Graphite look like`, and Claude runs these and shows you the images.
 
 ### Changing your mind is cheap
 
@@ -1149,9 +1163,9 @@ python3 .claude/scripts/style.py show harbour          # fails loudly if a key i
 python3 .claude/scripts/figures.py demo --style harbour -o /tmp/harbour
 ```
 
-It's immediately available to `/export harbour` in every format. No code changes anywhere. Or skip the editor: *"make me a style like Meridian but in our brand green #0A5C3A, sans-serif"* — and Claude writes the file.
+It's immediately available to `/export harbour` in every format. No code changes anywhere. Or skip the editor: `/do make me a style like Meridian but in our brand green #0A5C3A, sans-serif`, and Claude writes the file.
 
-**Tweaking one thing** in an existing style — "the table headers are too dark", "make the body text bigger" — is a one-line edit to that style's JSON. Ask for it in those words. Field-by-field schema and the palette rules are in [.claude/styles/README.md](.claude/styles/README.md).
+**Tweaking one thing** in an existing style — "the table headers are too dark", "make the body text bigger" — is a one-line edit to that style's JSON. Ask for it with `/do` in those words: `/do the table headers in Meridian are too dark`. Field-by-field schema and the palette rules are in [.claude/styles/README.md](.claude/styles/README.md).
 
 ---
 
@@ -1259,7 +1273,7 @@ the middle sections don't flow anymore; restructure by argument, not by what we 
 this reads like three rounds stapled together — fix the through-line
 ```
 
-The right response to real drift is a structural pass on the affected part, not another careful local edit. Ask for it in those words.
+The right response to real drift is a structural pass on the affected part, not another careful local edit. Ask for it in those words, after `/expand` or `/repair`.
 
 ### A round that changes nothing is a good round
 

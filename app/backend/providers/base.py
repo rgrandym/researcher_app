@@ -110,6 +110,9 @@ class TurnOptions(BaseModel):
     model: str = ""
     effort: str = ""
     web_off: bool = False  # Codex: hard stop once the search cap is reached
+    # A question (a message with no command): tools that change anything, start agents or
+    # load skills are switched off, so a quick answer cannot turn into a run.
+    read_only: bool = False
     # Restrict the turn ("Improve with an agent"): allowed tools and an editable path.
     tools: list[str] | None = None
     edit_path: str | None = None

@@ -33,6 +33,8 @@ from typing import Any
 from backend import appearance, workspace
 
 FILE = ".comments.json"
+# A highlight is a comment without words: a passage the author marked to come back to.
+COLORS = ("yellow", "green", "blue", "pink")
 MAX_TEXT = 4000
 CONTEXT = 80
 
@@ -364,9 +366,14 @@ def create(
     author: Any,
     selection: dict[str, Any] | None = None,
     element: dict[str, Any] | None = None,
+    highlight: bool = False,
+    color: Any = "yellow",
 ) -> dict[str, Any]:
     md = _master(run, doc)
-    body, who = _text(text), _author(author)
+    body = "" if highlight else _text(text)
+    who = _author(author)
+    if color not in COLORS:
+        raise ValueError("Choose a listed highlight colour")
     if element:
         kind = element.get("kind")
         number, given = element.get("number"), element.get("id")
@@ -404,6 +411,8 @@ def create(
     comment = {
         "id": secrets.token_hex(6),
         "doc": doc,
+        "type": "highlight" if highlight else "comment",
+        "color": color,
         **anchor,
         "text": body,
         "author": who,
@@ -417,12 +426,19 @@ def create(
     return comment
 
 
-def update(run: str, cid: str, text: Any = None, resolved: Any = None) -> dict[str, Any]:
+def update(
+    run: str, cid: str, text: Any = None, resolved: Any = None, color: Any = None
+) -> dict[str, Any]:
     items = _load(run)
     for c in items:
         if c["id"] == cid:
             if text is not None:
                 c["text"] = _text(text)
+                c["type"] = "comment"  # a highlight given words becomes a comment
+            if color is not None:
+                if color not in COLORS:
+                    raise ValueError("Choose a listed highlight colour")
+                c["color"] = color
             if resolved is not None:
                 if not isinstance(resolved, bool):
                     raise ValueError("Resolved is yes or no")
@@ -441,9 +457,22 @@ def delete(run: str, cid: str) -> None:
     _save(run, kept)
 
 
-def open_for(run: str, doc: str) -> list[dict[str, Any]]:
-    """The comments a render carries: this document's, not resolved."""
-    return [c for c in _load(run) if c.get("doc") == doc and not c.get("resolved")]
+def is_highlight(c: dict[str, Any]) -> bool:
+    return c.get("type") == "highlight"
+
+
+def open_for(
+    run: str, doc: str, comments: bool = True, highlights: bool = False
+) -> list[dict[str, Any]]:
+    """What a render carries of this document's: open comments, and highlights when asked
+    (the app's own views show them; exports leave them out)."""
+    return [
+        c
+        for c in _load(run)
+        if c.get("doc") == doc
+        and not c.get("resolved")
+        and (highlights if is_highlight(c) else comments)
+    ]
 
 
 def stamp(run: str) -> bytes:
@@ -494,9 +523,15 @@ def inject(md: str, items: list[dict[str, Any]]) -> tuple[str, dict[str, dict[st
             span = locate(md, {**c, "kind": "text"})
         if not span:
             continue
-        n = str(len(placed))
-        placed[n] = c
         start, end = span
+        if is_highlight(c):
+            h = f"h{len(placed)}"
+            placed[h] = c
+            inserts.append((start, 0, f'<span class="hl-start" id="{h}"></span>'))
+            inserts.append((end, 1, f'<span class="hl-end" id="{h}"></span>'))
+            continue
+        n = str(sum(1 for k in placed if not k.startswith("h")))
+        placed[n] = c
         author = _author(c.get("author"))
         date = re.sub(r"[^0-9TZ:\-]", "", str(c.get("created") or _now()))
         inserts.append(
@@ -528,6 +563,8 @@ def strip(md: str) -> str:
 _SPAN_START = re.compile(r'<span\b[^>]*\bclass="comment-start"[^>]*>', re.S)
 _SPAN_END = re.compile(r'<span\b[^>]*\bclass="comment-end"[^>]*>', re.S)
 _ID = re.compile(r'\bid="(\d+)"')
+_HL = re.compile(r'<span\b[^>]*\bclass="hl-(start|end)"[^>]*>', re.S)
+_HL_ID = re.compile(r'\bid="(h\d+)"')
 _NO_MARK = ("style", "script", "svg", "title", "head", "textarea")
 
 
@@ -550,7 +587,7 @@ def mark_html(html: str, placed: dict[str, dict[str, Any]]) -> str:
 
     html = re.sub(r'<nav id="TOC".*?</nav>', toc, html, count=1, flags=re.S)
     # An image's alt text is its caption flattened, comment and all.
-    for c in placed.values():
+    for c in (c for c in placed.values() if not is_highlight(c)):
         flat = htmllib.escape(_plain(str(c.get("text") or "")), quote=True)
         if flat:
             html = re.sub(r'(alt="[^"]*?)' + re.escape(flat), r"\1", html)
@@ -560,6 +597,7 @@ def mark_html(html: str, placed: dict[str, dict[str, Any]]) -> str:
     parts = re.split(r"(<[^>]+>)", body)
     out: list[str] = []
     open_ids: list[str] = []
+    open_hl: list[str] = []
     skip: list[str] = []
     number = 0
     numbers: dict[str, int] = {}
@@ -567,6 +605,19 @@ def mark_html(html: str, placed: dict[str, dict[str, Any]]) -> str:
     while i < len(parts):
         part = parts[i]
         if part.startswith("<"):
+            hl = _HL.fullmatch(part)
+            if hl:
+                m = _HL_ID.search(part)
+                if m and m.group(1) in placed:
+                    if hl.group(1) == "start":
+                        open_hl.append(m.group(1))
+                    elif m.group(1) in open_hl:
+                        open_hl.remove(m.group(1))
+                j = i + 1
+                while j < len(parts) and parts[j] != "</span>":
+                    j += 1
+                i = j + 1
+                continue
             if _SPAN_START.fullmatch(part):
                 m = _ID.search(part)
                 j = i + 1
@@ -604,9 +655,14 @@ def mark_html(html: str, placed: dict[str, dict[str, Any]]) -> str:
                 else:
                     skip.append(tag.group(2).lower())
             out.append(part)
-        elif open_ids and not skip and part.strip():
-            ids = " ".join(htmllib.escape(str(placed[n]["id"]), quote=True) for n in open_ids)
-            out.append(f'<mark class="cmt" data-c="{ids}">{part}</mark>')
+        elif (open_ids or open_hl) and not skip and part.strip():
+            ids = " ".join(
+                htmllib.escape(str(placed[n]["id"]), quote=True) for n in open_ids + open_hl
+            )
+            kinds = ["cmt"] if open_ids else []
+            if open_hl:
+                kinds.append(f"hl hl-{placed[open_hl[-1]].get('color', 'yellow')}")
+            out.append(f'<mark class="{" ".join(kinds)}" data-c="{ids}">{part}</mark>')
         else:
             out.append(part)
         i += 1
@@ -616,7 +672,14 @@ def mark_html(html: str, placed: dict[str, dict[str, Any]]) -> str:
 CSS = """
 /* Comments */
 mark.cmt { background: #FFF0A3; color: inherit; border-radius: 2px; padding: 0 0.05em; }
+mark.cmt { border-bottom: 1.5px dotted #B7791F; }
+mark.hl { color: inherit; border-radius: 2px; padding: 0 0.05em; }
+mark.hl-yellow { background: #FFF3A0; }
+mark.hl-green { background: #C9F2C3; }
+mark.hl-blue { background: #CFE5FF; }
+mark.hl-pink { background: #FFD4E8; }
 mark.cmt.cmt-active { background: #FFD43B; box-shadow: 0 0 0 2px #FFD43B; }
+mark.hl.cmt-active { box-shadow: 0 0 0 2px #F0B400; }
 sup.cmt-ref { font-size: 0.66em; font-weight: 700; color: #9A6700; margin-left: 0.1em; cursor: help; }
 .cmt-note { display: none; }
 @media print {

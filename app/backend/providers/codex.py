@@ -254,7 +254,7 @@ class CodexProvider:
         cmd = [binary, "exec", *(["resume"] if thread else []), "--json"]
         settings = {
             f'projects."{root}".trust_level': _toml("trusted"),
-            "sandbox_mode": _toml("workspace-write"),
+            "sandbox_mode": _toml("read-only" if options.read_only else "workspace-write"),
             "sandbox_workspace_write.network_access": "true",
             "approval_policy": _toml("never"),
             "web_search": _toml("disabled" if options.web_off else "live"),
