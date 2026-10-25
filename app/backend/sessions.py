@@ -31,6 +31,12 @@ class Segment(BaseModel):
     native_session_id: str | None = None
     # The command that started the native session; replies without one keep its route.
     route_key: str = ""
+    # The last turn was work (a command, /continue, /do) that handed back to the author: a
+    # reply without a command answers the agent and carries that work on with every tool.
+    awaiting: bool = False
+    # A read-only turn that ended asking the author whether to go ahead: the request it held.
+    # A yes in reply (or Go ahead with tools) carries it out with every tool.
+    offered: str = ""
     started: float = Field(default_factory=time.time)
     ended: float | None = None
     end_reason: str | None = None

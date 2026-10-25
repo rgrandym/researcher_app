@@ -163,7 +163,7 @@ export default function SessionView({ id, embedded = false, onNew }: { id: strin
             connection={connection}
             onConnection={(c) => setNextConnection(id, c)}
             contextPercent={activity.data?.cost.context_percent}
-            placeholder={embedded ? "Ask about this project (read-only), or type / for a command; /continue resumes work" : "Ask a question (read-only), or type / for a command; /continue resumes work"}
+            placeholder={embedded ? "Ask about this project (read-only), reply to the agent, or type / for a command" : "Ask a question (read-only), reply to the agent, or type / for a command"}
             autoFocus
           />
         </div>

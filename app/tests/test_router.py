@@ -258,3 +258,58 @@ def test_do_carries_out_a_one_off_task_with_every_tool(root: Path) -> None:
         assert routes[0].startswith("/do:")
 
     asyncio.run(go())
+
+
+def test_a_reply_to_an_agent_that_asked_carries_its_work_on(root: Path) -> None:
+    claude = FakeProvider("claude-sub", ["claude_asks.jsonl", "claude_subagent.jsonl"])
+    m = TurnManager({"claude-sub": claude})
+
+    async def go() -> None:
+        s = sessions.create()
+        await m.send(s.id, "/research lithium prices in 2026", "claude-sub")
+        await _settle(m, s.id)
+        assert sessions.load(s.id).segments[0].awaiting
+        await m.send(s.id, "yes, and keep the table", "claude-sub")
+        await _settle(m, s.id)
+        reply = claude.options[1]
+        assert not reply.read_only and reply.model == "opus" and not reply.system_append
+        assert claude.prompts[1][0].startswith("yes, and keep the table")
+        assert not sessions.load(s.id).segments[0].awaiting  # that turn did not ask
+        await m.send(s.id, "what does the gate check?", "claude-sub")
+        await _settle(m, s.id)
+        assert claude.options[2].read_only
+        routes = [e.data["text"] for e in sessions.transcript(s.id) if e.data.get("kind") == "route"]
+        assert routes[1].startswith("Reply to /research (continued), with every tool")
+
+    asyncio.run(go())
+
+
+def test_a_yes_to_a_read_only_turn_that_asked_carries_its_request_out(root: Path) -> None:
+    claude = FakeProvider("claude-sub", ["claude_asks.jsonl", "claude_subagent.jsonl"])
+    m = TurnManager({"claude-sub": claude})
+
+    async def go() -> None:
+        s = sessions.create()
+        await m.send(s.id, "apply the five edits to the outlook", "claude-sub")
+        await _settle(m, s.id)
+        assert claude.options[0].read_only
+        route = next(e for e in sessions.transcript(s.id) if e.data.get("kind") == "route")
+        assert route.data["read_only"] and route.data["request"] == "apply the five edits to the outlook"
+        assert sessions.load(s.id).segments[0].offered == "apply the five edits to the outlook"
+        await m.send(s.id, "Yes please", "claude-sub")
+        await _settle(m, s.id)
+        assert not claude.options[1].read_only
+        assert "Do what they asked earlier:\napply the five edits to the outlook" in claude.prompts[1][0]
+        await m.send(s.id, "why five?", "claude-sub")  # not a yes: still a question
+        await _settle(m, s.id)
+        assert claude.options[2].read_only
+
+    asyncio.run(go())
+
+
+def test_a_read_only_turn_asks_rather_than_refuses() -> None:
+    from backend.turns import AFFIRM, QUESTION
+
+    assert "never answer that you cannot do it" in QUESTION and "Never tell" in QUESTION
+    assert all(AFFIRM.match(t) for t in ["yes", "Yes please", "ok", "go ahead", "Do it.", "yes, apply them"])
+    assert not any(AFFIRM.match(t) for t in ["yes but only the first two", "why five?", "no"])

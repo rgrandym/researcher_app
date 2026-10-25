@@ -80,7 +80,18 @@ QUESTION = (
     "earlier in this conversation. If the question needs research or a change to the "
     "document, say so in one line and name the command that would do it (/research, "
     "/expand, /verify, /repair, /user-edits), /do for a one-off task, or /continue to resume "
-    "the work in progress."
+    "the work in progress. When the message asks for a change or approves one, never answer "
+    "that you cannot do it: ask one concrete question that confirms what to do (for example "
+    "'Shall I apply these five replacements and close the round?'). The author works in an "
+    "app: a yes in reply, or the Go ahead with tools button under your answer, runs the next "
+    "turn with every tool. Never tell them to start another session, change permissions or "
+    "re-enable tools."
+)
+# A short yes to a read-only turn's question: it carries the earlier request out with tools.
+AFFIRM = re.compile(
+    r"^\s*(y(es|ep|eah)?|ok(ay)?|sure|go( ahead| for it)?|do it|proceed|approved?|confirm(ed)?|"
+    r"please( do)?|yes,? (please|go ahead|do it|apply (it|them)))\b[\s.!,]*(please)?[\s.!]*$",
+    re.IGNORECASE,
 )
 CONTINUE = "continue"
 DO = "do"  # a one-off task with every tool, on the chat route: "/do make the headers lighter"
@@ -427,11 +438,27 @@ class TurnManager:
         # Model and effort as set now, so a change between turns (Models, the routing
         # table, the effort meter) applies to the next turn on either provider.
         # Only a command starts work. /continue resumes the command this conversation was
-        # working on; any other message without a command is a question, answered read-only.
-        continuing = router.command_of(route_text) == CONTINUE
-        doing = router.command_of(route_text) == DO
-        question = not (continuing or doing or work) and router.command_of(route_text) is None and route_text == prompt
-        if continuing and route_text == prompt:
+        # working on, and so does a plain reply to an agent that handed back mid-task (it
+        # asked to confirm, or asked a question); any other message without a command is a
+        # question, answered read-only.
+        typed = router.command_of(route_text)
+        replying = seg.awaiting and typed is None and route_text == prompt
+        confirming = (
+            bool(seg.offered) and not seg.awaiting and typed is None and route_text == prompt
+            and bool(AFFIRM.match(route_text))
+        )
+        if confirming:
+            prompt = (
+                f"The author confirmed ({route_text.strip()}). Every tool is on for this turn. "
+                f"Do what they asked earlier:\n{seg.offered}"
+            )
+            route_text = f"/{CONTINUE}"
+            typed = CONTINUE
+            replying = True
+        continuing = typed == CONTINUE or replying
+        doing = typed == DO
+        question = not (continuing or doing or work) and typed is None and route_text == prompt
+        if continuing and not replying and route_text == prompt:
             prompt = route_text.strip()[len(CONTINUE) + 1 :].strip() or "Carry on with the task in progress."
         if doing and route_text == prompt:
             prompt = route_text.strip()[len(DO) + 1 :].strip() or "Ask the author what to do."
@@ -471,17 +498,19 @@ class TurnManager:
             )
             if picked.key != "chat" and not picked.command:
                 label += " (continued)"
+            if replying:
+                label = f"Reply to {label}, with every tool"
             at = f" at {picked.effort} effort" if picked.effort else ""
             text = picked.notice or f"{label}: {picked.tier} tier, {picked.model}{at}"
             if fresh and seg.native_session_id:
                 text += ", new conversation"
+            route_data: dict[str, Any] = {"kind": "route", "text": text, "tier": picked.tier}
+            if question:
+                route_data["read_only"] = True
+                route_data["request"] = route_text
             await self._emit(
                 session_id,
-                Event(
-                    type="notice",
-                    provider=seg.provider,
-                    data={"kind": "route", "text": text, "tier": picked.tier},
-                ),
+                Event(type="notice", provider=seg.provider, data=route_data),
             )
         options = TurnOptions(
             model=seg.model,
@@ -552,6 +581,14 @@ class TurnManager:
                 (run_path / ".critique-isolation-failed").unlink(missing_ok=True)
                 newest = max(run_path.glob("critique*.md"), key=lambda f: f.stat().st_mtime)
                 critique_ready = {"run": run_name, "path": newest.name}
+        # A turn that ended by asking the author something waits on the answer: a reply to
+        # work carries the work on, and a yes to a read-only turn carries its request out.
+        asked = result.end_reason == "done" and self._asked_author(session_id, started)
+        after = sessions.load(session_id)
+        if (cur := after.current()) is not None:
+            cur.awaiting = asked and not question
+            cur.offered = route_text if asked and question else ""
+            sessions.save(after)
         await self._finish(session_id, result, started, running)
         if critique_ready:
             # The transcript offers the author's three choices: apply every finding, apply
@@ -598,6 +635,16 @@ class TurnManager:
             if st.installed and st.signed_in:
                 return conn
         return None
+
+    @staticmethod
+    def _asked_author(session_id: str, started: float) -> bool:
+        """Whether the turn's last words to the author end on a question."""
+        texts = [
+            str(e.data.get("text") or "") for e in sessions.transcript(session_id)
+            if e.ts >= started and e.type == "assistant_text" and e.agent is None
+        ]
+        last = next((t.strip() for t in reversed(texts) if t.strip()), "")
+        return "?" in last.split("\n\n")[-1]
 
     @staticmethod
     def _did_nothing(session_id: str, started: float) -> bool:
@@ -802,9 +849,12 @@ class TurnManager:
         except (FileNotFoundError, ValueError):
             return None
         if missing:
+            if (cur := session.current()) is not None:
+                cur.awaiting = True  # the stage waits on the author: a reply carries it on
+                sessions.save(session)
             await note(
                 f"Waiting on you: the {stage} stage is not complete yet "
-                f"(missing: {', '.join(missing)}). Reply with /continue to carry it on; a message without it is answered as a question."
+                f"(missing: {', '.join(missing)}). Reply to carry it on."
             )
             return None
         i = PIPELINE.index(stage)

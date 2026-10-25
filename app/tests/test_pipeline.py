@@ -35,12 +35,12 @@ def test_stages_chain_and_wait_for_the_author(root: Path) -> None:
         assert _notices(sid) == [
             "The gather stage is complete. Starting draft in a fresh conversation.",
             "Waiting on you: the draft stage is not complete yet (missing: draft). "
-            "Reply with /continue to carry it on; a message without it is answered as a question.",
+            "Reply to carry it on.",
         ]
 
         # The author replies; the draft lands; the app goes on to review.
         (root / "outputs" / RUN / "draft.md").write_text("# Draft\n\nText [E1].\n")
-        await m.send(sid, "/continue go on", "claude-sub")
+        await m.send(sid, "go on", "claude-sub")
         await _settle(m, sid)
         assert claude.prompts[2][0] == "go on" and claude.prompts[2][1] is not None
         assert claude.prompts[3][0].startswith("/research-pipeline stage=review")

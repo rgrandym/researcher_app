@@ -257,6 +257,15 @@ the command's tier with every tool, and `/do <request>` (also the app's own) run
 with every tool on the `chat` route. Retry of a command continues it; retry of a question
 stays a question. A handoff to another account carries work and is never a question.
 
+A turn that ends with the agent asking the author something (its last paragraph holds a
+`?`, `_asked_author`) waits on the answer. After work, the segment's `awaiting` is set and a
+plain reply resumes the command with every tool, as `/continue` would; an incomplete pipeline
+stage sets it too. After a read-only question, `offered` keeps the request: the `QUESTION`
+note tells the agent to ask for confirmation instead of refusing, and a short yes (`AFFIRM`)
+carries the request out with every tool. The route notice of a read-only turn carries
+`read_only` and `request`, and the transcript offers **Go ahead with tools**, which sends
+`/continue <request>`.
+
 A project's **Chat** tab holds a conversation tied to that run (`project` on the session):
 each new agent conversation in it is told the run and its master, so nothing needs naming.
 `POST /api/runs/{name}/chat` returns the project's latest conversation, or a new one with
@@ -265,7 +274,7 @@ each new agent conversation in it is told the run and its master, so nothing nee
 With `staged_pipeline` on (Models), `/research-pipeline` runs one stage per fresh
 conversation: gather, draft, review, finish. When a turn ends, `turns.py` checks the run's
 files through `run_check.py`; a complete stage starts the next, an incomplete one waits for
-the author, who carries it on with `/continue`. The session's `pipeline` field records where it is.
+the author, whose reply carries it on. The session's `pipeline` field records where it is.
 
 Commands listed under `hidden_commands` in `app/data/settings.json` leave the command
 menu and are refused if typed; the list is empty by default.

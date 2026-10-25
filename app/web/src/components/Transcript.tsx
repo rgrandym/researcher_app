@@ -470,6 +470,7 @@ export default function Transcript({
   const lastUser = lastUserFromEnd < 0 ? -1 : events.length - 1 - lastUserFromEnd;
   const sinceUser = lastUser < 0 ? events : events.slice(lastUser);
   const latestPromptFinished = lastUser >= 0 && !running && events.slice(lastUser + 1).some((e) => e.type === "done");
+  const lastReadOnly = sinceUser.find((e) => e.type === "notice" && e.data.kind === "route" && e.data.read_only);
   const lastBroken = [...sinceUser].reverse().find((e) => (e.type === "notice" && e.data.kind === "empty") || (e.type === "error" && e.data.kind !== "limit"));
   const lastSwitch = Math.max(0, ...events.filter((e) => e.type === "handoff").map((e) => e.ts));
   // A turn that finished since the last request or handover without a reply or a tool call:
@@ -522,6 +523,18 @@ export default function Transcript({
               return (
                 <div key={i} className="px-1 text-[0.7188rem] text-faint">
                   {ev.data.text}
+                  {ev === lastReadOnly && latestPromptFinished && (
+                    <div className="mt-1 flex items-center gap-2 text-muted">
+                      <span>This turn could read but not change anything.</span>
+                      <button
+                        onClick={() => send({ type: "send", session: sid, text: `/continue ${String(ev.data.request ?? "")}` })}
+                        title="Send the same message again with every tool on (/continue)"
+                        className="rounded-md border border-current px-2 py-0.5 text-[0.75rem] font-medium hover:bg-panel"
+                      >
+                        Go ahead with tools
+                      </button>
+                    </div>
+                  )}
                 </div>
               );
             }
