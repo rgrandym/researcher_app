@@ -5,8 +5,11 @@ The same chain the /export skill documents, run by code with no model call:
     figures.py build    the ```figure blocks become charts (PNG and SVG) in a styled copy
     references.py render  [E#] become reader-facing citations (research runs only)
     style.py css        the style's stylesheet
-    pandoc              self-contained HTML
+    pandoc              self-contained HTML, and Word with the style's reference document
     weasyprint          PDF from that HTML
+
+The author's comments (`comments.py`) ride along as pandoc comment spans: Word comments
+in the .docx, highlighted passages with notes in the HTML, footnotes in the PDF.
 
 The master is never modified. A preview renders into the app's own cache
 (`app/data/render/`); "Export" renders into `<run>/export/<style>/`, where the
@@ -15,17 +18,18 @@ The master is never modified. A preview renders into the app's own cache
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import os
 import re
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Any
 
-from backend import appearance, config, workspace
+from backend import appearance, comments, config, workspace
 
 TIMEOUT_S = 300
 
@@ -104,12 +108,79 @@ def _source(run: Path, doc: str | None) -> Path:
     return path
 
 
+def _rule(item: dict[str, Any], heavy: float = 1.0) -> str:
+    width = item["rule_weight_pt"] * heavy
+    if item.get("rule_style") == "double":
+        width = max(width, 2.4)  # thinner, a double rule draws as one line
+    return f"{width:.2f}pt {item.get('rule_style', 'solid')} {item['border']}"
+
+
+def table_css(overrides: dict[str, dict[str, Any]]) -> str:
+    """The stylesheet rules for tables with individual settings, by their HTML ids."""
+    rules = []
+    for table_id, item in overrides.items():
+        sel = f"#report-table-{table_id}"
+        font = ", ".join(f'"{name}"' if " " in name else name for name in appearance.FONT_STACKS[item["font_family"]])
+        look = item.get("borders", "horizontal")
+        rules.append(
+            f"{sel} {{ font-family: {font}; font-size: {item['font_size_pt']}pt; "
+            f"width: {item['width_percent']}%; border-collapse: collapse; border: none; }}\n"
+            f"{sel} th {{ font-family: inherit; background: {item['header_bg']}; color: {item['header_fg']}; "
+            f"padding: {item['cell_padding_em']}em; border: none; }}\n"
+            f"{sel} td {{ background: {item['body_bg']}; color: {item['body_fg']}; "
+            f"padding: {item['cell_padding_em']}em; border: none; }}\n"
+            f"{sel} tbody tr:nth-child(even) td {{ background: {item['stripe_bg']}; }}"
+        )
+        if look == "horizontal":
+            rules.append(f"{sel} th, {sel} td {{ border-bottom: {_rule(item)}; }}")
+        elif look == "grid":
+            rules.append(f"{sel} th, {sel} td {{ border: {_rule(item)}; }}")
+        elif look == "minimal":
+            rules.append(
+                f"{sel} {{ border-top: {_rule(item, 1.6)}; border-bottom: {_rule(item, 1.6)}; }}\n"
+                f"{sel} th {{ border-bottom: {_rule(item, 1.2)}; }}"
+            )
+        elif look == "boxed":
+            rules.append(f"{sel} {{ border: {_rule(item)}; }}\n{sel} th {{ border-bottom: {_rule(item, 1.2)}; }}")
+        else:
+            rules.append(f"{sel} th {{ border-bottom: {_rule(item, 1.2)}; }}")
+    return "\n/* Individual tables */\n" + "\n".join(rules) + "\n"
+
+
+_IMAGE = re.compile(r"!\[([^\]]*)\]\(([^)\s]+)\)")
+
+
+def _absolute_images(text: str, folder: Path) -> str:
+    """Images written relative to the run, made absolute for a copy rendered elsewhere."""
+
+    def fix(m: re.Match[str]) -> str:
+        target = m.group(2)
+        if re.match(r"^(?:[a-z]+:|/|#)", target, re.I) or not (folder / target).exists():
+            return m.group(0)
+        return f"![{m.group(1)}]({(folder / target).resolve()})"
+
+    return _IMAGE.sub(fix, text)
+
+
 def build(
-    run_name: str, doc: str | None, style: str, cite: bool, out: Path, figures_dir: Path
+    run_name: str,
+    doc: str | None,
+    style: str,
+    cite: bool,
+    out: Path,
+    figures_dir: Path,
+    with_comments: bool = True,
+    text: str | None = None,
 ) -> dict[str, Any]:
-    """Render one document into `out`: <stem>.md (reader copy), style.css, <stem>.html."""
+    """Render one document into `out`: <stem>.md (reader copy), style.css, <stem>.html.
+    With `text`, renders that in place of the saved document (the editor's unsaved copy)."""
     run = workspace.run_dir(run_name)
-    src = _source(run, doc)
+    master = _source(run, doc)
+    src = master
+    if text is not None:
+        src = out.parent / "src" / master.name
+        src.parent.mkdir(parents=True, exist_ok=True)
+        src.write_text(_absolute_images(text, run))
     if style not in {s["name"] for s in styles()}:
         raise RenderError(f"Unknown style: {style}")
     out.mkdir(parents=True, exist_ok=True)
@@ -121,6 +192,7 @@ def build(
         effective_path.write_text(json.dumps(custom))
         style_arg = str(effective_path)
     stem = "report" if src.name in ("report.md", "draft.md") else src.stem
+    noted = comments.open_for(run_name, master.name) if with_comments else []
     py = config.python()
     styled = out / "_styled.md"
     reader = out / f"{stem}.md"
@@ -142,6 +214,10 @@ def build(
             ]
         )
     ]
+    placed: dict[str, dict[str, Any]] = {}
+    if noted:
+        marked, placed = comments.inject(styled.read_text(), noted)
+        styled.write_text(marked)
     cited = cite and (run / "evidence.jsonl").is_file()
     if cited:
         log.append(
@@ -167,22 +243,17 @@ def build(
     css = [py, _script("style.py"), "css", style_arg, "-o", str(out / "style.css")]
     log.append(_run([*css, "--cover"]))
     table_overrides = custom.get("item_overrides", {}).get("tables", {}) if custom else {}
-    if table_overrides:
-        rules = []
-        for table_id, item in table_overrides.items():
-            selector = f"#report-table-{table_id}"
-            font = ", ".join(f'"{name}"' if " " in name else name for name in appearance.FONT_STACKS[item["font_family"]])
-            rules.append(
-                f"{selector} {{ font-family: {font}; font-size: {item['font_size_pt']}pt; "
-                f"width: {item['width_percent']}%; }}\n"
-                f"{selector} th {{ font-family: inherit; background: {item['header_bg']}; color: {item['header_fg']}; "
-                f"padding: {item['cell_padding_em']}em; border-bottom: {item['rule_weight_pt']}pt solid {item['border']}; }}\n"
-                f"{selector} td {{ background: {item['body_bg']}; color: {item['body_fg']}; "
-                f"padding: {item['cell_padding_em']}em; border-bottom: {item['rule_weight_pt']}pt solid {item['border']}; }}\n"
-                f"{selector} tbody tr:nth-child(even) td {{ background: {item['stripe_bg']}; }}"
-            )
+    if table_overrides or placed:
         with (out / "style.css").open("a") as stream:
-            stream.write("\n/* Individual tables */\n" + "\n".join(rules) + "\n")
+            if table_overrides:
+                stream.write(table_css(table_overrides))
+            if placed:
+                stream.write(comments.CSS)
+    # The export loss check compares the outputs with a reader copy that has no comments.
+    check_copy = reader
+    if placed:
+        check_copy = out / "_check.md"
+        check_copy.write_text(comments.strip(reader.read_text()))
     html = out / f"{stem}.html"
     pandoc = [
         _pandoc(),
@@ -210,24 +281,72 @@ def build(
         raise RenderError(f"pandoc: {exc}") from exc
     if done.returncode != 0:
         raise RenderError(f"pandoc failed:\n{done.stderr.strip()[-1500:]}")
-    if table_overrides:
-        ids = [m.group(2) for m in appearance.TABLE_CAP.finditer(src.read_text())]
-        by_number = {str(i): table_id for i, table_id in enumerate(ids, 1)}
-        pattern = re.compile(r'(<p[^>]*>\s*<strong>Table (\d+)\.</strong>.*?</p>\s*)(<table\b)', re.S)
-        def tag_table(match: re.Match[str]) -> str:
+    # Every captioned table gets its id, so a click on it names it and its own styles reach it.
+    source_md = src.read_text()
+    table_ids = [m.group(2) for m in appearance.TABLE_CAP.finditer(source_md)]
+    sides = appearance.table_sides(source_md)
+    if table_ids:
+        by_number = {str(i): table_id for i, table_id in enumerate(table_ids, 1)}
+        caption = r'<p[^>]*>\s*<strong>Table (\d+)\.</strong>'
+        above = re.compile(rf"({caption}(?:(?!</p>).)*</p>\s*)<table\b", re.S)
+        below = re.compile(rf"<table\b((?:(?!<table\b).)*?</table>\s*{caption})", re.S)
+
+        def tag_above(match: re.Match[str]) -> str:
             table_id = by_number.get(match.group(2))
-            if table_id not in table_overrides:
+            if not table_id or sides.get(table_id) != "above":
                 return match.group(0)
             return match.group(1) + f'<table id="report-table-{table_id}"'
-        html.write_text(pattern.sub(tag_table, html.read_text()))
+
+        def tag_below(match: re.Match[str]) -> str:
+            table_id = by_number.get(match.group(2))
+            if not table_id or sides.get(table_id) != "below":
+                return match.group(0)
+            return f'<table id="report-table-{table_id}"' + match.group(1)
+
+        html.write_text(below.sub(tag_below, above.sub(tag_above, html.read_text())))
+    if placed:
+        html.write_text(comments.mark_html(html.read_text(), placed))
     return {
         "html": html,
         "reader": reader,
+        "check_reader": check_copy,
         "stem": stem,
         "source": src,
+        "style_arg": style_arg,
         "cited": cited,
+        "comments": len(placed),
+        "table_ids": table_ids,
+        "table_sides": sides,
+        "table_overrides": table_overrides,
         "log": "\n".join(x for x in log if x),
     }
+
+
+def _docx(result: dict[str, Any], out: Path) -> Path:
+    """Word from the reader copy, in the style's reference document; comments become
+    Word comments, and tables with individual settings keep them."""
+    from backend import docx_tables
+
+    ref = out / "reference.docx"
+    _run([config.python(), _script("style.py"), "docx-ref", result["style_arg"], "-o", str(ref)])
+    target = out / f"{result['stem']}.docx"
+    try:
+        done = subprocess.run(
+            [_pandoc(), str(result["reader"]), f"--reference-doc={ref}", "-o", str(target)],
+            cwd=out,
+            capture_output=True,
+            text=True,
+            timeout=TIMEOUT_S,
+            env=config.child_env(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RenderError(f"pandoc: {exc}") from exc
+    if done.returncode != 0:
+        raise RenderError(f"pandoc (Word) failed:\n{done.stderr.strip()[-1500:]}")
+    docx_tables.apply(
+        target, result["table_ids"], result["table_sides"], result["table_overrides"], appearance.FONT_STACKS
+    )
+    return target
 
 
 def figures(figures_dir: Path) -> list[dict[str, Any]]:
@@ -262,6 +381,7 @@ def preview(run_name: str, doc: str | None, style: str, cite: bool) -> dict[str,
     for source in (appearance_file, global_defaults_file):
         if source.exists():
             digest.update(source.read_bytes())
+    digest.update(comments.stamp(run_name))
     appearance_hash = digest.hexdigest()
     meta: dict[str, Any] = {}
     try:
@@ -287,6 +407,33 @@ def preview(run_name: str, doc: str | None, style: str, cite: bool) -> dict[str,
     return {**meta, "figures": figures(cache / "figures"), "cached": False}
 
 
+_live_locks: dict[str, threading.Lock] = {}
+
+
+def live(run_name: str, doc: str | None, style: str, cite: bool, text: str) -> dict[str, Any]:
+    """Render the editor's unsaved text, for the HTML view beside a popped-out editor.
+    Never cached and never written to the run: it lands in the preview cache's live/."""
+    if len(text) > 2_000_000:
+        raise RenderError("The document is too large to preview while editing.")
+    base = _cache(run_name, style, cite) / "live"
+    lock = _live_locks.setdefault(f"{run_name}/{style}/{cite}", threading.Lock())
+    with lock:
+        result = build(run_name, doc, style, cite, base / "out", base / "figures", text=text)
+    return {
+        "source": result["source"].name,
+        "built": time.time(),
+        "html": str(result["html"]),
+        "log": result["log"],
+        "figures": figures(base / "figures"),
+        "cached": False,
+        "live": True,
+    }
+
+
+def cache_dir(run_name: str, style: str, cite: bool) -> Path:
+    return _cache(run_name, style, cite)
+
+
 def preview_file(run_name: str, style: str, cite: bool, rel: str) -> Path:
     """A file inside a preview cache (the HTML or a figure), checked to stay inside it."""
     base = _cache(run_name, style, cite).resolve()
@@ -300,14 +447,21 @@ def preview_file(run_name: str, style: str, cite: bool, rel: str) -> Path:
 
 
 def export(
-    run_name: str, doc: str | None, style: str, cite: bool, formats: list[str]
+    run_name: str,
+    doc: str | None,
+    style: str,
+    cite: bool,
+    formats: list[str],
+    with_comments: bool = True,
 ) -> dict[str, Any]:
     """Render into <run>/export/<style>/ and add the requested formats, then check that
     the export lost nothing."""
     run = workspace.run_dir(run_name)
     out = run / "export" / style
-    result = build(run_name, doc, style, cite, out, run / "figures" / style)
+    result = build(run_name, doc, style, cite, out, run / "figures" / style, with_comments)
     made = [result["html"]] if "html" in formats or "pdf" in formats else []
+    if "docx" in formats:
+        made.append(_docx(result, out))
     if "pdf" in formats:
         pdf = out / f"{result['stem']}.pdf"
         env = config.child_env()
@@ -337,7 +491,7 @@ def export(
                 config.python(),
                 _script("check_export.py"),
                 *cited,
-                str(result["reader"]),
+                str(result["check_reader"]),
                 *map(str, made),
             ],
             cwd=config.ROOT,
@@ -354,6 +508,7 @@ def export(
         "files": [str(p.relative_to(config.ROOT)) for p in made],
         "folder": str(out.relative_to(config.ROOT)),
         "check": check,
+        "comments": result["comments"],
         "figures": figures(run / "figures" / style),
     }
 

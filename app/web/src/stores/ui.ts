@@ -44,13 +44,15 @@ export const useUi = create<UiState>((set) => ({
   sidebarOpen: prefs().sidebar_open,
   activityOpen: prefs().activity_open,
   nextConnection: {},
-  setView: (view) =>
+  setView: (view) => {
+    if (view.kind === "run" || view.kind === "session" || view.kind === "exports" || view.kind === "home") setPref("last_view", view);
     set((s) => ({
       view,
       tab: "research",
       // Panels do not become a place to return to.
       previous: s.view.kind === "workspace" || s.view.kind === "models" ? s.previous : s.view,
-    })),
+    }));
+  },
   close: () => set((s) => ({ view: s.previous, tab: "research" })),
   setTab: (tab) => set({ tab }),
   // The stored transcript, plus any live events newer than its last one.

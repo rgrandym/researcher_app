@@ -28,6 +28,78 @@ export interface TableAppearance {
   header_bg: string; header_fg: string; border: string;
   font_size_pt: number; cell_padding_em: number; rule_weight_pt: number;
   font_family: string; width_percent: number; body_bg: string; body_fg: string; stripe_bg: string;
+  rule_style: string; borders: string;
+}
+
+type TableLook = Omit<TableAppearance, "font_size_pt" | "font_family" | "width_percent" | "cell_padding_em">;
+
+// Ready-made table designs. Each sets colours and rules; the table keeps its font, size,
+// width and padding.
+const TABLE_PRESETS: { name: string; look: TableLook }[] = [
+  { name: "Clean rules", look: { header_bg: "#FFFFFF", header_fg: "#1F2933", body_bg: "#FFFFFF", body_fg: "#1F2933", stripe_bg: "#FFFFFF", border: "#C9D1D9", rule_weight_pt: 0.6, rule_style: "solid", borders: "horizontal" } },
+  { name: "Academic", look: { header_bg: "#FFFFFF", header_fg: "#111111", body_bg: "#FFFFFF", body_fg: "#222222", stripe_bg: "#FFFFFF", border: "#111111", rule_weight_pt: 0.6, rule_style: "solid", borders: "minimal" } },
+  { name: "Banded slate", look: { header_bg: "#334155", header_fg: "#FFFFFF", body_bg: "#FFFFFF", body_fg: "#1E293B", stripe_bg: "#F1F5F9", border: "#CBD5E1", rule_weight_pt: 0.5, rule_style: "solid", borders: "horizontal" } },
+  { name: "Ocean", look: { header_bg: "#0F4C81", header_fg: "#FFFFFF", body_bg: "#FFFFFF", body_fg: "#102A43", stripe_bg: "#EAF2FA", border: "#9FB3C8", rule_weight_pt: 0.5, rule_style: "solid", borders: "horizontal" } },
+  { name: "Full grid", look: { header_bg: "#F3F4F6", header_fg: "#111827", body_bg: "#FFFFFF", body_fg: "#111827", stripe_bg: "#FFFFFF", border: "#9CA3AF", rule_weight_pt: 0.5, rule_style: "solid", borders: "grid" } },
+  { name: "Boxed teal", look: { header_bg: "#E6F4F1", header_fg: "#0B5345", body_bg: "#FFFFFF", body_fg: "#1B2631", stripe_bg: "#F7FBFA", border: "#48A999", rule_weight_pt: 0.75, rule_style: "solid", borders: "boxed" } },
+  { name: "Ledger", look: { header_bg: "#FBF7EE", header_fg: "#5B4636", body_bg: "#FFFDF8", body_fg: "#3E3328", stripe_bg: "#F6EFE2", border: "#C8B79E", rule_weight_pt: 0.6, rule_style: "dotted", borders: "horizontal" } },
+  { name: "Double rule", look: { header_bg: "#FFFFFF", header_fg: "#1F2937", body_bg: "#FFFFFF", body_fg: "#1F2937", stripe_bg: "#FFFFFF", border: "#1F2937", rule_weight_pt: 0.6, rule_style: "double", borders: "minimal" } },
+  { name: "Charcoal", look: { header_bg: "#1F2937", header_fg: "#F9FAFB", body_bg: "#FFFFFF", body_fg: "#111827", stripe_bg: "#F9FAFB", border: "#D1D5DB", rule_weight_pt: 0.5, rule_style: "solid", borders: "header" } },
+  { name: "Amber", look: { header_bg: "#B45309", header_fg: "#FFFFFF", body_bg: "#FFFFFF", body_fg: "#292524", stripe_bg: "#FEF3C7", border: "#F59E0B", rule_weight_pt: 0.5, rule_style: "dashed", borders: "horizontal" } },
+];
+
+const LINE_TYPES: [string, string][] = [["solid", "Solid"], ["dashed", "Dashed"], ["dotted", "Dotted"], ["double", "Double"]];
+const LAYOUTS: [string, string][] = [
+  ["horizontal", "Rule under every row"], ["grid", "Full grid"], ["minimal", "Top, header and bottom rules"],
+  ["boxed", "Outer box and header rule"], ["header", "Header rule only"],
+];
+
+// A small drawing of a table in a given look: the same layouts the HTML and Word use.
+function TableSwatch({ look, font }: { look: TableLook; font?: string }) {
+  const width = Math.max(1, Math.round(look.rule_weight_pt * 1.6));
+  const rule = `${look.rule_style === "double" ? Math.max(3, width) : width}px ${look.rule_style} ${look.border}`;
+  const heavy = `${look.rule_style === "double" ? 3 : width + 1}px ${look.rule_style} ${look.border}`;
+  const table: React.CSSProperties = { borderCollapse: "collapse", width: "100%", fontSize: "0.5625rem", fontFamily: font };
+  if (look.borders === "minimal") Object.assign(table, { borderTop: heavy, borderBottom: heavy });
+  if (look.borders === "boxed") table.border = rule;
+  const cell = (header: boolean, row: number): React.CSSProperties => ({
+    padding: "1px 3px",
+    textAlign: "left",
+    fontWeight: header ? 600 : 400,
+    background: header ? look.header_bg : row % 2 ? look.stripe_bg : look.body_bg,
+    color: header ? look.header_fg : look.body_fg,
+    border: look.borders === "grid" ? rule : undefined,
+    borderBottom: look.borders === "grid" ? rule : look.borders === "horizontal" || header ? (header && look.borders !== "horizontal" ? heavy : rule) : undefined,
+  });
+  return (
+    <table style={table}>
+      <thead><tr><th style={cell(true, 0)}>Item</th><th style={cell(true, 0)}>2025</th></tr></thead>
+      <tbody>{[1, 2, 3].map((r) => <tr key={r}><td style={cell(false, r)}>Row {r}</td><td style={cell(false, r)}>{r * 12}</td></tr>)}</tbody>
+    </table>
+  );
+}
+
+function Presets({ onPick, font }: { onPick: (look: TableLook) => void; font?: string }) {
+  return (
+    <div className="grid grid-cols-2 gap-1.5">
+      {TABLE_PRESETS.map((preset) => (
+        <button key={preset.name} onClick={() => onPick(preset.look)} title={`Apply ${preset.name}`} className="rounded border border-border bg-white p-1.5 text-left hover:border-accent">
+          <TableSwatch look={preset.look} font={font} />
+          <div className="mt-1 text-[0.6875rem] text-[#1F2933]">{preset.name}</div>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function Choice({ label, value, options, onChange }: { label: string; value: string; options: [string, string][]; onChange: (value: string) => void }) {
+  return (
+    <label className="flex items-center justify-between gap-2 text-[0.75rem]">{label}
+      <select value={value} onChange={(e) => onChange(e.target.value)} className="max-w-44 rounded border border-border bg-surface px-2 py-1">
+        {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+      </select>
+    </label>
+  );
 }
 
 export interface AppearanceResponse {
@@ -133,7 +205,24 @@ export default function AppearancePanel({ data, onApply, onReset, onRetry, busy,
     cell_padding_em: 0.45, rule_weight_pt: draft.table.rule_weight_pt,
     font_family: draft.fonts.body, width_percent: 100,
     body_bg: draft.color.surface, body_fg: draft.color.body, stripe_bg: draft.color.surface_alt,
+    rule_style: "solid", borders: "horizontal",
   }) : null;
+  const tableDefaults = (): TableAppearance => ({
+    header_bg: draft.color.surface_alt, header_fg: draft.color.ink,
+    border: draft.table.border, font_size_pt: Number((draft.fonts.base_pt * 0.86).toFixed(1)),
+    cell_padding_em: 0.45, rule_weight_pt: draft.table.rule_weight_pt,
+    font_family: draft.fonts.body, width_percent: 100,
+    body_bg: draft.color.surface, body_fg: draft.color.body, stripe_bg: draft.color.surface_alt,
+    rule_style: "solid", borders: "horizontal",
+  });
+  const tableIds = data?.available.tables.map((item) => item.id) ?? [];
+  // Every table at once: a preset's look over each table's own settings, or one table's settings copied.
+  const styleAllTables = (patch: (current: TableAppearance) => TableAppearance) => setDraft((current) => {
+    if (!current) return current;
+    const tables = { ...current.items.tables };
+    for (const id of tableIds) tables[id] = patch(tables[id] ?? tableDefaults());
+    return { ...current, items: { ...current.items, tables } };
+  });
   const updateFigure = <K extends keyof FigureAppearance>(key: K, value: FigureAppearance[K]) => {
     if (!selectedFigure || !figure) return;
     setDraft((current) => current && ({ ...current, items: {
@@ -245,6 +334,12 @@ export default function AppearancePanel({ data, onApply, onReset, onRetry, busy,
                 <option value={600}>Semibold</option><option value={700}>Bold</option>
               </select>
             </label>
+            <div className="pt-2">
+              <div className="mb-1.5 text-[0.75rem]">Table designs{tableIds.length ? `, applied to all ${tableIds.length} tables` : ""}</div>
+              {tableIds.length ? <Presets font={draft.fonts.body} onPick={(look) => styleAllTables((current) => ({ ...current, ...look }))} /> :
+                <div className="text-[0.6875rem] text-faint">This report has no captioned tables.</div>}
+              <p className="mt-1.5 text-[0.6875rem] text-muted">To style one table, choose it under Customise.</p>
+            </div>
             <Colour label="Table rules" value={draft.table.border} onChange={(value) => setDraft((current) => current && ({ ...current, table: { ...current.table, border: value } }))} />
             <NumberField label="Table rule (pt)" value={draft.table.rule_weight_pt} min={0.2} max={2} step={0.1} onChange={(value) => setDraft((current) => current && ({ ...current, table: { ...current.table, rule_weight_pt: value } }))} />
           </div>
@@ -311,7 +406,14 @@ export default function AppearancePanel({ data, onApply, onReset, onRetry, busy,
         </details>}
       </div>}
       {table && <div className="space-y-3">
-        <div className="text-[0.75rem] text-muted">These settings affect only Table {selectedTable?.slice(1)}.</div>
+        <div className="text-[0.75rem] text-muted">These settings affect only Table {selectedTable?.slice(1)}, in the HTML, the PDF and Word.</div>
+        <div>
+          <div className="mb-1.5 text-[0.75rem]">Designs</div>
+          <Presets font={table.font_family} onPick={(look) => setDraft((current) => current && selectedTable ? ({ ...current, items: {
+            ...current.items, tables: { ...current.items.tables, [selectedTable]: { ...table, ...look } },
+          } }) : current)} />
+        </div>
+        <div className="rounded border border-border bg-white p-2"><TableSwatch look={table} font={table.font_family} /></div>
         <Colour label="Header background" value={table.header_bg} onChange={(v) => updateTable("header_bg", v)} />
         <Colour label="Header text" value={table.header_fg} onChange={(v) => updateTable("header_fg", v)} />
         <Colour label="Body background" value={table.body_bg} onChange={(v) => updateTable("body_bg", v)} />
@@ -327,6 +429,13 @@ export default function AppearancePanel({ data, onApply, onReset, onRetry, busy,
         <NumberField label="Table width (%)" value={table.width_percent} min={50} max={100} step={5} onChange={(v) => updateTable("width_percent", v)} />
         <NumberField label="Cell padding (em)" value={table.cell_padding_em} min={0.15} max={1.2} step={0.05} onChange={(v) => updateTable("cell_padding_em", v)} />
         <NumberField label="Rule width (pt)" value={table.rule_weight_pt} min={0.2} max={2} step={0.1} onChange={(v) => updateTable("rule_weight_pt", v)} />
+        <Choice label="Line type" value={table.rule_style} options={LINE_TYPES} onChange={(v) => updateTable("rule_style", v)} />
+        <Choice label="Rules" value={table.borders} options={LAYOUTS} onChange={(v) => updateTable("borders", v)} />
+        {tableIds.length > 1 && (
+          <button onClick={() => styleAllTables(() => ({ ...table }))} className="rounded border border-border px-2.5 py-1 text-[0.75rem] hover:border-accent">
+            Use these settings for all {tableIds.length} tables
+          </button>
+        )}
       </div>}
     </div>
   );

@@ -53,6 +53,10 @@ CHART_OPTIONS = {
     "bar_fill": ("solid", "outline", "hatched"),
     "label_position": ("auto", "inside", "outside"),
 }
+TABLE_OPTIONS = {
+    "rule_style": ("solid", "dashed", "dotted", "double"),
+    "borders": ("horizontal", "grid", "minimal", "boxed", "header"),
+}
 
 
 def _base(style: str) -> dict[str, Any]:
@@ -157,6 +161,17 @@ def available(run: str) -> dict[str, list[dict[str, Any]]]:
     return {"figures": figures, "tables": tables}
 
 
+def table_sides(md: str) -> dict[str, str]:
+    """Whether each table's caption line sits above it (the convention) or below it."""
+    sides = {}
+    for m in TABLE_CAP.finditer(md):
+        after = md[m.end():].lstrip("\n")
+        before = md[: m.start()].rstrip("\n")
+        below = not after.startswith("|") and before.rsplit("\n", 1)[-1].lstrip().startswith("|")
+        sides[m.group(2)] = "below" if below else "above"
+    return sides
+
+
 def _hex(value: Any) -> str:
     if not isinstance(value, str) or not HEX.fullmatch(value):
         raise ValueError("Colours must be six-digit hex values")
@@ -256,17 +271,21 @@ def validate(style: str, values: Any) -> dict[str, Any]:
     for key, item in items["tables"].items():
         if not isinstance(key, str) or not key.startswith("T") or not ITEM_ID.fullmatch(key) or not isinstance(item, dict):
             raise ValueError("Table appearance settings are invalid")
-        if not set(item) <= {"header_bg", "header_fg", "border", "font_size_pt", "cell_padding_em", "rule_weight_pt", "font_family", "width_percent", "body_bg", "body_fg", "stripe_bg"}:
+        if not set(item) <= {"header_bg", "header_fg", "border", "font_size_pt", "cell_padding_em", "rule_weight_pt", "font_family", "width_percent", "body_bg", "body_fg", "stripe_bg", *TABLE_OPTIONS}:
             raise ValueError("Table appearance settings are incomplete")
-        item = {"body_bg": color["surface"], "body_fg": color["body"], "stripe_bg": color["surface_alt"], **item}
+        item = {"body_bg": color["surface"], "body_fg": color["body"], "stripe_bg": color["surface_alt"],
+                "rule_style": "solid", "borders": "horizontal", **item}
         if item["font_family"] not in FONT_STACKS:
             raise ValueError("Choose a listed table font")
+        if any(item[k] not in choices for k, choices in TABLE_OPTIONS.items()):
+            raise ValueError("Choose a listed table line type and layout")
         clean_items["tables"][key] = {
             **{k: _hex(item[k]) for k in ("header_bg", "header_fg", "border", "body_bg", "body_fg", "stripe_bg")},
             "font_size_pt": _number(item["font_size_pt"], 6, 14),
             "cell_padding_em": _number(item["cell_padding_em"], 0.15, 1.2),
             "rule_weight_pt": _number(item["rule_weight_pt"], 0.2, 2.0),
             "font_family": item["font_family"], "width_percent": _number(item["width_percent"], 50, 100),
+            **{k: item[k] for k in TABLE_OPTIONS},
         }
     return {
         "color": {key: _hex(color[key]) for key in COLOR_KEYS},

@@ -1,12 +1,12 @@
-import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Check, Circle, Code2, Download, FileDown, FolderSearch, ListChecks, Minus, Palette, PanelRight, PanelRightClose, Pencil, Plus, RefreshCw, RotateCcw, Trash2, Upload, X } from "lucide-react";
+import { Check, Circle, Code2, Download, ExternalLink, FileDown, FolderSearch, ListChecks, MessageSquare, MessageSquarePlus, Minus, Palette, PanelRight, PanelRightClose, Pencil, Plus, RefreshCw, RotateCcw, Trash2, Undo2, Upload, X } from "lucide-react";
 import Panel, { CENTER, PANELS } from "./Panel";
 import { api, ApiError, fileUrl, getText, q, renderedUrl } from "../lib/api";
 import { bytes, day } from "../lib/format";
 import type { RunDetail, SessionDetail } from "../lib/types";
-import { place, remember, rememberDraft, rememberScroll } from "../lib/places";
+import { forget, place, remember, rememberDraft, rememberScroll } from "../lib/places";
 import { prefs, setPref } from "../lib/prefs";
 import { useUi } from "../stores/ui";
 import Markdown from "./Markdown";
@@ -15,6 +15,9 @@ import type { AppearanceResponse, AppearanceValues } from "./AppearancePanel";
 import SessionView from "./SessionView";
 import CritiqueQuestionsDialog, { type CritiqueAnswers, type CritiqueQuestion } from "./CritiqueQuestionsDialog";
 import ChangesDialog, { type Subject } from "./ChangesDialog";
+import CommentsPanel, { CommentList, useComments, type Anchor, type Comment } from "./CommentsPanel";
+import type { EditorMark } from "./MarkdownEditor";
+import { listen, openPopout, post } from "../lib/live";
 
 const MarkdownEditor = lazy(() => import("./MarkdownEditor"));
 
@@ -33,6 +36,7 @@ interface Exported {
   files: string[];
   folder: string;
   check: string;
+  comments: number;
 }
 
 function FileViewer({ run, path }: { run: string; path: string }) {
@@ -80,7 +84,36 @@ function FileViewer({ run, path }: { run: string; path: string }) {
   return <pre className="whitespace-pre-wrap font-mono text-[0.75rem]">{body}</pre>;
 }
 
-function EditPane({ run, path, isMaster, onSaved }: { run: string; path: string; isMaster: boolean; onSaved: () => void }) {
+// Where each comment sits in the editor's text. On the saved text the server's offsets hold;
+// after edits the quoted Markdown is looked for, nearest where it was.
+function placeComments(list: Comment[] | undefined, text: string, saved: boolean, active: string | null): EditorMark[] {
+  const out: EditorMark[] = [];
+  for (const c of list ?? []) {
+    if (c.resolved || !c.found || c.start === null || c.end === null) continue;
+    let from = c.start;
+    let to = c.end;
+    if (!saved || text.slice(from, to) !== c.quote) {
+      let best = -1;
+      for (let at = text.indexOf(c.quote); at >= 0 && c.quote; at = text.indexOf(c.quote, at + 1)) {
+        if (best < 0 || Math.abs(at - c.start) < Math.abs(best - c.start)) best = at;
+      }
+      if (best < 0) continue;
+      from = best;
+      to = best + c.quote.length;
+    }
+    out.push({ id: c.id, from, to, title: `${c.author}: ${c.text}`, active: c.id === active });
+  }
+  return out;
+}
+
+export function EditPane({ run, path, isMaster, onSaved, popout = false, onPopout }: {
+  run: string;
+  path: string;
+  isMaster: boolean;
+  onSaved: () => void;
+  popout?: boolean;
+  onPopout?: () => void;
+}) {
   const kept = place(run).drafts[path];
   const [text, setText] = useState(kept?.text ?? "");
   const [original, setOriginal] = useState(kept?.original ?? "");
@@ -88,6 +121,16 @@ function EditPane({ run, path, isMaster, onSaved }: { run: string; path: string;
   const [message, setMessage] = useState("");
   const [conflict, setConflict] = useState(false);
   const [selectedSection, setSelectedSection] = useState("");
+  const comments = useComments(run, path, isMaster);
+  const [commentsOpen, setCommentsOpenState] = useState(() => place(run).editComments ?? true);
+  const setCommentsOpen = (open: boolean) => {
+    setCommentsOpenState(open);
+    remember(run, { editComments: open });
+  };
+  const [activeComment, setActiveComment] = useState<string | null>(null);
+  const [focus, setFocus] = useState<{ from: number; to: number; key: number } | null>(null);
+  const current = useRef({ text, original });
+  current.current = { text, original };
   const finalSections = useQuery({
     queryKey: ["final-sections", run, path],
     queryFn: () => api.get<{ heading: string; final: boolean }[]>(`/api/runs/${encodeURIComponent(run)}/final-sections`),
@@ -114,6 +157,36 @@ function EditPane({ run, path, isMaster, onSaved }: { run: string; path: string;
   useEffect(() => {
     rememberDraft(run, path, { text, original, mtime });
   }, [run, path, text, original, mtime]);
+  // A popped-out editor shows its changes in the main window's HTML view as they are typed.
+  useEffect(() => {
+    if (!popout || !original) return;
+    const timer = setTimeout(() => post({ type: "draft", run, path, text, dirty: text !== original }), 700);
+    return () => clearTimeout(timer);
+  }, [popout, run, path, text, original]);
+  const marks = useMemo(
+    // `original` moves when the file loads or saves: the highlights are placed on that text.
+    () => placeComments(comments.data?.comments, current.current.text, current.current.text === original, activeComment),
+    [comments.data, activeComment, original],
+  );
+  const showComment = (id: string, tell: boolean) => {
+    setActiveComment(id);
+    const mark = placeComments(comments.data?.comments, current.current.text, current.current.text === current.current.original, id).find((m) => m.id === id);
+    if (mark) setFocus({ from: mark.from, to: mark.to, key: Date.now() });
+    if (tell) post({ type: "focus-comment", run, id, to: "html" });
+  };
+  const showRef = useRef(showComment);
+  showRef.current = showComment;
+  useEffect(
+    () =>
+      listen((m) => {
+        if (m.type === "focus-comment" && m.run === run && m.to === "editor") {
+          setCommentsOpen(true);
+          showRef.current(m.id, false);
+        } else if (m.type === "comments-changed" && m.run === run) void comments.refetch();
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [run],
+  );
   const save = useMutation({
     mutationFn: () => api.put<{ mtime: number }>(`/api/runs/${encodeURIComponent(run)}/file`, { path, content: text, mtime }),
     onSuccess: (r) => {
@@ -121,7 +194,9 @@ function EditPane({ run, path, isMaster, onSaved }: { run: string; path: string;
       setOriginal(text);
       setMessage("Saved. The HTML view re-renders from this file. A minute after your last save, an agent absorbs the edit into the report (/user-edits) by itself.");
       onSaved();
+      post({ type: "saved", run, path });
       void finalSections.refetch();
+      void comments.refetch();
     },
     onError: (e) => {
       setConflict(e instanceof ApiError && e.status === 409 && e.message.includes("changed on disk"));
@@ -129,6 +204,7 @@ function EditPane({ run, path, isMaster, onSaved }: { run: string; path: string;
     },
   });
   const dirty = text !== original;
+  const openCount = comments.data?.comments.filter((c) => !c.resolved).length ?? 0;
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-2 border-b border-border px-4 py-2 text-[0.7812rem]">
@@ -146,6 +222,21 @@ function EditPane({ run, path, isMaster, onSaved }: { run: string; path: string;
           </>
         )}
         <div className="flex-1" />
+        {isMaster && (
+          <button onClick={() => setCommentsOpen(!commentsOpen)} title={commentsOpen ? "Hide the comments" : "Show the comments"} className={clsx("flex items-center gap-1 rounded-md border px-2.5 py-1", commentsOpen ? "border-accent text-accent" : "border-border hover:border-accent")}>
+            <MessageSquare size="0.8125rem" /> Comments{openCount ? ` · ${openCount}` : ""}
+          </button>
+        )}
+        {onPopout && (
+          <button onClick={onPopout} title="Open the editor in its own window, to edit on one screen and watch the HTML on another" className="flex items-center gap-1 rounded-md border border-border px-2.5 py-1 hover:border-accent">
+            <ExternalLink size="0.8125rem" /> Pop out
+          </button>
+        )}
+        {popout && (
+          <button onClick={() => window.close()} title="Close this window; unsaved text goes back to the main window" className="flex items-center gap-1 rounded-md border border-border px-2.5 py-1 hover:border-accent">
+            <Undo2 size="0.8125rem" /> Back to the main window
+          </button>
+        )}
         <button onClick={() => setText(original)} disabled={!dirty} className="rounded-md border border-border px-2.5 py-1 disabled:opacity-40">
           Revert
         </button>
@@ -164,47 +255,194 @@ function EditPane({ run, path, isMaster, onSaved }: { run: string; path: string;
         </div>
       )}
       {setFinal.isError && <div className="border-b border-border px-4 py-1 text-[0.75rem] text-bad">{(setFinal.error as Error).message}</div>}
-      <div className="min-h-0 flex-1">
-        {path.endsWith(".md") ? (
-          <Suspense fallback={<div className="p-5 text-muted">Loading editor…</div>}>
-            <MarkdownEditor
-              key={path}
+      <div className="relative flex min-h-0 flex-1">
+        <div className={`min-h-0 ${CENTER}`}>
+          {path.endsWith(".md") ? (
+            <Suspense fallback={<div className="p-5 text-muted">Loading editor…</div>}>
+              <MarkdownEditor
+                key={path}
+                value={text}
+                onChange={setText}
+                onSave={() => { if (dirty) save.mutate(); }}
+                onScroll={(top) => rememberScroll(run, `edit:${path}`, top)}
+                initialScrollTop={place(run).scroll[`edit:${path}`]}
+                marks={marks}
+                focus={focus}
+                onMarkClick={(id) => { setCommentsOpen(true); setActiveComment(id); post({ type: "focus-comment", run, id, to: "html" }); }}
+              />
+            </Suspense>
+          ) : (
+            <textarea
               value={text}
-              onChange={setText}
-              onSave={() => { if (dirty) save.mutate(); }}
-              onScroll={(top) => rememberScroll(run, `edit:${path}`, top)}
-              initialScrollTop={place(run).scroll[`edit:${path}`]}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+                  e.preventDefault();
+                  if (dirty) save.mutate();
+                }
+              }}
+              spellCheck
+              className="h-full w-full resize-none bg-bg p-5 font-mono text-[0.8125rem] leading-6 outline-none"
             />
-          </Suspense>
-        ) : (
-          <textarea
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => {
-              if ((e.metaKey || e.ctrlKey) && e.key === "s") {
-                e.preventDefault();
-                if (dirty) save.mutate();
-              }
-            }}
-            spellCheck
-            className="h-full w-full resize-none bg-bg p-5 font-mono text-[0.8125rem] leading-6 outline-none"
-          />
+          )}
+        </div>
+        {isMaster && commentsOpen && (
+          <Panel size={PANELS.editComments} side="right" overlayBelow={760} onClose={() => setCommentsOpen(false)} className="bg-panel/50">
+            <div className="scroll-thin min-h-0 flex-1 overflow-y-auto p-3">
+              <div className="mb-2 text-[0.6875rem] font-medium uppercase tracking-wide text-faint">Comments</div>
+              {comments.data && (
+                <CommentList
+                  run={run}
+                  comments={comments.data.comments}
+                  active={activeComment}
+                  onSelect={(c) => showComment(c.id, true)}
+                  empty="No comments. Add them in the HTML tab: select text, or click a figure or a table."
+                />
+              )}
+            </div>
+          </Panel>
         )}
       </div>
     </div>
   );
 }
 
-function HtmlPane({ run, version }: { run: string; version: number }) {
+const READABLE_SKIP = ".cmt-note, .cmt-ref, a[href^='#ref-'], a.footnote-ref";
+const BLOCKS = "p, li, td, th, h1, h2, h3, h4, h5, h6, figcaption, blockquote, dd, dt, caption";
+
+/** Text as a reader sees it: no comment notes, no rendered citations or note markers. */
+function readable(node: Node): string {
+  const holder = document.createElement("div");
+  holder.appendChild(node);
+  holder.querySelectorAll(READABLE_SKIP).forEach((el) => el.remove());
+  return (holder.textContent ?? "").replace(/\s+/g, " ").trim();
+}
+
+function elementOf(node: Node): Element | null {
+  return node instanceof Element ? node : node.parentElement;
+}
+
+/** A passage selected in the rendered page, with what the server needs to find it in the Markdown. */
+function selectionAnchor(range: Range): Anchor | null {
+  const text = readable(range.cloneContents());
+  if (text.length < 2) return null;
+  const page = range.startContainer.ownerDocument;
+  const startBlock = elementOf(range.startContainer)?.closest(BLOCKS);
+  const endBlock = elementOf(range.endContainer)?.closest(BLOCKS);
+  let prefix = "";
+  let suffix = "";
+  if (page && startBlock) {
+    const before = page.createRange();
+    before.setStart(startBlock, 0);
+    before.setEnd(range.startContainer, range.startOffset);
+    prefix = readable(before.cloneContents()).slice(-120);
+  }
+  if (page && endBlock) {
+    const after = page.createRange();
+    after.setStart(range.endContainer, range.endOffset);
+    after.setEnd(endBlock, endBlock.childNodes.length);
+    suffix = readable(after.cloneContents()).slice(0, 120);
+  }
+  const heading = elementOf(range.startContainer)?.closest("section")?.querySelector(":scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6");
+  return {
+    label: text.length > 160 ? `${text.slice(0, 160)}…` : text,
+    selection: { text, prefix, suffix, heading: heading ? readable(heading.cloneNode(true)) : "" },
+  };
+}
+
+/** A click on a figure or a table, by the number its caption gives it. */
+function elementAnchor(target: Element): Anchor | null {
+  const figure = target.closest("figure");
+  if (figure) {
+    const m = /Figure (\d+)\./.exec(figure.querySelector("figcaption")?.textContent ?? "");
+    return m ? { label: `Figure ${m[1]}`, element: { kind: "figure", number: Number(m[1]) } } : null;
+  }
+  const table = target.closest("table");
+  if (table) {
+    // The render gives every captioned table its id, whether the caption is above or below.
+    const tagged = /^report-table-(T\w+)$/.exec(table.id);
+    if (tagged) {
+      const caption = [table.previousElementSibling, table.nextElementSibling].map((el) => /^\s*Table (\d+)\./.exec(el?.textContent ?? "")).find(Boolean);
+      return { label: caption ? `Table ${caption[1]}` : "This table", element: { kind: "table", id: tagged[1] } };
+    }
+    // A table with no caption is found by its header row.
+    const header = table.querySelector("tr");
+    const text = header ? readable(header.cloneNode(true)) : "";
+    if (!text) return null;
+    const heading = table.closest("section")?.querySelector(":scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6");
+    return {
+      label: `Table with columns: ${text.length > 120 ? `${text.slice(0, 120)}…` : text}`,
+      selection: { text, prefix: "", suffix: "", heading: heading ? readable(heading.cloneNode(true)) : "" },
+    };
+  }
+  return null;
+}
+
+const PICKING_CSS = `
+body.cmt-picking figure:hover, body.cmt-picking table:hover { outline: 2px dashed #E5B300; outline-offset: 3px; cursor: copy; }
+mark.cmt, sup.cmt-ref { cursor: pointer; }
+`;
+
+function HtmlPane({ run, doc, version }: { run: string; doc: string | undefined; version: number }) {
   const client = useQueryClient();
   const styles = useQuery({ queryKey: ["styles"], queryFn: () => api.get<{ name: string; description: string }[]>("/api/styles"), staleTime: Infinity });
   const [style, setStyleState] = useState(() => place(run).style ?? "meridian");
-  const [appearanceOpen, setAppearanceOpen] = useState(false);
+  const [appearanceOpen, setAppearanceOpenState] = useState(() => place(run).panel === "appearance");
+  const setAppearanceOpen = (next: boolean | ((open: boolean) => boolean)) =>
+    setAppearanceOpenState((open) => {
+      const value = typeof next === "function" ? next(open) : next;
+      if (value) remember(run, { panel: "appearance" });
+      else if (place(run).panel === "appearance") remember(run, { panel: null });
+      return value;
+    });
   const [appearanceNotice, setAppearanceNotice] = useState("");
   const appearanceLoaded = useRef(false);
   const [cite, setCiteState] = useState(() => place(run).cite ?? true);
-  const [zoom, setZoom] = useState(100);
+  const [zoom, setZoomState] = useState(() => place(run).zoom ?? 100);
+  const setZoom = (value: number) => {
+    setZoomState(value);
+    remember(run, { zoom: value });
+  };
   const frame = useRef<HTMLIFrameElement>(null);
+  const area = useRef<HTMLDivElement>(null);
+  const [commentsOpen, setCommentsOpenState] = useState(() => place(run).panel === "comments");
+  const commentsOpenRef = useRef(commentsOpen);
+  const [anchor, setAnchor] = useState<Anchor | null>(null);
+  const [bubble, setBubble] = useState<{ x: number; y: number; anchor: Anchor } | null>(null);
+  const [activeComment, setActiveComment] = useState<string | null>(null);
+  const activeRef = useRef<string | null>(null);
+  // The unsaved text of an editor popped out into another window, rendered as it changes.
+  const [liveText, setLiveText] = useState<string | null>(null);
+  const [withComments, setWithCommentsState] = useState(() => prefs().export_comments ?? true);
+  const setWithComments = (on: boolean) => {
+    setWithCommentsState(on);
+    setPref("export_comments", on);
+  };
+  const setCommentsOpen = (open: boolean) => {
+    setCommentsOpenState(open);
+    commentsOpenRef.current = open;
+    frame.current?.contentDocument?.body?.classList.toggle("cmt-picking", open);
+    if (open) remember(run, { panel: "comments" });
+    else if (place(run).panel === "comments") remember(run, { panel: null });
+    if (open) {
+      setAppearanceOpen(false);
+      setFiguresOpen(false);
+    } else setAnchor(null);
+  };
+  const highlight = (id: string | null, scroll: boolean) => {
+    const page = frame.current?.contentDocument;
+    if (!page) return;
+    page.querySelectorAll(".cmt-active").forEach((el) => el.classList.remove("cmt-active"));
+    if (!id) return;
+    const marks = Array.from(page.querySelectorAll<HTMLElement>("mark.cmt")).filter((m) => (m.dataset.c ?? "").split(" ").includes(id));
+    marks.forEach((m) => m.classList.add("cmt-active"));
+    if (scroll) marks[0]?.scrollIntoView({ block: "center", behavior: "smooth" });
+  };
+  const focusComment = (id: string, scroll: boolean) => {
+    setActiveComment(id);
+    activeRef.current = id;
+    highlight(id, scroll);
+  };
   const applyZoom = (value: number) => {
     const body = frame.current?.contentDocument?.body;
     if (body) body.style.zoom = `${value}%`;
@@ -235,22 +473,82 @@ function HtmlPane({ run, version }: { run: string; version: number }) {
       remember(run, { style: appearance.data.saved_style });
     }
   }, [appearance.data, run]);
+  const focusRef = useRef(focusComment);
+  focusRef.current = focusComment;
+  const openRef = useRef(setCommentsOpen);
+  openRef.current = setCommentsOpen;
+  useEffect(
+    () =>
+      listen((m) => {
+        if (m.run !== run) return;
+        if (m.type === "draft" && m.path === doc) setLiveText(m.dirty ? m.text : null);
+        else if ((m.type === "saved" || m.type === "popout-closed") && m.path === doc) setLiveText(null);
+        else if (m.type === "focus-comment" && m.to === "html") {
+          if (!commentsOpenRef.current) openRef.current(true);
+          focusRef.current(m.id, true);
+        }
+      }),
+    [run, doc],
+  );
   // The rendered page is served from this app's own address, so its scroll can be read
-  // and put back: the author returns to the paragraph they were reading.
+  // and put back: the author returns to the paragraph they were reading. Selecting text in
+  // it, or clicking a figure or a table while the comments are open, starts a comment.
   const onFrameLoad = (frame: HTMLIFrameElement) => {
-    if (frame.contentDocument?.body) frame.contentDocument.body.style.zoom = `${zoom}%`;
+    const page = frame.contentDocument;
+    if (page?.body) {
+      page.body.style.zoom = `${zoom}%`;
+      page.body.classList.toggle("cmt-picking", commentsOpenRef.current);
+      const css = page.createElement("style");
+      css.textContent = PICKING_CSS;
+      page.head.appendChild(css);
+      highlight(activeRef.current, false);
+    }
     const win = frame.contentWindow;
-    if (!win) return;
+    if (!win || !page) return;
     const top = place(run).scroll.html;
     if (top) win.scrollTo(0, top);
     let pending = false;
     win.addEventListener("scroll", () => {
+      setBubble(null);
       if (pending) return;
       pending = true;
       win.requestAnimationFrame(() => {
         pending = false;
         rememberScroll(run, "html", win.scrollY);
       });
+    });
+    page.addEventListener("mousedown", () => setBubble(null));
+    page.addEventListener("mouseup", (event) => {
+      win.setTimeout(() => {
+        const selection = page.getSelection();
+        if (selection && !selection.isCollapsed && selection.rangeCount) {
+          const range = selection.getRangeAt(0);
+          const found = selectionAnchor(range);
+          const box = area.current?.getBoundingClientRect();
+          if (!found || !box) return;
+          const rect = range.getBoundingClientRect();
+          const at = frame.getBoundingClientRect();
+          setBubble({
+            x: Math.min(Math.max(at.left - box.left + rect.right - 40, 8), box.width - 110),
+            y: Math.min(Math.max(at.top - box.top + rect.bottom + 8, 8), box.height - 40),
+            anchor: found,
+          });
+          return;
+        }
+        const target = event.target as Element | null;
+        const mark = target?.closest?.("mark.cmt, sup.cmt-ref") as HTMLElement | null;
+        const id = mark?.dataset.c?.split(" ")[0];
+        if (id) {
+          if (!commentsOpenRef.current) openRef.current(true);
+          focusRef.current(id, false);
+          post({ type: "focus-comment", run, id, to: "editor" });
+          return;
+        }
+        if (commentsOpenRef.current && target) {
+          const found = elementAnchor(target);
+          if (found) setAnchor(found);
+        }
+      }, 0);
     });
   };
   const [exported, setExported] = useState<Exported | null>(null);
@@ -275,13 +573,21 @@ function HtmlPane({ run, version }: { run: string; version: number }) {
   };
   const [saved, setSaved] = useState("");
   const rendered = useQuery({
-    queryKey: ["render", run, style, cite, version],
-    queryFn: () => api.post<Rendered>(`/api/runs/${encodeURIComponent(run)}/render`, { style, cite }),
+    queryKey: ["render", run, doc, style, cite, version],
+    queryFn: () => api.post<Rendered>(`/api/runs/${encodeURIComponent(run)}/render`, { doc, style, cite }),
     // Picks up edits made outside the app (VS Code, an agent). The server answers from its
     // cache until the source changes, and the frame reloads only when `built` moves. A failed
     // render stops the polling, so a broken document is not rebuilt every few seconds.
     staleTime: 0,
     refetchInterval: (query) => (query.state.status === "error" ? false : 3_000),
+    retry: false,
+  });
+  const live = useQuery({
+    queryKey: ["render-live", run, doc, style, cite, liveText],
+    queryFn: () => api.post<Rendered>(`/api/runs/${encodeURIComponent(run)}/render-live`, { doc, style, cite, content: liveText }),
+    enabled: liveText !== null,
+    placeholderData: keepPreviousData,
+    staleTime: Infinity,
     retry: false,
   });
   const saveAppearance = useMutation({
@@ -304,7 +610,7 @@ function HtmlPane({ run, version }: { run: string; version: number }) {
     },
   });
   const exportRun = useMutation({
-    mutationFn: (formats: string[]) => api.post<Exported>(`/api/runs/${encodeURIComponent(run)}/export`, { style, cite, formats }),
+    mutationFn: (formats: string[]) => api.post<Exported>(`/api/runs/${encodeURIComponent(run)}/export`, { doc, style, cite, formats, comments: withComments }),
     onSuccess: (r) => {
       setExported(r);
       setLinks([...r.files, ...links.filter((f) => !r.files.includes(f))]);
@@ -314,7 +620,8 @@ function HtmlPane({ run, version }: { run: string; version: number }) {
     mutationFn: () => api.post<{ saved: string[] }>(`/api/runs/${encodeURIComponent(run)}/figures/save`, { style, cite }),
     onSuccess: (r) => setSaved(`${r.saved.length} file(s) saved to export/${style}/figures/.`),
   });
-  const data = rendered.data;
+  const showingLive = liveText !== null && Boolean(live.data);
+  const data = showingLive ? live.data : rendered.data;
 
   return (
     <div className="flex h-full flex-col">
@@ -332,11 +639,16 @@ function HtmlPane({ run, version }: { run: string; version: number }) {
           <option value="cited">Author and year</option>
           <option value="ids">Evidence IDs</option>
         </select>
-        <button onClick={() => { if (!appearanceOpen) void appearance.refetch(); setAppearanceOpen((open) => !open); setFiguresOpen(false); }} className={clsx("ml-2 flex items-center gap-1 rounded-md border border-border px-2.5 py-1 hover:border-accent", appearanceOpen && "border-accent text-accent")}>
+        <button onClick={() => { if (!appearanceOpen) void appearance.refetch(); setAppearanceOpen((open) => !open); setFiguresOpen(false); setCommentsOpen(false); }} className={clsx("ml-2 flex items-center gap-1 rounded-md border border-border px-2.5 py-1 hover:border-accent", appearanceOpen && "border-accent text-accent")}>
           <Palette size="0.8125rem" /> Palette and layout
         </button>
+        {doc && (
+          <button onClick={() => setCommentsOpen(!commentsOpen)} title="Comment on the document: select text, or click a figure or a table" className={clsx("flex items-center gap-1 rounded-md border border-border px-2.5 py-1 hover:border-accent", commentsOpen && "border-accent text-accent")}>
+            <MessageSquare size="0.8125rem" /> Comments
+          </button>
+        )}
         <button onClick={() => void rendered.refetch()} title="Render again" className="rounded-md p-1 text-faint hover:text-fg">
-          <RefreshCw size="0.8125rem" className={clsx(rendered.isFetching && "animate-spin")} />
+          <RefreshCw size="0.8125rem" className={clsx((rendered.isFetching || live.isFetching) && "animate-spin")} />
         </button>
         {links.map((f) => (
           <span key={f} className="flex items-center rounded-md border border-border hover:border-accent">
@@ -358,17 +670,29 @@ function HtmlPane({ run, version }: { run: string; version: number }) {
           <button onClick={() => changeZoom(100)} disabled={zoom === 100} title="Reset report zoom" aria-label="Reset report zoom" className="border-l border-border p-1.5 disabled:opacity-40"><RotateCcw size="0.75rem" /></button>
         </div>
         {data && data.figures.length > 0 && !figuresOpen && (
-          <button onClick={() => { setAppearanceOpen(false); setFiguresOpen(true); }} title="Show the figures panel" className="rounded-md p-1 text-faint hover:text-fg">
+          <button onClick={() => { setAppearanceOpen(false); setCommentsOpen(false); setFiguresOpen(true); }} title="Show the figures panel" className="rounded-md p-1 text-faint hover:text-fg">
             <PanelRight size="0.875rem" />
           </button>
         )}
+        <label className="flex items-center gap-1 text-faint" title="Exports carry the open comments: Word comments in Word, footnotes in the PDF, highlights in the HTML">
+          <input type="checkbox" checked={withComments} onChange={(e) => setWithComments(e.target.checked)} /> Comments in exports
+        </label>
         <button onClick={() => exportRun.mutate(["html"])} disabled={exportRun.isPending} className="flex items-center gap-1 rounded-md border border-border px-2.5 py-1 hover:border-accent disabled:opacity-40">
           <FileDown size="0.8125rem" /> Export HTML
+        </button>
+        <button onClick={() => exportRun.mutate(["docx"])} disabled={exportRun.isPending} className="flex items-center gap-1 rounded-md border border-border px-2.5 py-1 hover:border-accent disabled:opacity-40">
+          <FileDown size="0.8125rem" /> Export Word
         </button>
         <button onClick={() => exportRun.mutate(["html", "pdf"])} disabled={exportRun.isPending} className="flex items-center gap-1 rounded-md bg-accent px-2.5 py-1 text-white disabled:opacity-40">
           <FileDown size="0.8125rem" /> {exportRun.isPending ? "Exporting…" : "Export PDF"}
         </button>
       </div>
+      {showingLive && (
+        <div className="flex items-center gap-2 border-b border-border bg-[#FFF8DB] px-4 py-1 text-[0.75rem] text-[#5C4600] dark:bg-[#3A3214] dark:text-[#F5E3A3]">
+          Showing the unsaved text from the editor window{live.isFetching ? " · updating…" : ""}. Save there to keep it.
+        </div>
+      )}
+      {live.isError && liveText !== null && <div className="border-b border-border px-4 py-1 text-[0.75rem] text-bad">The unsaved text could not be rendered: {(live.error as Error).message}</div>}
       {appearanceNotice && <div className="border-b border-border px-4 py-1 text-[0.75rem] text-good">{appearanceNotice}</div>}
       {linkError && (
         <div className="flex items-center gap-2 border-b border-border px-4 py-1 text-[0.75rem] text-bad">
@@ -396,6 +720,7 @@ function HtmlPane({ run, version }: { run: string; version: number }) {
                   <button onClick={() => void api.post("/api/reveal", { path: exported.files[0] })} className="text-muted underline">
                     Show in Finder
                   </button>
+                  {exported.comments > 0 && <span className="text-muted">· {exported.comments} comment{exported.comments === 1 ? "" : "s"} included</span>}
                 </div>
                 <pre className={clsx("mt-1 whitespace-pre-wrap text-[0.7188rem]", exported.check.startsWith("Export check passed") ? "text-good" : "text-warn")}>{exported.check}</pre>
               </>
@@ -403,12 +728,35 @@ function HtmlPane({ run, version }: { run: string; version: number }) {
           )}
         </div>
       )}
-      <div className="relative flex min-h-0 flex-1">
+      <div ref={area} className="relative flex min-h-0 flex-1">
         <div className={`bg-white ${CENTER}`}>
           {rendered.isFetching && !data && <div className="p-6 text-[0.8125rem] text-faint">Rendering the figures and the HTML…</div>}
-          {rendered.isError && <pre className="whitespace-pre-wrap p-6 text-[0.7812rem] text-bad">{(rendered.error as Error).message}</pre>}
+          {rendered.isError && !showingLive && <pre className="whitespace-pre-wrap p-6 text-[0.7812rem] text-bad">{(rendered.error as Error).message}</pre>}
           {data && <iframe ref={frame} key={`${data.html}@${data.built}`} title="HTML" src={renderedUrl(run, style, cite, data.html, false, data.built)} onLoad={(e) => onFrameLoad(e.currentTarget)} className="h-full w-full border-0" />}
         </div>
+        {bubble && (
+          <button
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => { setAnchor(bubble.anchor); setBubble(null); if (!commentsOpen) setCommentsOpen(true); }}
+            style={{ left: bubble.x, top: bubble.y }}
+            className="absolute z-40 flex items-center gap-1 rounded-md bg-accent px-2.5 py-1 text-[0.75rem] text-white shadow-lg"
+          >
+            <MessageSquarePlus size="0.8125rem" /> Comment
+          </button>
+        )}
+        {commentsOpen && doc && (
+          <Panel size={PANELS.comments} side="right" overlayBelow={760} onClose={() => setCommentsOpen(false)} className="bg-panel">
+            <CommentsPanel
+              run={run}
+              doc={doc}
+              anchor={anchor}
+              active={activeComment}
+              onAnchorDone={(id) => { setAnchor(null); if (id) { activeRef.current = id; setActiveComment(id); } }}
+              onSelect={(c) => { focusComment(c.id, true); post({ type: "focus-comment", run, id: c.id, to: "editor" }); }}
+              onClose={() => setCommentsOpen(false)}
+            />
+          </Panel>
+        )}
         {appearanceOpen && (
           <Panel size={PANELS.appearance} side="right" overlayBelow={740} onClose={() => setAppearanceOpen(false)} className="bg-panel">
             <AppearancePanel
@@ -457,6 +805,50 @@ function HtmlPane({ run, version }: { run: string; version: number }) {
   );
 }
 
+/** The editor alone, in a window of its own (opened by Pop out). */
+export function PopoutEdit({ run, path }: { run: string; path: string }) {
+  const [ready, setReady] = useState(false);
+  const detail = useQuery({ queryKey: ["run", run], queryFn: () => api.get<RunDetail>(`/api/runs/${encodeURIComponent(run)}`) });
+  useEffect(() => {
+    document.title = `${path} · ${run}`;
+    let done = false;
+    const finish = () => {
+      if (!done) {
+        done = true;
+        setReady(true);
+      }
+    };
+    // The main window hands over any unsaved text, and gets it back when this window closes.
+    const stop = listen((m) => {
+      if (m.type === "handoff" && m.run === run && m.path === path) {
+        // The main window's text is the current one, even when it has none.
+        if (!done) rememberDraft(run, path, m.draft);
+        finish();
+      } else if (m.type === "popout-ping" && m.run === run) post({ type: "popout-here", run, path });
+      else if (m.type === "return" && m.run === run && m.path === path) window.close();
+    });
+    post({ type: "popout-ready", run, path });
+    const timer = setTimeout(() => {
+      if (!done) rememberDraft(run, path, null);
+      finish();
+    }, 800);
+    const leave = () => post({ type: "popout-closed", run, path, draft: place(run).drafts[path] ?? null });
+    window.addEventListener("pagehide", leave);
+    return () => {
+      stop();
+      clearTimeout(timer);
+      window.removeEventListener("pagehide", leave);
+    };
+  }, [run, path]);
+  if (detail.isError) return <div className="p-6 text-bad">{(detail.error as Error).message}</div>;
+  if (!ready || !detail.data) return <div className="p-6 text-faint">Opening the editor…</div>;
+  return (
+    <div className="h-full bg-bg">
+      <EditPane run={run} path={path} isMaster={detail.data.meta.masters.includes(path)} onSaved={() => undefined} popout />
+    </div>
+  );
+}
+
 export default function RunView({ name, file }: { name: string; file?: string }) {
   const client = useQueryClient();
   const { setView } = useUi();
@@ -478,12 +870,43 @@ export default function RunView({ name, file }: { name: string; file?: string })
     setEditPathState(f);
     remember(name, { editPath: f });
   };
+  // Which master the Document, HTML and Edit tabs show, when the run has more than one
+  // (a revision run's audit and its revised documents).
+  const [doc, setDocState] = useState<string | undefined>(kept.doc);
+  const setDoc = (d: string) => {
+    setDocState(d);
+    remember(name, { doc: d });
+    setEditPath(undefined);
+  };
   const reader = useRef<HTMLDivElement>(null);
   const importInput = useRef<HTMLInputElement>(null);
   const [aiImport, setAiImport] = useState(false);
   const [fileMessage, setFileMessage] = useState("");
   const readerKey = tab === "file" ? `file:${selected ?? ""}` : "document";
   const [version, setVersion] = useState(0);
+  // Documents being edited in a window of their own (Pop out), by path.
+  const [popped, setPopped] = useState<string[]>([]);
+  useEffect(() => {
+    const stop = listen((m) => {
+      if (m.run !== name) return;
+      if (m.type === "popout-ready") {
+        post({ type: "handoff", run: name, path: m.path, draft: place(name).drafts[m.path] ?? null });
+        rememberDraft(name, m.path, null);
+        setPopped((p) => (p.includes(m.path) ? p : [...p, m.path]));
+      } else if (m.type === "popout-here") {
+        setPopped((p) => (p.includes(m.path) ? p : [...p, m.path]));
+      } else if (m.type === "popout-closed") {
+        if (m.draft) rememberDraft(name, m.path, m.draft);
+        setPopped((p) => p.filter((x) => x !== m.path));
+      } else if (m.type === "saved") {
+        setVersion((v) => v + 1);
+        void client.invalidateQueries({ queryKey: ["run", name] });
+        void client.invalidateQueries({ queryKey: ["run-file", name] });
+      }
+    });
+    post({ type: "popout-ping", run: name });
+    return stop;
+  }, [name, client]);
   const [panelOpen, setPanelOpenState] = useState(() => prefs().run_panel_open);
   const setPanelOpen = (open: boolean) => {
     setPanelOpenState(open);
@@ -499,7 +922,8 @@ export default function RunView({ name, file }: { name: string; file?: string })
     refetchInterval: 15_000,
   });
   const [changesOpen, setChangesOpen] = useState(false);
-  const planned = (subjects.data?.subjects ?? []).filter((s) => s.role === "subject" && Object.keys(s.counts).length > 0);
+  const planned = (subjects.data?.subjects ?? []).filter((s) => s.role === "subject" && (s.master || Object.keys(s.counts).length > 0));
+  const revisedOnly = planned.length > 0 && planned.every((s) => s.master);
   const undecided = planned.reduce((n, s) => n + (s.counts.proposed ?? 0) + (s.counts.stale ?? 0), 0);
   const openChat = useMutation({
     mutationFn: (fresh: boolean) => api.post<SessionDetail>(`/api/runs/${encodeURIComponent(name)}/chat`, { new: fresh }),
@@ -526,6 +950,7 @@ export default function RunView({ name, file }: { name: string; file?: string })
   const remove = useMutation({
     mutationFn: () => api.del<{ trash: string }>(`/api/runs/${encodeURIComponent(name)}`),
     onSuccess: () => {
+      forget(name);
       void client.invalidateQueries({ queryKey: ["runs"] });
       void client.invalidateQueries({ queryKey: ["exports"] });
       void client.invalidateQueries({ queryKey: ["sessions"] });
@@ -612,7 +1037,16 @@ export default function RunView({ name, file }: { name: string; file?: string })
   if (run.isError) return <div className="p-6 text-bad">{(run.error as Error).message}</div>;
   if (!data) return <div className="p-6 text-faint">Loading…</div>;
   const primary = data.meta.primary;
-  const editing = editPath ?? primary ?? undefined;
+  const present = new Set(data.files.map((f) => f.path));
+  const docs = data.meta.masters.filter((m) => present.has(m));
+  const shown = doc && docs.includes(doc) ? doc : primary ?? undefined;
+  const docLabel = (m: string) => {
+    const entry = data.meta.documents?.find((d) => d.master === m);
+    const source = entry && subjects.data?.subjects.find((s) => s.slug === entry.slug)?.path;
+    if (source) return `${source.replace(/\.[^.]+$/, "")} (revised)`;
+    return data.meta.documents?.length && m === "report.md" ? "Audit (report.md)" : m;
+  };
+  const editing = editPath ?? shown;
   const critiqueFailed = Boolean(selected && data.critique_failed_at && data.critique_failed_at >= (data.files.find((item) => item.path === selected)?.mtime ?? 0));
   const onSaved = () => {
     setVersion((v) => v + 1);
@@ -622,7 +1056,7 @@ export default function RunView({ name, file }: { name: string; file?: string })
   const tabs: { id: Tab; label: string; show: boolean }[] = [
     { id: "document", label: "Document", show: true },
     { id: "chat", label: "Chat", show: true },
-    { id: "html", label: "HTML", show: Boolean(primary) },
+    { id: "html", label: "HTML", show: Boolean(shown) },
     { id: "edit", label: "Edit", show: Boolean(editing) },
     { id: "file", label: selected ?? "File", show: Boolean(selected) },
   ];
@@ -639,7 +1073,7 @@ export default function RunView({ name, file }: { name: string; file?: string })
           </div>
           {planned.length > 0 && (
             <button onClick={() => setChangesOpen(true)} title="Review the proposed changes to this project's documents" className={clsx("flex items-center gap-1 rounded-md border px-2.5 py-1 text-[0.75rem]", undecided ? "border-accent text-accent hover:bg-panel" : "border-border hover:border-accent")}>
-              <ListChecks size="0.8125rem" /> Changes{undecided ? ` · ${undecided} to decide` : ""}
+              <ListChecks size="0.8125rem" /> {revisedOnly ? "Revised document" : "Changes"}{undecided ? ` · ${undecided} to decide` : ""}
             </button>
           )}
           <button onClick={() => void api.post(`/api/runs/${encodeURIComponent(name)}/vscode`)} className="flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-[0.75rem] hover:border-accent">
@@ -694,6 +1128,14 @@ export default function RunView({ name, file }: { name: string; file?: string })
                 </button>
               ),
             )}
+          {docs.length > 1 && tab !== "file" && tab !== "chat" && (
+            <label className="ml-auto flex items-center gap-1.5 text-[0.75rem] text-muted">
+              Showing
+              <select value={shown} onChange={(e) => setDoc(e.target.value)} title="The document the Document, HTML and Edit tabs show" className="max-w-[18rem] truncate rounded-md border border-border bg-bg px-1.5 py-0.5 text-fg outline-none focus:border-accent">
+                {docs.map((m) => <option key={m} value={m}>{docLabel(m)}</option>)}
+              </select>
+            </label>
+          )}
           {tab === "file" && selected?.endsWith(".md") && !selected.startsWith("export/") && (
             <button
               onClick={() => {
@@ -723,13 +1165,35 @@ export default function RunView({ name, file }: { name: string; file?: string })
             ) : (
               <div className="p-6 text-[0.8125rem] text-faint">{openChat.isError ? (openChat.error as Error).message : "Opening the project's conversation…"}</div>
             ))}
-          {tab === "html" && <HtmlPane run={name} version={version} />}
-          {tab === "edit" && editing && <EditPane run={name} path={editing} isMaster={editing === primary} onSaved={onSaved} />}
+          {tab === "html" && <HtmlPane run={name} doc={shown} version={version} />}
+          {tab === "edit" && editing && (popped.includes(editing) ? (
+            <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-[0.8125rem] text-muted">
+              <div>{editing} is open in its own window. Its unsaved changes show in the HTML tab as you type.</div>
+              <div className="flex gap-2">
+                <button onClick={() => setTab("html")} className="rounded-md border border-border px-3 py-1 hover:border-accent">Show the HTML</button>
+                <button onClick={() => post({ type: "return", run: name, path: editing })} className="flex items-center gap-1 rounded-md border border-border px-3 py-1 hover:border-accent">
+                  <Undo2 size="0.8125rem" /> Bring the editor back here
+                </button>
+              </div>
+            </div>
+          ) : (
+            <EditPane
+              run={name}
+              path={editing}
+              isMaster={data.meta.masters.includes(editing)}
+              onSaved={onSaved}
+              onPopout={() => {
+                if (openPopout(name, editing)) setTab("html");
+              }}
+            />
+          ))}
           {(tab === "document" || tab === "file") && (
             <div ref={reader} onScroll={(e) => rememberScroll(name, readerKey, e.currentTarget.scrollTop)} className="scroll-thin h-full overflow-y-auto">
               <div className="mx-auto max-w-3xl px-8 py-6">
                 {tab === "file" && selected ? (
                   <FileViewer run={name} path={selected} />
+                ) : shown && shown !== primary ? (
+                  <FileViewer run={name} path={shown} />
                 ) : data.master ? (
                   <Markdown text={data.master} run={name} />
                 ) : (
@@ -808,6 +1272,11 @@ export default function RunView({ name, file }: { name: string; file?: string })
           run={name}
           subjects={subjects.data.subjects}
           onClose={() => setChangesOpen(false)}
+          onOpenFile={(path) => {
+            setChangesOpen(false);
+            setSelected(path);
+            setTab("file");
+          }}
           onStarted={(session) => {
             setChangesOpen(false);
             setChat(session);

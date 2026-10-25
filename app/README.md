@@ -107,18 +107,46 @@ Every REST and WebSocket call carries a per-launch token, and the server binds t
 `.claude/` and the root rule files only when you save in the Workspace view (one
 commit per save, never pushed), to `.claude/monitor.json` when you change the web
 caps, into a run's `external_data/` when you attach a file, to a run's Markdown when
-you save it from the Edit tab, and into `<run>/export/<style>/` when you export. Removing
+you save it from the Edit tab, to a run's `.comments.json` and `.report-style.json` when you
+comment or apply an appearance, and into `<run>/export/<style>/` when you export. Removing
 a project moves its run folder to the macOS Trash.
 
-## Reports: Markdown, HTML, figures, PDF
+## Reports: Markdown, HTML, figures, PDF, Word
 
 A run opens on its master rendered as Markdown. The HTML tab renders it with the
 workspace's own export chain (`figures.py`, `references.py`, `style.py`, pandoc) in any
 style from `.claude/styles/`, with citations as author and year or as evidence IDs; the
-figures appear beside it as PNG and SVG downloads. Export HTML and Export PDF write into
-`<run>/export/<style>/` and run `check_export.py`. The Edit tab edits the Markdown, the
-source of every format; a save is refused if the file changed on disk meanwhile, and
-the HTML re-renders from the saved file. No model call is involved in any of this.
+figures appear beside it as PNG and SVG downloads. Export HTML, Export Word and Export PDF
+write into `<run>/export/<style>/` and run `check_export.py`. The Edit tab edits the
+Markdown, the source of every format; a save is refused if the file changed on disk
+meanwhile, and the HTML re-renders from the saved file. No model call is involved in any
+of this.
+
+**Comments** (`backend/comments.py`). In the HTML tab, select text and choose Comment, or
+open Comments and click a figure or a table. A comment is kept in `<run>/.comments.json`,
+never in the master, anchored to the Markdown it covers and to the text either side, so it
+follows its passage through edits; one whose passage is gone is listed as such, never
+dropped. The Edit tab highlights each commented passage and lists the comments beside the
+text; a click in either view finds the comment in the other. At render time open comments
+become pandoc comment spans: Word comments in the .docx, highlighted passages with numbered
+notes in the HTML, footnotes in the PDF. Resolved comments stay in the list and leave the
+outputs, and "Comments in exports" leaves them all out of an export.
+
+**Tables.** Palette and layout styles any captioned table (caption above or below it):
+colours, font, size, padding, width, rule weight, line type (solid, dashed, dotted,
+double) and layout (rows, grid, top-header-bottom, box, header only), with ten ready-made
+designs, for one table or all. The same settings reach the HTML, the PDF and Word
+(`backend/docx_tables.py`).
+
+**Pop out.** The Edit tab's Pop out opens the editor in its own window (in the Mac app, a
+native window). As you type, the main window's HTML tab renders the unsaved text
+(`POST /api/runs/{name}/render-live`, into the preview cache, never the run); saving there
+re-renders as usual, and closing the window hands any unsaved text back.
+
+**Where you left off.** Each project's tab, file, style, citations, zoom, open side panel,
+scroll positions and unsaved editor text are saved with the app's settings
+(`app/data/settings.json`, under `ui.places`), as is the view last open, so the next session
+starts there.
 
 ## Improving supplied documents
 

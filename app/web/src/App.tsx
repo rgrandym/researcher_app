@@ -4,6 +4,7 @@ import clsx from "clsx";
 import { Settings2, X } from "lucide-react";
 import { subscribe } from "./lib/socket";
 import { api } from "./lib/api";
+import { prefs } from "./lib/prefs";
 import type { SessionSummary } from "./lib/types";
 import { useUi } from "./stores/ui";
 import Sidebar from "./components/Sidebar";
@@ -25,9 +26,17 @@ export default function App() {
   useEffect(() => {
     if (startupRestored.current || !sessions.data) return;
     startupRestored.current = true;
-    if (view.kind === "home" && tab === "research" && sessions.data[0]) {
-      setView({ kind: "session", id: sessions.data[0].id });
-    }
+    if (view.kind !== "home" || tab !== "research") return;
+    // Back to the view the last session ended on, when it still exists.
+    const last = prefs().last_view;
+    if (last?.kind === "session" && sessions.data.some((s) => s.id === last.id)) setView(last);
+    else if (last?.kind === "run") {
+      api.get(`/api/runs/${encodeURIComponent(last.name)}`).then(
+        () => setView(last),
+        () => sessions.data[0] && setView({ kind: "session", id: sessions.data[0].id }),
+      );
+    } else if (last?.kind === "exports" || last?.kind === "home") setView(last);
+    else if (sessions.data[0]) setView({ kind: "session", id: sessions.data[0].id });
   }, [sessions.data, view.kind, tab, setView]);
 
   // Esc closes the Workspace and Models panels, unless a modal or a field has focus.

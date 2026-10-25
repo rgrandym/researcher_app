@@ -74,7 +74,7 @@ If the repair agent discovers another question later, the app presents it in a p
 
 Your stated feelings and opinions are treated as your views. `/user-edits` may suggest a clearer way to express or place them, but does not flag them for lacking a citation. If a view includes a separate factual assertion, the agent handles that assertion under the usual evidence rules.
 
-In the app's Edit tab, choose a report section and **Mark final** once you have approved it. Later agent rounds must leave that section byte-identical. If a new edit calls for a change there, the agent explains the proposed change; use **Reopen section** when you decide to revise it. The app also blocks saves that alter a final section until it is reopened. The HTML tab has controls to zoom the rendered report, and Markdown editors underline spelling and Markdown errors with suggestions or fixes.
+In the app's Edit tab, choose a report section and **Mark final** once you have approved it. Later agent rounds must leave that section byte-identical. If a new edit calls for a change there, the agent explains the proposed change; use **Reopen section** when you decide to revise it. The app also blocks saves that alter a final section until it is reopened. The HTML tab has controls to zoom the rendered report, and Markdown editors underline spelling and Markdown errors with suggestions or fixes. Comments, editing in a second window, and Word export from the app are in **[Commenting and editing in the app](#commenting-and-editing-in-the-app)**.
 
 **`/narrator`** — Decides who the report is written for, and holds your writing style. Two narration modes: **scientific** for specialists in the field, and **explanatory** for readers who are technically literate but not scientists. Both carry the same claims, the same citations, the same caveats and the same confidence; they differ in how much of each mechanism gets built for the reader. It also runs the style-learning loop described below. Ask for it directly ("write this for non-scientists", "this reads like AI, fix the voice"), or let `/report` invoke it before drafting.
 
@@ -205,6 +205,53 @@ That is a pivot, so the blast radius comes first and you get to approve it:
 ```
 
 Say yes and it runs in that order. Say no to any line and it stays out of scope, provably.
+
+---
+
+## Commenting and editing in the app
+
+The app lets you mark up a report as you would a Word document, then edit with the comments in view. Everything here works without a model call.
+
+### Commenting on the report
+
+Open the report's **HTML** tab.
+
+- **On a passage:** select the text and choose **Comment** beside the selection.
+- **On a figure or a table:** select **Comments**, then click the figure or the table. A captioned table or figure is named by its number; an uncaptioned table is found by its header row.
+
+Write the comment and select **Comment** (or press ⌘ Enter). Your name goes with it, as Word shows it; the app remembers it. The passage turns yellow with a numbered marker, and the comment joins the list in the **Comments** panel. Click a highlight to find its comment in the list, or a comment to scroll the page to its passage.
+
+Each comment can be edited, resolved or deleted from its card. A resolved comment stays in the list (select **Show resolved**) and leaves the document and the exports. Reopen it to bring it back.
+
+Comments are kept beside the report in `.comments.json`, outside `report.md`, so adding one never starts a `/user-edits` round and no agent reads them. They record where they belong by the text they cover, so they stay attached when you or an agent edit the report. If the passage itself is deleted, the comment stays in the list, marked as no longer in the document, for you to delete or keep.
+
+### Finding comments while you edit
+
+The **Edit** tab highlights every commented passage in the Markdown and lists the comments beside it; **Comments** shows or hides the list. Click a comment to jump to its passage, with the text selected. The two views follow each other: a comment clicked in the Edit tab scrolls the HTML to it, and a highlight clicked in the HTML scrolls the editor.
+
+### Editing on one screen, watching on another
+
+**Pop out** in the Edit tab opens the editor in a window of its own, which you can move to a second screen. The main window switches to the HTML tab, and as you type, the HTML shows your unsaved text under a yellow banner a few seconds later. **Save** in the editor window writes `report.md`, and the HTML renders from the saved file as usual.
+
+Unsaved text moves with the editor. **Back to the main window**, or closing the editor window, returns it to the main window's Edit tab; **Bring the editor back here** in the main window does the same.
+
+### Exporting from the app
+
+The HTML tab exports in the style and citation form shown: **Export HTML**, **Export Word** and **Export PDF**, into `<run>/export/<style>/`. Each export carries the report's open comments:
+
+| Format | Comments appear as |
+|---|---|
+| Word | Word comments on the passages they cover, with your name and the date |
+| PDF | highlighted passages with the comments as numbered footnotes |
+| HTML | highlighted passages with numbered markers; hover a marker to read the comment |
+
+Untick **Comments in exports** for a clean copy to send. Table settings and designs reach all three formats. Each export runs the loss check described under **[Exporting](#exporting)**, and the app shows its result.
+
+`report.md` is the source of every format. Work done in an exported Word file, comments and tracked changes included, does not come back into the report by itself.
+
+### Picking up where you left off
+
+The app remembers each project's tab, the file and document shown, the style, the citation form, the zoom, the open side panel, the scroll position of every view and any unsaved text in the editor, and it opens on the view you last had open. Quit and reopen it, and you are where you stopped. Unsaved text kept this way still has to be saved; if the file changed on disk meanwhile, the save is refused with a choice to reload.
 
 ---
 
@@ -1022,7 +1069,9 @@ python3 .claude/scripts/figures.py gaps  <report.md>    # what's still missing
 
 Plus `none` for unstyled pandoc output. A style sets the palette, fonts, table treatment, page margins, chart colours and cover — the same across PDF, Word, HTML and slides, because all four are generated from one JSON file.
 
-In the app, open a report's **HTML** tab and select **Palette and layout**. The controls open beside the report; drag their left edge to change the width. Select **Entire report** for the page palette, fonts, chart defaults, and table rules, or select a named Figure or Table to adjust that item alone. Individual Figures have their own colours, line and bar settings, and fonts. Individual Tables have their own colours, font, text size, spacing, and width. Select **Apply changes** to save the choices with that report in `.report-style.json`. The app uses them for its preview, PDF export, and saved figures. **Reset report** restores the selected style's defaults; **Reset this item** clears one item's overrides when you apply the change.
+In the app, open a report's **HTML** tab and select **Palette and layout**. The controls open beside the report; drag their left edge to change the width. Select **Entire report** for the page palette, fonts, chart defaults, and table rules, or select a named Figure or Table to adjust that item alone. Individual Figures have their own colours, line and bar settings, and fonts. Individual Tables have their own colours, font, text size, spacing and width, and their own rules: thickness, colour, line type (solid, dashed, dotted or double) and layout (a rule under every row, a full grid, rules at the top, under the header and at the bottom, an outer box with a header rule, or a header rule only). Select **Apply changes** to save the choices with that report in `.report-style.json`. The app uses them for its preview, its HTML, PDF and Word exports, and saved figures. **Reset report** restores the selected style's defaults; **Reset this item** clears one item's overrides when you apply the change.
+
+**Table designs.** Ten ready-made designs (Clean rules, Academic, Banded slate, Ocean, Full grid, Boxed teal, Ledger, Double rule, Charcoal and Amber), each shown as a small sample table. Under a named Table, a design sets that table's colours and rules and keeps its font, size, width and spacing; adjust any setting afterwards. Under **Entire report**, a design applies to every captioned table at once. **Use these settings for all tables** copies one table's settings to the rest. A table needs a caption line (`**Table:** … {#T1}`, above or below it) to be styled on its own; an uncaptioned table follows the report's table rules.
 
 ### Just say it
 
@@ -1113,7 +1162,7 @@ Verified working on this machine — pandoc 3.8.3, matplotlib 3.10, weasyprint 6
 | Format | Notes |
 |---|---|
 | PDF | via weasyprint from the styled HTML; running footers, landscape pages for wide tables |
-| Word | generated `reference.docx` carries the style's fonts, heading colours, and table treatment |
+| Word | generated `reference.docx` carries the style's fonts, heading colours, and table treatment; from the app, also each table's own settings and the report's comments as Word comments |
 | HTML | single self-contained file, images embedded |
 | Slides | generated `reference.pptx` carries the theme; the report is **restructured** first, since reading prose makes bad slides |
 

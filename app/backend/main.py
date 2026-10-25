@@ -29,7 +29,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Res
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from backend import accounts, activity, appearance, autoedits, config, edit_state, final_sections, keychain, render, revision, sessions, usage, workspace
+from backend import accounts, activity, appearance, autoedits, comments, config, edit_state, final_sections, keychain, render, revision, sessions, usage, workspace
 from backend.providers.base import Event, ProviderError
 from backend.providers.claude import ClaudeProvider
 from backend.turns import TurnManager
@@ -922,10 +922,18 @@ class RenderBody(BaseModel):
     style: str = "meridian"
     cite: bool = True
     formats: list[str] = []
+    comments: bool = True
 
 
-def _rendered_view(name: str, body: RenderBody, meta: dict[str, Any]) -> dict[str, Any]:
-    base = Path(meta["html"]).parent.parent
+class LiveBody(BaseModel):
+    doc: str | None = None
+    style: str = "meridian"
+    cite: bool = True
+    content: str
+
+
+def _rendered_view(name: str, body: RenderBody | LiveBody, meta: dict[str, Any]) -> dict[str, Any]:
+    base = render.cache_dir(name, body.style, body.cite)
 
     def rel(p: str) -> str:
         return str(Path(p).resolve().relative_to(base.resolve()))
@@ -941,6 +949,7 @@ def _rendered_view(name: str, body: RenderBody, meta: dict[str, Any]) -> dict[st
         "log": meta.get("log", ""),
         "style": body.style,
         "cite": body.cite,
+        "live": bool(meta.get("live")),
     }
 
 
@@ -949,6 +958,16 @@ async def render_run(name: str, body: RenderBody) -> dict[str, Any]:
     """HTML preview of the master in a style, by the workspace's export scripts."""
     try:
         meta = await asyncio.to_thread(render.preview, name, body.doc, body.style, body.cite)
+    except (render.RenderError, FileNotFoundError, ValueError) as exc:
+        raise _bad(exc) from exc
+    return _rendered_view(name, body, meta)
+
+
+@app.post("/api/runs/{name}/render-live")
+async def render_live(name: str, body: LiveBody) -> dict[str, Any]:
+    """HTML of the editor's unsaved text, so a popped-out editor shows its changes here."""
+    try:
+        meta = await asyncio.to_thread(render.live, name, body.doc, body.style, body.cite, body.content)
     except (render.RenderError, FileNotFoundError, ValueError) as exc:
         raise _bad(exc) from exc
     return _rendered_view(name, body, meta)
@@ -970,16 +989,75 @@ def rendered_file(
 
 @app.post("/api/runs/{name}/export")
 async def export_run(name: str, body: RenderBody) -> dict[str, Any]:
-    """Write HTML and/or PDF into <run>/export/<style>/ and check nothing was lost."""
+    """Write HTML, PDF and/or Word into <run>/export/<style>/ and check nothing was lost."""
     if _run_busy(name):
         raise HTTPException(409, "An agent is working on this run. Export when its turn finishes.")
-    formats = [f for f in body.formats if f in ("html", "pdf")] or ["html"]
+    formats = [f for f in body.formats if f in ("html", "pdf", "docx")] or ["html"]
     try:
         return await asyncio.to_thread(
-            render.export, name, body.doc, body.style, body.cite, formats
+            render.export, name, body.doc, body.style, body.cite, formats, body.comments
         )
     except (render.RenderError, FileNotFoundError, ValueError) as exc:
         raise _bad(exc) from exc
+
+
+def _doc(name: str, doc: str | None) -> str:
+    folder = workspace.run_dir(name)
+    found = doc or workspace.run_meta(folder).get("primary")
+    if not found:
+        raise FileNotFoundError("This run has no master document yet.")
+    return str(found)
+
+
+@app.get("/api/runs/{name}/comments")
+def list_comments(name: str, doc: str | None = None) -> dict[str, Any]:
+    try:
+        target = _doc(name, doc)
+        return {"doc": target, "comments": comments.listing(name, target)}
+    except (FileNotFoundError, ValueError) as exc:
+        raise _bad(exc, 404 if isinstance(exc, FileNotFoundError) else 400) from exc
+
+
+class CommentBody(BaseModel):
+    doc: str | None = None
+    text: str
+    author: str = ""
+    selection: dict[str, Any] | None = None
+    element: dict[str, Any] | None = None
+
+
+@app.post("/api/runs/{name}/comments")
+def add_comment(name: str, body: CommentBody) -> dict[str, Any]:
+    try:
+        return comments.create(name, _doc(name, body.doc), body.text, body.author, body.selection, body.element)
+    except (FileNotFoundError, ValueError) as exc:
+        raise _bad(exc) from exc
+
+
+class CommentPatch(BaseModel):
+    text: str | None = None
+    resolved: bool | None = None
+
+
+@app.patch("/api/runs/{name}/comments/{cid}")
+def edit_comment(name: str, cid: str, body: CommentPatch) -> dict[str, Any]:
+    try:
+        return comments.update(name, cid, body.text, body.resolved)
+    except FileNotFoundError as exc:
+        raise _bad(exc, 404) from exc
+    except ValueError as exc:
+        raise _bad(exc) from exc
+
+
+@app.delete("/api/runs/{name}/comments/{cid}")
+def remove_comment(name: str, cid: str) -> dict[str, bool]:
+    try:
+        comments.delete(name, cid)
+    except FileNotFoundError as exc:
+        raise _bad(exc, 404) from exc
+    except ValueError as exc:
+        raise _bad(exc) from exc
+    return {"ok": True}
 
 
 class FiguresBody(BaseModel):

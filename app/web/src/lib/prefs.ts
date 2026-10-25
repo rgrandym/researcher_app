@@ -4,6 +4,8 @@
 // before the first render (main.tsx); a change is saved at once.
 
 import { api } from "./api";
+import type { Place } from "./places";
+import type { View } from "../stores/ui";
 
 export interface Prefs {
   theme: string;
@@ -16,6 +18,13 @@ export interface Prefs {
   figures_open?: boolean;
   // Exported files kept as buttons in each run's HTML toolbar, newest first.
   export_links?: Record<string, string[]>;
+  // The name on comments, as Word shows it.
+  comment_author?: string;
+  // Whether exports carry the comments (Word comments, PDF footnotes, HTML highlights).
+  export_comments?: boolean;
+  // Each project's place (lib/places) and the view last open, to resume the next session there.
+  places?: Record<string, Place>;
+  last_view?: View;
 }
 
 const DEFAULTS: Prefs = { theme: "system", agents_view: "lanes", sidebar_open: true, activity_open: true, run_panel_open: true };

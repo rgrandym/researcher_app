@@ -30,7 +30,7 @@ struct Config {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate,
-    WKDownloadDelegate
+    WKDownloadDelegate, NSWindowDelegate
 {
     let config = Config.load()
     var window: NSWindow!
@@ -38,6 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     var starting = false
     var quitting = false
     var downloads: [ObjectIdentifier: URL] = [:]
+    var popups: [NSWindow] = []  // the app's own pages opened in a window of their own
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = makeMenu()
@@ -244,7 +245,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        if (error as NSError).code == NSURLErrorCancelled { return }
+        if (error as NSError).code == NSURLErrorCancelled || webView !== self.webView { return }
         start()  // the backend went away: attach to it again when it is back, or start one
     }
 
@@ -285,8 +286,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         _ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
         for action: WKNavigationAction, windowFeatures: WKWindowFeatures
     ) -> WKWebView? {
-        if let url = action.request.url { NSWorkspace.shared.open(url) }  // a new tab: the browser
-        return nil
+        guard let url = action.request.url else { return nil }
+        guard url.host == "localhost" || url.host == "127.0.0.1" else {
+            NSWorkspace.shared.open(url)  // a new tab: the browser
+            return nil
+        }
+        // One of the app's own pages (the popped-out editor): a window of its own, on the
+        // same web data, so the two windows can talk to each other.
+        let child = WKWebView(frame: .zero, configuration: configuration)
+        child.navigationDelegate = self
+        child.uiDelegate = self
+        if #available(macOS 13.3, *) { child.isInspectable = true }
+        let size = NSSize(
+            width: windowFeatures.width?.doubleValue ?? 980, height: windowFeatures.height?.doubleValue ?? 1000)
+        let popup = NSWindow(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered, defer: false)
+        popup.title = "Research · Edit"
+        popup.isReleasedWhenClosed = false
+        popup.contentView = child
+        popup.delegate = self
+        popup.center()
+        popup.setFrameAutosaveName("ResearchPopout")
+        popup.makeKeyAndOrderFront(nil)
+        popups.append(popup)
+        return child
+    }
+
+    // The page closed itself (window.close()).
+    func webViewDidClose(_ webView: WKWebView) {
+        popups.first { $0.contentView === webView }?.close()
+    }
+
+    // A closing popup unloads its page first, so the page can hand its unsaved text back.
+    func windowWillClose(_ notification: Notification) {
+        guard let popup = notification.object as? NSWindow, let index = popups.firstIndex(of: popup)
+        else { return }
+        popups.remove(at: index)
+        (popup.contentView as? WKWebView)?.load(URLRequest(url: URL(string: "about:blank")!))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { popup.contentView = nil }
     }
 
     func webView(

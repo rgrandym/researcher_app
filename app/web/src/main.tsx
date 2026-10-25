@@ -2,6 +2,8 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
+import { PopoutEdit } from "./components/RunView";
+import { POPOUT } from "./lib/live";
 import "./index.css";
 import { loadPrefs } from "./lib/prefs";
 import { applyTheme, storedTheme } from "./lib/theme";
@@ -17,7 +19,7 @@ void loadPrefs().then(() => {
   ReactDOM.createRoot(document.getElementById("root")!).render(
     <React.StrictMode>
       <QueryClientProvider client={client}>
-        <App />
+        {POPOUT ? <PopoutEdit run={POPOUT.run} path={POPOUT.path} /> : <App />}
       </QueryClientProvider>
     </React.StrictMode>,
   );

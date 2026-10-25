@@ -2,7 +2,8 @@ import { useEffect, useRef } from "react";
 import { basicSetup } from "codemirror";
 import { markdown } from "@codemirror/lang-markdown";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
-import { EditorView } from "@codemirror/view";
+import { StateEffect, StateField } from "@codemirror/state";
+import { Decoration, EditorView, type DecorationSet } from "@codemirror/view";
 import { linter, lintGutter, type Diagnostic } from "@codemirror/lint";
 import { tags } from "@lezer/highlight";
 
@@ -60,6 +61,36 @@ function markdownDiagnostics(view: EditorView): Diagnostic[] {
   return diagnostics;
 }
 
+/** A commented passage, highlighted in the text. */
+export interface EditorMark {
+  id: string;
+  from: number;
+  to: number;
+  title: string;
+  active: boolean;
+}
+
+// The highlights move with the text as it is edited; a new set replaces them.
+const setMarks = StateEffect.define<EditorMark[]>();
+const marksField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(marks, tr) {
+    marks = marks.map(tr.changes);
+    for (const effect of tr.effects) {
+      if (!effect.is(setMarks)) continue;
+      const length = tr.state.doc.length;
+      marks = Decoration.set(
+        effect.value
+          .filter((m) => m.from < m.to && m.to <= length)
+          .map((m) => Decoration.mark({ class: m.active ? "cm-comment cm-comment-active" : "cm-comment", attributes: { "data-cid": m.id, title: m.title } }).range(m.from, m.to)),
+        true,
+      );
+    }
+    return marks;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
 const editorTheme = EditorView.theme({
   "&": {
     height: "100%",
@@ -89,6 +120,8 @@ const editorTheme = EditorView.theme({
     backgroundColor: "var(--editor-selection) !important",
   },
   ".cm-lintRange-error": { textDecoration: "underline wavy var(--bad)" },
+  ".cm-comment": { backgroundColor: "rgba(255, 212, 59, 0.28)", borderBottom: "2px solid rgba(214, 160, 0, 0.75)", cursor: "pointer" },
+  ".cm-comment-active": { backgroundColor: "rgba(255, 196, 0, 0.55)" },
 });
 
 interface Props {
@@ -97,14 +130,18 @@ interface Props {
   onSave?: () => void;
   onScroll?: (top: number) => void;
   initialScrollTop?: number;
+  marks?: EditorMark[];
+  onMarkClick?: (id: string) => void;
+  // Select this range and scroll it to the middle; a new `key` repeats it.
+  focus?: { from: number; to: number; key: number } | null;
 }
 
-export default function MarkdownEditor({ value, onChange, onSave, onScroll, initialScrollTop }: Props) {
+export default function MarkdownEditor({ value, onChange, onSave, onScroll, initialScrollTop, marks, onMarkClick, focus }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
-  const callbacks = useRef({ onChange, onSave, onScroll });
+  const callbacks = useRef({ onChange, onSave, onScroll, onMarkClick });
   const restored = useRef(false);
-  callbacks.current = { onChange, onSave, onScroll };
+  callbacks.current = { onChange, onSave, onScroll, onMarkClick };
 
   useEffect(() => {
     if (!host.current) return;
@@ -118,6 +155,7 @@ export default function MarkdownEditor({ value, onChange, onSave, onScroll, init
         lintGutter(),
         syntaxHighlighting(highlighting),
         EditorView.lineWrapping,
+        marksField,
         EditorView.contentAttributes.of({ spellcheck: "true", lang: "en-GB", autocorrect: "on" }),
         editorTheme,
         EditorView.updateListener.of((update) => {
@@ -130,6 +168,11 @@ export default function MarkdownEditor({ value, onChange, onSave, onScroll, init
               callbacks.current.onSave?.();
               return true;
             }
+            return false;
+          },
+          click: (event) => {
+            const mark = (event.target as HTMLElement | null)?.closest?.("[data-cid]");
+            if (mark) callbacks.current.onMarkClick?.(mark.getAttribute("data-cid") ?? "");
             return false;
           },
         }),
@@ -152,6 +195,19 @@ export default function MarkdownEditor({ value, onChange, onSave, onScroll, init
     if (!editor || editor.state.doc.toString() === value) return;
     editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: value } });
   }, [value]);
+
+  useEffect(() => {
+    view.current?.dispatch({ effects: setMarks.of(marks ?? []) });
+  }, [marks]);
+
+  useEffect(() => {
+    const editor = view.current;
+    if (!editor || !focus) return;
+    const to = Math.min(focus.to, editor.state.doc.length);
+    const from = Math.min(focus.from, to);
+    editor.dispatch({ selection: { anchor: from, head: to }, effects: EditorView.scrollIntoView(from, { y: "center" }) });
+    editor.focus();
+  }, [focus]);
 
   useEffect(() => {
     if (restored.current || !value || !view.current) return;
