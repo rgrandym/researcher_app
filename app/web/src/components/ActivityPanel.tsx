@@ -342,7 +342,8 @@ function PlanUsage({ connection, inUse, live, now }: { connection: Connection; i
       {plan.isPending && <div className="text-[0.6875rem] text-faint">Reading plan usage…</div>}
       {plan.isError && <div className="text-[0.6875rem] text-bad">Usage unavailable: {(plan.error as Error).message}</div>}
       {plan.data?.windows.map((window) => <WindowLine key={window.name} window={window} now={now} />)}
-      {plan.data && !plan.data.windows.length && <div className="text-[0.6875rem] text-faint">{plan.data.note || "Plan allowance unavailable."}</div>}
+      {plan.data?.note && <div className="text-[0.6875rem] text-faint">{plan.data.note}</div>}
+      {plan.data && !plan.data.windows.length && !plan.data.note && <div className="text-[0.6875rem] text-faint">Plan allowance unavailable.</div>}
     </div>
   );
 }

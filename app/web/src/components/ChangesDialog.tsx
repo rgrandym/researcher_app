@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { X } from "lucide-react";
@@ -6,6 +6,7 @@ import { api } from "../lib/api";
 
 export interface Subject {
   slug: string;
+  master: string | null;
   path: string;
   role: "subject" | "template";
   format: string;
@@ -42,12 +43,78 @@ interface Plan {
   changes: Change[];
   open: { where?: string; what?: string; why?: string }[];
   reviewed: boolean;
+  revised: string | null;
 }
 
 type Verdict = "accepted" | "rejected" | "";
 interface Draft { status: Verdict; after: string; editing: boolean }
 
 const fileName = (path: string) => path.split("/").pop() ?? path;
+
+interface ExportResult { ok: boolean; files: string[]; problems: string[]; output: string }
+
+// A Word or PDF document revised in Markdown: its master is edited like a report, and the
+// export carries it back into the original's design. No per-change decisions.
+function DocumentPanel({ run, subject, onOpenFile }: { run: string; subject: Subject; onOpenFile: (path: string) => void }) {
+  const base = `/api/runs/${encodeURIComponent(run)}/documents/${encodeURIComponent(subject.slug)}`;
+  const [formats, setFormats] = useState<Record<"docx" | "pdf", boolean>>({ docx: true, pdf: true });
+  const [track, setTrack] = useState(false);
+  const [author, setAuthor] = useState("");
+  const diff = useMutation({
+    mutationFn: () => api.post<{ path: string; summary: string }>(`${base}/diff`),
+    onSuccess: (result) => onOpenFile(result.path),
+  });
+  const exported = useMutation({
+    mutationFn: () => api.post<ExportResult>(`${base}/export`, {
+      formats: (Object.keys(formats) as ("docx" | "pdf")[]).filter((f) => formats[f]), track, author,
+    }),
+  });
+  const pdfSource = subject.format === "pdf";
+  const busy = diff.isPending || exported.isPending;
+  const result = exported.data;
+  return (
+    <div className="space-y-3">
+      <p className="text-muted">
+        {fileName(subject.path)} is revised in <span className="font-medium text-fg">{subject.master}</span>. Read and edit it as you would a report, or run
+        {" "}/critique, /repair, /expand or /verify on it. Export it when it is ready: the Word file keeps the original's design.
+      </p>
+      <div className="flex flex-wrap gap-2 text-[0.75rem]">
+        <button onClick={() => onOpenFile(subject.master!)} disabled={busy} className="rounded-md border border-border px-2.5 py-1 hover:border-accent disabled:opacity-40">Open {subject.master}</button>
+        <button onClick={() => diff.mutate()} disabled={busy} className="rounded-md border border-border px-2.5 py-1 hover:border-accent disabled:opacity-40">{diff.isPending ? "Comparing…" : "Show changes against the original"}</button>
+      </div>
+      <section className="space-y-2 rounded-lg border border-border p-3">
+        <h3 className="font-medium">Export</h3>
+        {pdfSource && <p className="text-[0.75rem] text-muted">The original is a PDF, which cannot be edited in place: the Word file is made in plain styles. Supply the source .docx to keep the design.</p>}
+        <div className="flex flex-wrap items-center gap-3 text-[0.75rem]">
+          {(["docx", "pdf"] as const).map((f) => (
+            <label key={f} className="flex items-center gap-1.5">
+              <input type="checkbox" checked={formats[f]} disabled={f === "docx"} onChange={(e) => setFormats({ ...formats, [f]: e.target.checked })} />
+              {f === "docx" ? "Word" : "PDF"}
+            </label>
+          ))}
+          {!pdfSource && (
+            <label className="flex items-center gap-1.5">
+              <input type="checkbox" checked={track} onChange={(e) => setTrack(e.target.checked)} />
+              Tracked changes
+            </label>
+          )}
+        </div>
+        {track && <input value={author} onChange={(e) => setAuthor(e.target.value)} placeholder="Name shown on tracked changes (default: Revision)" className="w-full rounded-md border border-border bg-bg px-3 py-1.5 text-[0.75rem] outline-none focus:border-accent" />}
+        <button onClick={() => exported.mutate()} disabled={busy} className="rounded-md bg-accent px-3 py-1.5 text-[0.75rem] font-medium text-white disabled:opacity-40">{exported.isPending ? "Exporting…" : "Export"}</button>
+        {result && (
+          <div className="space-y-1 text-[0.75rem]">
+            <p className={result.ok ? "text-good" : "text-bad"}>{result.ok ? "Exported, and checked against the original." : "The export did not pass."}</p>
+            {result.files.map((f) => (
+              <button key={f} onClick={() => void api.post("/api/exports/open", { path: `outputs/${run}/${f}` })} className="block truncate text-left underline hover:text-fg">{fileName(f)}</button>
+            ))}
+            {result.problems.map((p, i) => <p key={i} className="text-bad">{p}</p>)}
+          </div>
+        )}
+        {(diff.isError || exported.isError) && <p role="alert" className="text-[0.75rem] text-bad">{((diff.error ?? exported.error) as Error).message}</p>}
+      </section>
+    </div>
+  );
+}
 const OPS: Record<string, string> = {
   replace: "Replace", insert_after: "Add after", insert_before: "Add before", delete: "Remove",
   insert_table: "Add table", add_slide: "Add slide", set_cell: "Set cell",
@@ -61,25 +128,45 @@ function seed(plan: Plan): Record<string, Draft> {
   }]));
 }
 
-export default function ChangesDialog({ run, subjects, onClose, onStarted }: {
+export default function ChangesDialog({ run, subjects, onClose, onStarted, onOpenFile }: {
   run: string;
   subjects: Subject[];
   onClose: () => void;
   onStarted: (session: string) => void;
+  onOpenFile: (path: string) => void;
 }) {
   const client = useQueryClient();
   const documents = subjects.filter((s) => s.role === "subject");
-  const [slug, setSlug] = useState(() => (documents.find((s) => Object.keys(s.counts).length) ?? documents[0])?.slug ?? "");
+  const [slug, setSlug] = useState(() => (documents.find((s) => s.master || Object.keys(s.counts).length) ?? documents[0])?.slug ?? "");
   const plan = useQuery({
     queryKey: ["changes", run, slug],
     queryFn: () => api.get<Plan>(`/api/runs/${encodeURIComponent(run)}/changes/${encodeURIComponent(slug)}`),
-    enabled: Boolean(slug),
+    enabled: Boolean(slug) && !documents.find((s) => s.slug === slug)?.master,
+    // The agent can rebuild the plan while the dialog is open (a change split, a new round):
+    // poll as the subjects list does, so the list never lags the count on the button.
+    refetchInterval: 15_000,
   });
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [mode, setMode] = useState<"tracked" | "clean">("tracked");
   const [author, setAuthor] = useState("");
   const [notes, setNotes] = useState("");
-  useEffect(() => { if (plan.data) setDrafts(seed(plan.data)); }, [plan.data]);
+  const seeded = useRef<Record<string, Draft>>({});
+  useEffect(() => {
+    if (!plan.data) return;
+    // A refreshed plan replaces the drafts, except those the author touched and has not saved,
+    // for changes still in the plan with the same proposed text.
+    const fresh = seed(plan.data);
+    setDrafts((cur) => {
+      const next = { ...fresh };
+      for (const c of plan.data!.changes) {
+        const was = seeded.current[c.id], mine = cur[c.id];
+        const touched = mine && was && (mine.status !== was.status || mine.after !== was.after || mine.editing);
+        if (touched && was.after === fresh[c.id].after) next[c.id] = mine;
+      }
+      return next;
+    });
+    seeded.current = fresh;
+  }, [plan.data]);
 
   const save = useMutation({
     mutationFn: () => api.put<Plan>(`/api/runs/${encodeURIComponent(run)}/changes/${encodeURIComponent(slug)}/decisions`, {
@@ -100,7 +187,14 @@ export default function ChangesDialog({ run, subjects, onClose, onStarted }: {
     },
     onSuccess: (result) => onStarted(result.session),
   });
-  const busy = save.isPending || apply.isPending;
+  const rebuild_ = useMutation({
+    mutationFn: () => api.post<Plan>(`/api/runs/${encodeURIComponent(run)}/changes/${encodeURIComponent(slug)}/from-markdown`),
+    onSuccess: (result) => {
+      client.setQueryData(["changes", run, slug], result);
+      void client.invalidateQueries({ queryKey: ["subjects", run] });
+    },
+  });
+  const busy = save.isPending || apply.isPending || rebuild_.isPending;
 
   useEffect(() => {
     const key = (event: KeyboardEvent) => { if (event.key === "Escape" && !busy) onClose(); };
@@ -137,8 +231,8 @@ export default function ChangesDialog({ run, subjects, onClose, onStarted }: {
       <div role="dialog" aria-modal="true" aria-labelledby="changes-title" className="flex max-h-[92vh] w-full max-w-3xl flex-col rounded-xl border border-border bg-surface shadow-2xl">
         <div className="flex items-start gap-3 border-b border-border px-5 py-4">
           <div className="min-w-0 flex-1">
-            <h2 id="changes-title" className="text-[1rem] font-semibold">Proposed changes</h2>
-            <p className="mt-1 text-[0.7812rem] text-muted">Accept, reject or rewrite each change. Only accepted changes reach the document; the original file is never modified.</p>
+            <h2 id="changes-title" className="text-[1rem] font-semibold">{current?.master ? "Revised document" : "Proposed changes"}</h2>
+            <p className="mt-1 text-[0.7812rem] text-muted">{current?.master ? "The original file is never modified: every export starts again from it." : "Accept, reject or rewrite each change. Only accepted changes reach the document; the original file is never modified."}</p>
           </div>
           <button onClick={onClose} disabled={busy} aria-label="Close" className="rounded p-1 text-muted hover:bg-panel disabled:opacity-40"><X size="1rem" /></button>
         </div>
@@ -146,14 +240,22 @@ export default function ChangesDialog({ run, subjects, onClose, onStarted }: {
           <div className="flex flex-wrap gap-1 border-b border-border px-5 py-2">
             {documents.map((s) => (
               <button key={s.slug} onClick={() => setSlug(s.slug)} disabled={busy} className={clsx("max-w-[16rem] truncate rounded-md px-2.5 py-1 text-[0.75rem]", s.slug === slug ? "bg-panel font-medium text-fg" : "text-muted hover:text-fg")}>
-                {fileName(s.path)}{Object.keys(s.counts).length ? "" : " · no plan"}
+                {fileName(s.path)}{s.master || Object.keys(s.counts).length ? "" : " · no plan"}
               </button>
             ))}
           </div>
         )}
         <div className="scroll-thin flex-1 space-y-3 overflow-y-auto px-5 py-4 text-[0.8125rem]">
-          {plan.isLoading && <p className="text-faint">Loading…</p>}
+          {current?.master && <DocumentPanel run={run} subject={current} onOpenFile={onOpenFile} />}
+          {!current?.master && plan.isLoading && <p className="text-faint">Loading…</p>}
           {plan.isError && <p className="text-bad">{(plan.error as Error).message}</p>}
+          {plan.data?.revised && (
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-panel px-3 py-2 text-[0.75rem]">
+              <span className="min-w-0 flex-1 text-muted">This plan is built from <span className="font-medium text-fg">revised.md</span>, the revised document in Markdown. Read or edit it, then update the plan: your edits are kept, and your decisions stand for every change you did not touch.</span>
+              <button onClick={() => onOpenFile(plan.data!.revised!)} disabled={busy} className="rounded-md border border-border px-2 py-0.5 hover:border-accent disabled:opacity-40">Open revised.md</button>
+              <button onClick={() => rebuild_.mutate()} disabled={busy} className="rounded-md border border-accent px-2 py-0.5 text-accent disabled:opacity-40">{rebuild_.isPending ? "Updating…" : "Update plan from revised.md"}</button>
+            </div>
+          )}
           {plan.data && changes.length === 0 && <p className="text-muted">No changes proposed for {fileName(plan.data.path)} yet. Run /changes to propose them.</p>}
           {plan.data && changes.length > 0 && (
             <div className="flex flex-wrap items-center gap-2 text-[0.75rem]">
@@ -230,15 +332,17 @@ export default function ChangesDialog({ run, subjects, onClose, onStarted }: {
               <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="Anything the agent should know (optional)" className="w-full resize-y rounded-md border border-border bg-bg px-3 py-1.5 outline-none focus:border-accent" />
             </section>
           )}
-          {(save.isError || apply.isError) && <p role="alert" className="text-bad">{((save.error ?? apply.error) as Error).message}</p>}
+          {(save.isError || apply.isError || rebuild_.isError) && <p role="alert" className="text-bad">{((save.error ?? apply.error ?? rebuild_.error) as Error).message}</p>}
         </div>
         <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-3 text-[0.7812rem]">
           {save.isSuccess && !busy && <span className="mr-auto text-faint">Decisions saved.</span>}
           <button onClick={onClose} disabled={busy} className="rounded-md border border-border px-3 py-1.5 disabled:opacity-40">Close</button>
+          {!current?.master && <>
           <button onClick={() => save.mutate()} disabled={busy || !changes.length} className="rounded-md border border-accent px-3 py-1.5 text-accent disabled:opacity-40">{save.isPending && !apply.isPending ? "Saving…" : "Save decisions"}</button>
           <button onClick={() => apply.mutate()} disabled={busy || tally.accepted === 0} className="rounded-md bg-accent px-3 py-1.5 font-medium text-white disabled:opacity-40">
             {apply.isPending ? "Starting…" : `${rebuild ? "Rebuild" : "Apply"} ${tally.accepted} accepted change${tally.accepted === 1 ? "" : "s"}`}
           </button>
+          </>}
         </div>
       </div>
     </div>

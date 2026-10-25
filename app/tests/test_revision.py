@@ -116,3 +116,94 @@ def test_apply_end_to_end_with_scripts(root: Path) -> None:
                            capture_output=True, text=True)
     assert check.returncode == 0, check.stdout
     assert main.run_subjects(RUN)["subjects"][0]["deliverable"]["ok"] is True
+
+
+def _word_subject(root: Path) -> Path:
+    import docx
+
+    run = root / "outputs" / RUN
+    (run / "external_data").mkdir(exist_ok=True)
+    d = docx.Document()
+    d.add_heading("Plan", level=1)
+    d.add_heading("1. Market", level=2)
+    d.add_paragraph("The market is worth USD 9 billion.")
+    struck = d.add_paragraph().add_run("An old claim the author struck out.")
+    struck.font.strike = True
+    d.add_heading("2. Team", level=2)
+    d.add_paragraph("Two founders run the company.")
+    d.save(str(run / "external_data" / "plan.docx"))
+    scripts = root / ".claude/scripts"
+    for args in (["add", str(run), "plan.docx"], ["extract", str(run)]):
+        subprocess.run([sys.executable, str(scripts / "subject.py"), *args], check=True, capture_output=True)
+    revision._modules.clear()
+    return run
+
+
+def test_word_plan_from_markdown(root: Path) -> None:
+    run = _word_subject(root)
+    with (run / "evidence.jsonl").open("a") as ev:
+        ev.write('\n{"id": "E1", "claim": "c", "url": "https://example.org/a"}\n')
+    folder = run / "subjects" / "plan"
+    text = (folder / "document.md").read_text()
+    assert "~~An old claim the author struck out.~~" in text
+    text = text.replace("Two founders run the company.",
+                        "<!-- why: the team grew [E1] -->\nThree founders run the company.")
+    text = text.replace("The market is worth USD 9 billion.",
+                        "The market is worth USD 9.7 billion.\n\n| Layer | Value |\n| --- | --- |\n| Media | USD 9.7 billion |")
+    (folder / "revised.md").write_text(text)
+    plan = main.plan_from_markdown(RUN, "plan")
+    by_id = {c["id"]: c for c in plan["changes"]}
+    assert plan["revised"] == "subjects/plan/revised.md"
+    assert by_id["C-P006"]["op"] == "rewrite" and by_id["C-P006"]["rationale"] == "the team grew"
+    assert by_id["C-P002"]["op"] == "rewrite_section"
+    assert "C-clean" in by_id
+
+    # The author edits revised.md: decisions on untouched changes stand.
+    main.save_decisions(RUN, "plan", main.DecisionsBody(decisions={c: {"status": "accepted"} for c in by_id}))
+    (folder / "revised.md").write_text(text.replace("Three founders", "Three founders and an adviser"))
+    status = {c["id"]: c["status"] for c in main.plan_from_markdown(RUN, "plan")["changes"]}
+    assert status["C-P006"] == "stale" and status["C-P002"] == "accepted"
+
+    main.save_decisions(RUN, "plan", main.DecisionsBody(decisions={"C-P006": {"status": "accepted"}}))
+    scripts = root / ".claude/scripts"
+    subprocess.run([sys.executable, str(scripts / "apply_changes.py"), str(run), "plan"], check=True,
+                   capture_output=True)
+    check = subprocess.run([sys.executable, str(scripts / "changes.py"), "check", str(run), "plan"],
+                           capture_output=True, text=True)
+    assert check.returncode == 0, check.stdout
+    out = (run / "deliverable/plan/v1/text.md").read_text()
+    assert "Three founders and an adviser" in out and "USD 9.7 billion" in out
+    assert "struck out" not in out
+
+
+def test_word_document_master_exports_without_a_plan(root: Path) -> None:
+    run = _word_subject(root)
+    with (run / "evidence.jsonl").open("a") as ev:
+        ev.write('\n{"id": "E1", "claim": "c", "url": "https://example.org/a"}\n')
+    scripts = root / ".claude/scripts"
+    subprocess.run([sys.executable, str(scripts / "document.py"), "start", str(run), "plan"],
+                   check=True, capture_output=True)
+    master = run / "plan.md"
+    assert main.run_subjects(RUN)["subjects"][0]["master"] == "plan.md"
+    meta = json.loads((run / ".run.json").read_text())
+    assert meta["subjects"] and meta["documents"][0]["master"] == "plan.md"
+
+    # The master is edited as a report is, with evidence IDs in the text.
+    master.write_text(master.read_text().replace(
+        "Two founders run the company.", "Three founders run the company [E1]."))
+    diff = main.document_diff(RUN, "plan")
+    assert "1 changed" in diff["summary"]
+    assert "Three founders" in (run / diff["path"]).read_text()
+
+    result = asyncio.run(main.document_export(RUN, "plan", main.DocumentExportBody(formats=["docx"])))
+    assert result["ok"], result["output"]
+    assert result["files"] == ["deliverable/plan/v1/plan.docx"]
+    out = (run / "deliverable/plan/v1/text.md").read_text()
+    assert "Three founders run the company." in out
+    assert "[E1]" not in out and "struck out" not in out
+    assert not (run / "subjects/plan/changes.json").exists()
+
+    # An unsourced claim does not reach the finished file.
+    master.write_text(master.read_text().replace("Three founders", "Three founders [UNVERIFIED]"))
+    result = asyncio.run(main.document_export(RUN, "plan", main.DocumentExportBody(formats=["docx"])))
+    assert not result["ok"] and "UNVERIFIED" in result["output"]

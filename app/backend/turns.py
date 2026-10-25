@@ -88,7 +88,7 @@ def project_note(run: str) -> str:
 
 def make_providers() -> dict[str, Any]:
     providers: dict[str, Any] = {
-        "claude-sub": ClaudeProvider("claude-sub"),
+        "claude-sub": ClaudeProvider("claude-sub", email=str(config.load_settings().get("claude_default_email") or "")),
         "claude-api": ClaudeProvider("claude-api"),
         "codex-plan": CodexProvider("codex-plan"),
         "codex-api": CodexProvider("codex-api"),
@@ -162,7 +162,12 @@ class TurnManager:
     def sync_accounts(self) -> None:
         """Match the Claude account providers to settings after an account is added or
         removed. A provider whose account was removed stays while a turn still uses it."""
-        wanted = {a["id"]: a for a in config.claude_accounts()}
+        settings = config.load_settings()
+        wanted = {a["id"]: a for a in config.claude_accounts(settings)}
+        default = self.providers.get("claude-sub")
+        expected = str(settings.get("claude_default_email") or "")
+        if isinstance(default, ClaudeProvider) and default.email != expected:
+            self.providers["claude-sub"] = ClaudeProvider("claude-sub", email=expected)
         for conn, prov in list(self.providers.items()):
             if getattr(prov, "config_dir", "") and conn not in wanted:
                 if not any(self.runs_on(sid, conn) for sid in self.running):
@@ -175,6 +180,24 @@ class TurnManager:
             )
             if not same:
                 self.providers[conn] = _account_provider(a)
+
+    def _verify_claude_account(self, provider: ClaudeProvider) -> None:
+        """Refuse a turn if two plan connections resolve to the same Claude login."""
+        email = provider.verified_email()
+        for other in self.providers.values():
+            if other is provider or not isinstance(other, ClaudeProvider) or other.billing != "plan":
+                continue
+            try:
+                other_email = other.verified_email(check_expected=False)
+            except ProviderError:
+                continue  # a signed-out or unverifiable alternative cannot run this turn
+            if email == other_email:
+                order = list(self.providers)
+                if order.index(other.id) < order.index(provider.id):
+                    raise ProviderError(
+                        f"{provider.label} and {other.label} are both signed in as {email}. "
+                        "Sign this connection out and sign in with a different Claude account."
+                    )
 
     def runs_on(self, session_id: str, connection: str) -> bool:
         if not self.is_running(session_id):
@@ -439,6 +462,8 @@ class TurnManager:
         started = time.time()
         result: TurnResult
         try:
+            if isinstance(provider, ClaudeProvider) and provider.billing == "plan":
+                await asyncio.to_thread(self._verify_claude_account, provider)
             result = await provider.run_turn(
                 prompt,
                 native,

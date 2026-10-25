@@ -66,12 +66,15 @@ Rules for choosing:
 ## 1. Establish containment and scope
 
 **Name the document first.** A run's master is `report.md`, as `.run.json`
-declares through `runmeta.py`. Every command below is written against `$doc`,
+declares through `runmeta.py`; a revision run also has a revised document per
+supplied file. When more than one exists, take the one the author edited, or ask
+(`.claude/references/masters.md`). Every command below is written against `$doc`,
 and this is where it comes from:
 
 ```bash
 run=outputs/<slug>
-doc=$(python3 .claude/scripts/runmeta.py $run --masters | head -1)
+python3 .claude/scripts/runmeta.py $run --masters      # more than one: choose, as above
+doc=<the chosen master>
 mirror=$run/.voice-mirror-$(basename $doc .md).md
 python3 app/backend/edit_state.py inspect $doc
 ```

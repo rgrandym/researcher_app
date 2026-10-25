@@ -45,6 +45,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # the next. It never switches by itself.
     "fallback_order": ["claude-sub", "codex-plan", "claude-api"],
     "default_connection": "claude-sub",
+    "claude_default_email": "",
     # Extra Claude subscription accounts: {"id", "label", "email", "config_dir"}.
     "claude_accounts": [],
     "handover_threshold": 90,

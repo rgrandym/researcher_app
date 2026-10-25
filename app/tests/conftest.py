@@ -115,6 +115,16 @@ def data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return path
 
 
+@pytest.fixture(autouse=True)
+def offline_plan_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test reads the real Keychain or calls the usage endpoint."""
+    from backend import usage
+
+    monkeypatch.setattr(usage, "_oauth_token", lambda config_dir: None)
+    usage._fetch_state.clear()
+    usage._token_owner.clear()
+
+
 def _write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text)

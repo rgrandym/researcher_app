@@ -71,6 +71,8 @@ def read(path):
              "pdf": read_pdf, "md": read_md}[fmt](Path(path))
     model["format"] = fmt
     model["references"] = references(model)
+    if fmt == "docx":
+        model["marks"] = working_marks(model)
     return model
 
 
@@ -84,9 +86,11 @@ def strip_tokens(text):
 
 
 # The markup a change's `after` text may carry. Everything else is literal text.
-#   **bold**   *italic*   [label](https://url)   ^[footnote text]
+#   **bold**   *italic*   ~~struck~~   [label](https://url)   ^[new footnote]   [^3] existing footnote
 MARKUP = re.compile(
-    r"\*\*(?P<b>.+?)\*\*"
+    r"~~(?P<s>.+?)~~"
+    r"|\[\^(?P<ref>\d+)\](?!:)"
+    r"|\*\*(?P<b>.+?)\*\*"
     r"|(?<![\w*])\*(?P<i>[^*\s][^*]*?)\*(?![\w*])"
     r"|\[(?P<lt>[^\]]+)\]\((?P<lu>(?:https?|mailto):[^)\s]+)\)"
     r"|\^\[(?P<fn>[^\]]+)\]")
@@ -98,8 +102,12 @@ def segments(text):
     for m in MARKUP.finditer(text):
         if m.start() > pos:
             out.append({"text": text[pos:m.start()]})
-        if m.group("b") is not None:
-            out.append({"text": m.group("b"), "bold": True})
+        if m.group("s") is not None:
+            out += [{**seg, "strike": True} for seg in segments(m.group("s"))]
+        elif m.group("ref") is not None:
+            out.append({"text": "", "ref": m.group("ref")})
+        elif m.group("b") is not None:
+            out += [{**seg, "bold": True} for seg in segments(m.group("b"))]
         elif m.group("i") is not None:
             out.append({"text": m.group("i"), "italic": True})
         elif m.group("lt") is not None:
@@ -113,8 +121,9 @@ def segments(text):
 
 
 def plain(text):
-    """What a reader sees of `after` text in the body (footnote text sits elsewhere)."""
-    return "".join(seg["text"] for seg in segments(text))
+    """What a reader of the finished document sees of `after` text: footnote text sits
+    elsewhere, and struck text is deleted text."""
+    return "".join(seg["text"] for seg in segments(text) if not seg.get("strike"))
 
 
 def _nearest(el, tag):
@@ -196,12 +205,22 @@ def docx_footnotes_part(doc):
 
 
 class XmlPart:
-    """A package part as an lxml tree, whether python-docx parsed it or kept bytes."""
+    """A package part as an lxml tree, whether python-docx parsed it or kept bytes.
+    One tree per part: `XmlPart.of(part)` returns the same tree every time, so an edit
+    made through one lookup is the edit that is saved."""
 
     def __init__(self, part):
         from lxml import etree
         self.part = part
         self.root = part.element if hasattr(part, "element") else etree.fromstring(part.blob)
+
+    @classmethod
+    def of(cls, part):
+        cached = getattr(part, "_officedoc_xml", None)
+        if cached is None:
+            cached = cls(part)
+            part._officedoc_xml = cached
+        return cached
 
     def flush(self):
         from lxml import etree
@@ -215,7 +234,7 @@ def docx_footnotes(doc):
     part = docx_footnotes_part(doc)
     if part is None:
         return None, []
-    xp = XmlPart(part)
+    xp = XmlPart.of(part)
     notes = [f for f in xp.root.findall(w("footnote"))
              if f.get(w("type")) in (None, "normal")]
     return xp, notes
@@ -268,6 +287,54 @@ def docx_para_info(p, names):
     return style, level, listed
 
 
+def run_marks(run):
+    """Working marks on a run: struck through, an explicit colour, a highlight."""
+    rpr = run.find(w("rPr"))
+    if rpr is None:
+        return False, None, None
+    on = lambda el: el is not None and el.get(w("val")) not in ("0", "false", "none")  # noqa: E731
+    struck = on(rpr.find(w("strike"))) or on(rpr.find(w("dstrike")))
+    col = rpr.find(w("color"))
+    color = (col.get(w("val")) or "").upper() if col is not None else None
+    hl = rpr.find(w("highlight"))
+    return struck, color if color not in (None, "", "AUTO") else None, hl.get(w("val")) if on(hl) else None
+
+
+def in_link(run):
+    return run.getparent() is not None and run.getparent().tag == w("hyperlink")
+
+
+def docx_part_marks(p):
+    """Struck character ranges, draft colours (on text that is not a link) and comment anchors."""
+    struck, colors, pos = [], {}, 0
+    for x in docx_atoms(p):
+        n = len(x.text)
+        if n:
+            is_struck, color, _ = run_marks(x.run)
+            if is_struck:
+                if struck and struck[-1][1] == pos:
+                    struck[-1][1] = pos + n
+                else:
+                    struck.append([pos, pos + n])
+            if color and not in_link(x.run) and x.text.strip():
+                colors[color] = colors.get(color, 0) + n
+        pos += n
+    comments = sorted({el.get(w("id")) for tag in ("commentRangeStart", "commentReference")
+                       for el in p.iter(w(tag))})
+    return struck, colors, comments
+
+
+def docx_comments(doc):
+    """[{id, author, text}] from the comments part, if any."""
+    for rel in doc.part.rels.values():
+        if rel.reltype.endswith("/comments") and not rel.is_external:
+            root = XmlPart.of(rel.target_part).root
+            return [{"id": c.get(w("id")), "author": c.get(w("author")) or "",
+                     "text": " ".join("".join(t.text or "" for t in q.iter(w("t"))) for q in c.findall(w("p"))).strip()}
+                    for c in root.findall(w("comment"))]
+    return []
+
+
 def read_docx(path):
     try:
         import docx
@@ -294,9 +361,36 @@ def read_docx(path):
             part["level"] = level
         if listed:
             part["list"] = True
+        struck, colors, comments = docx_part_marks(el)
+        if struck:
+            part["struck"] = struck
+            part["unstruck"] = "".join(c for i, c in enumerate(text)
+                                       if not any(a <= i < b for a, b in struck))
+        if colors:
+            part["colors"] = colors
+        if comments:
+            part["comments"] = comments
         parts.append(part)
     return {"parts": parts, "design": docx_design(doc, path, names, index),
-            "links": docx_links(doc)}
+            "links": docx_links(doc), "comments": docx_comments(doc)}
+
+
+def working_marks(model):
+    """What a draft carries that a finished document does not: struck text, draft colours,
+    comments. A clean-up change removes them once the author accepts it."""
+    parts = [p for p in model["parts"] if p.get("struck") or p.get("colors") or p.get("comments")]
+    colors = {}
+    for p in parts:
+        for c, n in (p.get("colors") or {}).items():
+            colors[c] = colors.get(c, 0) + n
+    return {
+        "struck_parts": [p["id"] for p in parts if p.get("struck")],
+        "wholly_struck": [p["id"] for p in parts if p.get("struck") and not p.get("unstruck", "").strip()],
+        "draft_colors": dict(sorted(colors.items(), key=lambda kv: -kv[1])),
+        "colored_parts": [p["id"] for p in parts if p.get("colors")],
+        "comments": [{**c, "anchors": [p["id"] for p in model["parts"] if c["id"] in (p.get("comments") or [])]}
+                     for c in model.get("comments", [])],
+    }
 
 
 def docx_links(doc):
@@ -896,3 +990,125 @@ def vocabulary(path, slides_only=False):
                                             r"ppt/(slides/slide|slideLayouts/slideLayout|slideMasters/slideMaster|theme/theme)\d*\.xml$", name):
                 c += drawing_values(etree.fromstring(z.read(name)))
     return c
+
+
+# ------------------------------------------------------------------ docx as Markdown
+
+def list_kinds(doc):
+    """numId -> "bullet" or "number", from the document's numbering part."""
+    try:
+        numbering = doc.part.numbering_part.element
+    except (KeyError, NotImplementedError, AttributeError):
+        return {}
+    abstract = {a_.get(w("abstractNumId")): a_ for a_ in numbering.findall(w("abstractNum"))}
+    out = {}
+    for num in numbering.findall(w("num")):
+        ref = num.find(w("abstractNumId"))
+        a_el = abstract.get(ref.get(w("val"))) if ref is not None else None
+        fmt = a_el.find(f"{w('lvl')}/{w('numFmt')}") if a_el is not None else None
+        if fmt is not None:
+            out[num.get(w("numId"))] = "bullet" if fmt.get(w("val")) == "bullet" else "number"
+    return out
+
+
+def _on(rpr, tag):
+    el = rpr.find(w(tag)) if rpr is not None else None
+    return el is not None and el.get(w("val")) not in ("0", "false", "none")
+
+
+def para_markdown(p, part):
+    """A paragraph's text as Markdown: **bold**, *italic*, ~~struck~~, [links](url), [^n]."""
+    groups = []                       # [flags, text]
+    for r in docx_runs(p):
+        text = "".join(x.text for x in docx_atoms(p) if x.run is r)
+        if not text:
+            continue
+        rpr = r.find(w("rPr"))
+        url = None
+        parent = r.getparent()
+        if parent.tag == w("hyperlink") and parent.get(f"{{{R}}}id") in part.rels:
+            url = part.rels[parent.get(f"{{{R}}}id")].target_ref
+        flags = (_on(rpr, "b") and not url, _on(rpr, "i") and not url,
+                 _on(rpr, "strike") or _on(rpr, "dstrike"), url)
+        if groups and groups[-1][0] == flags:
+            groups[-1][1] += text
+        else:
+            groups.append([flags, text])
+    pieces = []                       # [struck, markdown], neighbours merged below
+    for (bold, italic, struck, url), text in groups:
+        if text.startswith("[^") and text.endswith("]") or not text.strip():
+            pieces.append([struck, text])
+            continue
+        lead, core, trail = re.match(r"(\s*)(.*?)(\s*)$", text, re.S).groups()
+        if url:
+            core = f"[{core}]({url})"
+        if italic:
+            core = f"*{core}*"
+        if bold:
+            core = f"**{core}**"
+        pieces.append([struck, lead + core + trail])
+    out, i = [], 0
+    while i < len(pieces):
+        if not pieces[i][0]:
+            out.append(pieces[i][1])
+            i += 1
+            continue
+        j = i
+        while j < len(pieces) and pieces[j][0]:
+            j += 1
+        text = "".join(x[1] for x in pieces[i:j])
+        lead, core, trail = re.match(r"(\s*)(.*?)(\s*)$", text, re.S).groups()
+        out.append(f"{lead}~~{core}~~{trail}" if core else text)
+        i = j
+    return "".join(out).replace("\n", " ")
+
+
+def docx_markdown(path):
+    """The document as Markdown, one block per paragraph or table, each under a hidden
+    `<!-- ID -->` anchor. Comments sit under the block they are attached to; footnotes
+    come last. The anchors let an edited copy be mapped back onto the original."""
+    import docx
+    doc = docx.Document(str(path))
+    names = docx_style_names(doc)
+    index = docx_index(doc)
+    kinds = list_kinds(doc)
+    comments = {c["id"]: c for c in docx_comments(doc)}
+    fn_part = docx_footnotes_part(doc)
+    blocks = []
+    for pid, el in index.items():
+        if pid.startswith("FN") or (pid.startswith("T") and "." in pid):
+            continue
+        if el.tag == w("tbl"):
+            rows = []
+            for tr in el.findall(w("tr")):
+                cells = []
+                for tc in tr.findall(w("tc")):
+                    cells.append(" <br> ".join(para_markdown(q, doc.part) for q in tc.findall(w("p"))
+                                               if docx_text(q).strip()).replace("|", "\\|"))
+                rows.append("| " + " | ".join(cells) + " |")
+            if rows:
+                rows.insert(1, "|" + " --- |" * rows[0].count(" | ") + " --- |")
+            blocks.append(f"<!-- {pid} -->\n" + "\n".join(rows))
+            continue
+        md = para_markdown(el, doc.part)
+        if not md.strip():
+            continue
+        style, level, _ = docx_para_info(el, names)
+        nid = el.find(f"{w('pPr')}/{w('numPr')}/{w('numId')}")
+        if level is not None:
+            md = "#" * max(1, min(6, level or 1)) + " " + md
+        elif nid is not None and kinds.get(nid.get(w("val"))):
+            md = ("- " if kinds[nid.get(w("val"))] == "bullet" else "1. ") + md
+        block = f"<!-- {pid} -->\n{md}"
+        for cid in sorted({c.get(w("id")) for tag in ("commentRangeStart", "commentReference")
+                           for c in el.iter(w(tag))}):
+            if cid in comments:
+                c = comments[cid]
+                block += f"\n<!-- comment {cid} ({c['author']}): {c['text']} -->"
+        blocks.append(block)
+    _, notes = docx_footnotes(doc)
+    for f in notes:
+        fid = f.get(w("id"))
+        text = " ".join(para_markdown(q, fn_part) for q in f.findall(w("p"))).strip()
+        blocks.append(f"<!-- FN{fid} -->\n[^{fid}]: {text}")
+    return "\n\n".join(blocks) + "\n"

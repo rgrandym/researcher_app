@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field
 
 from backend import accounts, activity, appearance, autoedits, config, edit_state, final_sections, keychain, render, revision, sessions, usage, workspace
 from backend.providers.base import Event, ProviderError
+from backend.providers.claude import ClaudeProvider
 from backend.turns import TurnManager
 
 app = FastAPI(title="Research", docs_url=None, redoc_url=None)
@@ -155,7 +156,8 @@ def _status(conn: str, fresh: bool = False) -> dict[str, Any]:
     if hit and not fresh and time.time() - hit[0] < 30:
         return hit[1]
     provider = manager.provider(conn)
-    st = provider.status().model_dump()
+    st = (provider.status(fresh=fresh) if isinstance(provider, ClaudeProvider)
+          else provider.status()).model_dump()
     _status_cache[conn] = (time.time(), st)
     return st
 
@@ -168,33 +170,62 @@ async def connections(fresh: bool = False) -> list[dict[str, Any]]:
         st = await asyncio.to_thread(_status, conn, fresh)
         u = await asyncio.to_thread(manager.provider(conn).usage)
         out.append({**st, "usage": u.model_dump() if u else None})
+    by_email: dict[str, list[dict[str, Any]]] = {}
+    for item in out:
+        if item["runtime"] == "claude" and item["billing"] == "plan" and item.get("account"):
+            by_email.setdefault(str(item["account"]).strip().casefold(), []).append(item)
+    for matches in by_email.values():
+        if len(matches) < 2:
+            continue
+        names = ", ".join(str(item["label"]) for item in matches)
+        first = matches[0]
+        first["message"] += f" Another connection uses this same account: {names}."
+        for item in matches[1:]:
+            item["signed_in"] = False
+            item["message"] = (
+                f"Duplicate Claude sign-in: {names} use {item['account']}. "
+                "Sign this connection out and sign in with its intended account."
+            )
     return out
 
 
 @app.get("/api/usage/{conn}")
 async def connection_usage(conn: str) -> dict[str, Any]:
     try:
-        u = await asyncio.to_thread(manager.provider(conn).usage)
+        provider = manager.provider(conn)
+        u = await asyncio.to_thread(provider.usage, refresh_local=True) if isinstance(provider, ClaudeProvider) else await asyncio.to_thread(provider.usage)
     except ProviderError as exc:
         raise _bad(exc, 404) from exc
     return u.model_dump() if u else {}
 
 
+class LoginBody(BaseModel):
+    email: str = ""
+
+
 @app.post("/api/connections/{conn}/login")
-def login(conn: str) -> dict[str, Any]:
+def login(conn: str, body: LoginBody | None = None) -> dict[str, Any]:
     provider = manager.provider(conn)
     if getattr(provider, "billing", "") == "key":
         raise HTTPException(400, "This connection uses an API key; add one instead.")
+    email = body.email.strip() if body else getattr(provider, "email", "")
+    if email and not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+        raise HTTPException(400, "Enter a valid email address.")
     try:
-        provider.start_login()  # type: ignore[attr-defined]
+        if isinstance(provider, ClaudeProvider):
+            provider.start_login(email)
+            accounts.set_expected_email(conn, email)
+            manager.sync_accounts()
+        else:
+            provider.start_login()  # type: ignore[attr-defined]
     except ProviderError as exc:
         raise _bad(exc) from exc
     _status_cache.pop(conn, None)
     return {
         "ok": True,
         "message": "The sign-in page opens in your browser. If it shows a different Claude "
-        "account, sign out of claude.ai there first, then sign in again. Refresh this card "
-        "when you are done.",
+        "account, sign out of claude.ai there first, then sign in again. The app will "
+        "check the signed-in email against the one you entered. Refresh this card when done.",
     }
 
 
@@ -628,6 +659,49 @@ def save_decisions(name: str, slug: str, body: DecisionsBody) -> dict[str, Any]:
         raise HTTPException(409, "An agent is working on this project; decide once it has finished.")
     try:
         return revision.decide(name, slug, body.decisions)
+    except FileNotFoundError as exc:
+        raise _bad(exc, 404) from exc
+    except ValueError as exc:
+        raise _bad(exc, 400) from exc
+
+
+@app.post("/api/runs/{name}/changes/{slug}/from-markdown")
+def plan_from_markdown(name: str, slug: str) -> dict[str, Any]:
+    """Rebuild a Word document's plan from revised.md, after the author edited it."""
+    if _run_busy(name):
+        raise HTTPException(409, "An agent is working on this project; update the plan once it has finished.")
+    try:
+        return revision.from_markdown(name, slug)
+    except FileNotFoundError as exc:
+        raise _bad(exc, 404) from exc
+    except ValueError as exc:
+        raise _bad(exc, 400) from exc
+
+
+@app.post("/api/runs/{name}/documents/{slug}/diff")
+def document_diff(name: str, slug: str) -> dict[str, Any]:
+    """What a revised document's master changed against the original, as diff.md."""
+    try:
+        return revision.document_diff(name, slug)
+    except FileNotFoundError as exc:
+        raise _bad(exc, 404) from exc
+    except ValueError as exc:
+        raise _bad(exc, 400) from exc
+
+
+class DocumentExportBody(BaseModel):
+    formats: list[str] = ["docx", "pdf"]
+    track: bool = False
+    author: str = ""
+
+
+@app.post("/api/runs/{name}/documents/{slug}/export")
+async def document_export(name: str, slug: str, body: DocumentExportBody) -> dict[str, Any]:
+    """Export a revised document to Word in the original's design, and PDF. A script, no turn."""
+    if _run_busy(name):
+        raise HTTPException(409, "An agent is working on this run. Export when its turn finishes.")
+    try:
+        return await asyncio.to_thread(revision.document_export, name, slug, body.formats, body.track, body.author)
     except FileNotFoundError as exc:
         raise _bad(exc, 404) from exc
     except ValueError as exc:

@@ -86,7 +86,7 @@ export interface RunSummary {
 export interface RunDetail {
   name: string;
   path: string;
-  meta: { kind: string; doc_kind?: string; masters: string[]; primary: string | null };
+  meta: { kind: string; doc_kind?: string; masters: string[]; primary: string | null; documents?: { slug: string; master: string }[] };
   stages: Stage[];
   files: { path: string; size: number; mtime: number }[];
   critique_failed_at: number | null;
@@ -159,6 +159,7 @@ export interface Settings {
   fallback_order: string[];
   default_connection: string;
   claude_accounts: ClaudeAccount[];
+  claude_default_email: string;
   handover_threshold: number;
   allow_rules: { tool: string; rule: string }[];
   caps: Caps;

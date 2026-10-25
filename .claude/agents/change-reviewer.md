@@ -19,6 +19,13 @@ each change, its target and the parts around it in `text.md`
 (`python3 .claude/scripts/subject.py show <run> <slug> <ID>`). Look up each evidence
 row in `evidence.jsonl`.
 
+**A revised Word or PDF document has no plan.** Its master is `<run>/<slug>.md`, and
+`subjects/<slug>/diff.md` lists every block it changed, added or removed against the
+original (`document.py diff <run> <slug> --write` if it is missing). Each entry in
+`diff.md` is a change: ask the questions below of each, with the `[E#]` after a claim
+as its evidence. Read the master itself, not a preview, for flow. Point 7's `clean`
+change does not apply: the export removes the working marks.
+
 For every change, ask:
 
 1. **Supported.** Does the evidence row's quote say what `after` says, with the
@@ -37,6 +44,15 @@ For every change, ask:
    finding.
 6. **Complete against the audit.** Which recommended changes in the audit have no
    change and are not in `open`?
+7. **Comments answered, marks cleaned.** Every comment shown in `text.md` is
+   addressed by a change or answered in `open`; no change edits struck text; a
+   document with working marks has its `clean` change.
+
+Then read `subjects/<slug>/preview.md` (or the master) start to finish, as the document's reader.
+**Flow** is a finding like any other: a section that no longer follows from the one
+before, a rewritten section that dropped the author's argument, a point made twice,
+a table nobody introduces, a run of phrase edits that each read well alone and
+together break a paragraph. Name the section and say what would mend it.
 
 Write `subjects/<slug>/review.md`.
 
@@ -49,12 +65,14 @@ applied change in context in `text.md`. For a deck, look at every changed or new
 slide.
 
 1. Each accepted change is there, once, as accepted (author-rewritten text exactly
-   as the author wrote it).
+   as the author wrote it), and the document reads as one piece where it landed.
 2. Nothing else changed. A rebuild's text matches the original wherever the
    outline says `kept`.
 3. Seams: spacing and punctuation around replaced spans, capitalisation, list and
    heading levels of new paragraphs, footnote placement.
-4. Form: new paragraphs, slides and cells look like their neighbours; a rebuilt
+4. Form: new paragraphs, headings, bullets, tables, slides and cells look like
+   their neighbours: no bold where the neighbours are plain, no draft colour, no
+   struck text left behind. A rebuilt
    slide could sit between two original ones unnoticed. Name the slide and what
    gives it away.
 5. No pipeline trace, evidence ID or placeholder the author did not accept.

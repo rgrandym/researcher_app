@@ -6,6 +6,11 @@ disable-model-invocation: true
 
 # Expand
 
+**Which document.** When the run has more than one master (an audit and a revised
+document), act on the one the request names, or ask; then read it wherever this
+skill says `report.md`. A revised document keeps its own form and citations.
+Doctrine: `.claude/references/masters.md`.
+
 A finished report is a **checkpoint, not an artifact to append to.** The reader
 came back with a question, which means the report was incomplete in a way the
 brief did not anticipate. Your job is to research that, and then to make the

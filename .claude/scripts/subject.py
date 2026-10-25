@@ -18,6 +18,8 @@ where they sit. The declaration lives in the run's `.run.json`; nothing in
     source.json      the file, its role, its content hash
     model.json       every addressable part: id, kind, text, style, section
     text.md          the same as readable text, one part per line with its ID
+    document.md      (Word, PDF) the document as Markdown, each block under a hidden <!-- ID -->:
+                     document.py start copies it to the run's revised-document master
     design.json      page set-up, fonts, sizes, colours, styles, layouts, theme
     references.json  how the document cites: footnotes, numbered, author-date, links
     pages/ images/   page renders and embedded pictures (PDF)
@@ -134,6 +136,15 @@ def render_text(model, item):
     lines = [f"# {Path(item['path']).name}", "",
              f"Format: {fmt} · role: {item['role']} · {len(model['parts'])} parts. "
              f"Each line is one part: `[ID] (style) text`. Quote `before` text from here exactly.", ""]
+    marks = model.get("marks") or {}
+    comments = {c["id"]: c for c in model.get("comments", [])}
+    if marks.get("struck_parts") or marks.get("draft_colors") or comments:
+        lines += ["## Working marks (a draft's, not the document's design)", "",
+                  f"- Struck out by the author: {', '.join(marks.get('struck_parts', [])) or 'none'}. "
+                  f"Struck text is deleted text: never edit it or bring it back unless the audit says so.",
+                  f"- Draft colours on body text: {', '.join(f'{c} ({n} chars)' for c, n in marks.get('draft_colors', {}).items()) or 'none'}.",
+                  f"- Comments: {len(comments)}. Each is shown under the paragraph it is attached to; "
+                  f"they are the authors' own instructions.", ""]
     section = None
     for p in model["parts"]:
         if p.get("section") != section and p["kind"] not in ("heading", "slide", "sheet", "page"):
@@ -162,8 +173,29 @@ def render_text(model, item):
             extra += f"  [{p['format']}]" if p.get("format") else ""
             lines.append(f"[{p['id']}] {text}{extra}")
         elif text.strip():
+            if p.get("struck"):
+                meta += "; STRUCK OUT" if not p.get("unstruck", "").strip() else "; partly struck out"
+            if p.get("colors"):
+                meta += "; draft colour " + "/".join(p["colors"])
             lines.append(f"[{p['id']}] ({meta}) {text}")
+            if p.get("struck") and p.get("unstruck", "").strip():
+                struck_text = " … ".join(text[a:b] for a, b in p["struck"])
+                lines.append(f"    struck: {struck_text}")
+            for cid in p.get("comments") or []:
+                c = comments.get(cid)
+                if c:
+                    lines.append(f"    ↳ comment {cid} ({c['author']}): {c['text']}")
     return "\n".join(lines) + "\n"
+
+
+def pdf_markdown(model):
+    """A PDF's text as Markdown, one block per text block under its `<!-- PG03.b2 -->` ID.
+    Its headings are not marked: the PDF records sizes, not structure."""
+    blocks = []
+    for part in model["parts"]:
+        if part["kind"] == "block" and part["text"].strip():
+            blocks.append(f"<!-- {part['id']} -->\n" + " ".join(part["text"].split()))
+    return "\n\n".join(blocks) + "\n"
 
 
 def extract_one(run, item, force=False):
@@ -177,7 +209,9 @@ def extract_one(run, item, force=False):
     meta_path = out / "source.json"
     if not force and meta_path.is_file():
         old = json.loads(meta_path.read_text())
-        if old.get("sha256") == digest and (out / "model.json").is_file():
+        current = (out / "model.json").is_file() and (
+            officedoc.fmt_of(src) not in ("docx", "pdf") or (out / "document.md").is_file())
+        if old.get("sha256") == digest and current:
             print(f"UNCHANGED {item['slug']}  ({item['path']})")
             return 0
     out.mkdir(parents=True, exist_ok=True)
@@ -188,9 +222,17 @@ def extract_one(run, item, force=False):
         pages, images = officedoc.render_pdf(src, out)
         extra = {"pages": pages, "images": images}
     (out / "model.json").write_text(json.dumps(
-        {"format": fmt, "parts": model["parts"], "links": model.get("links", [])},
+        {"format": fmt, "parts": model["parts"], "links": model.get("links", []),
+         "comments": model.get("comments", [])},
         indent=1, ensure_ascii=False, default=str) + "\n")
     (out / "design.json").write_text(json.dumps(model["design"], indent=2, ensure_ascii=False, default=str) + "\n")
+    if fmt == "docx":
+        # The editing surface: the document as Markdown, every block under its ID.
+        (out / "document.md").write_text(officedoc.docx_markdown(src))
+    elif fmt == "pdf":
+        (out / "document.md").write_text(pdf_markdown(model))
+    if model.get("marks"):
+        (out / "marks.json").write_text(json.dumps(model["marks"], indent=2, ensure_ascii=False) + "\n")
     (out / "references.json").write_text(json.dumps(model["references"], indent=2, ensure_ascii=False) + "\n")
     (out / "text.md").write_text(render_text(model, item))
     meta = {"path": item["path"], "role": item["role"], "slug": item["slug"], "format": fmt,

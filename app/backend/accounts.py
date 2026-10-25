@@ -133,8 +133,23 @@ def remove(account_id: str, sign_out: bool = True) -> dict[str, str]:
 
 def provider(connection: str) -> ClaudeProvider:
     if connection == "claude-sub":
-        return ClaudeProvider("claude-sub")
+        return ClaudeProvider("claude-sub", email=str(config.load_settings().get("claude_default_email") or ""))
     return provider_for(get(connection))
+
+
+def set_expected_email(connection: str, email: str) -> None:
+    """Remember the identity requested in the sign-in form for later verification."""
+    email = email.strip()
+    if connection == "claude-sub":
+        config.save_settings({"claude_default_email": email})
+        return
+    get(connection)  # reject unknown account IDs
+    settings = config.load_settings()
+    updated = [
+        {**account, "email": email} if account["id"] == connection else account
+        for account in config.claude_accounts(settings)
+    ]
+    config.save_settings({"claude_accounts": updated})
 
 
 def login(connection: str) -> None:

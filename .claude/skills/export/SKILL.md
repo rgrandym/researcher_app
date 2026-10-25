@@ -10,6 +10,19 @@ Format and style conversion, nothing else. Never fix, rewrite, or trim content
 during an export — if the content is wrong, that is `/repair`'s job, and exporting
 first just produces a polished wrong document.
 
+**Which document.** When the run has more than one master, export the one the request
+names, or ask (`.claude/references/masters.md`). A revised document (a supplied Word
+or PDF file revised in Markdown) is exported in the original's design, not in a house
+style, and needs none of the gates below except the voice and artifact checks:
+
+```bash
+python3 .claude/scripts/gate.py <run>/<slug>.md                             # must exit 0
+python3 .claude/scripts/document.py export <run> <slug> --to docx,pdf [--track]   # must exit 0
+```
+
+It writes `deliverable/<slug>/vN/` and checks the Word file against the original.
+Report the files and any `PROBLEM` line; never edit the Word file by hand.
+
 ## Gate
 
 Export only content that has passed verification. Before converting, confirm:

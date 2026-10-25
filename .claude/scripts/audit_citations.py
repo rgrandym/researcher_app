@@ -5,7 +5,7 @@ Catches, without spending model tokens, the failures that are pure bookkeeping:
 dangling [E#] refs, malformed/duplicate evidence rows, unsourced paragraphs,
 unused evidence, duplicate fetches, and agent artifacts left in the document.
 
-    python3 .claude/scripts/audit_citations.py outputs/<slug> [draft.md]
+    python3 .claude/scripts/audit_citations.py outputs/<slug> [draft.md] [--document]
 
 Exit 1 if any ERROR-level problem is found.
 """
@@ -105,8 +105,12 @@ def load_evidence(path):
 def main():
     if len(sys.argv) < 2:
         sys.exit(__doc__)
-    run = Path(sys.argv[1])
-    draft = run / (sys.argv[2] if len(sys.argv) > 2 else "draft.md")
+    # A revised document (a business plan, say) cites in its own system and carries the
+    # evidence IDs only until export: it needs no Sources list and no gaps section.
+    document = "--document" in sys.argv
+    args = [a for a in sys.argv[1:] if a != "--document"]
+    run = Path(args[0])
+    draft = run / (args[1] if len(args) > 1 else "draft.md")
     rows, problems = load_evidence(run / "evidence.jsonl")
 
     # duplicate fetches of the same URL
@@ -135,7 +139,7 @@ def main():
                                 f"row stays; evidence IDs are never renumbered)")
             for ref in sorted(cited - listed, key=lambda s: int(s[1:])):
                 problems.append(f"ERROR {draft.name} cites {ref} but it has no entry in ## Sources")
-        elif cited:
+        elif cited and not document:
             problems.append(f"ERROR {draft.name} cites {len(cited)} evidence ID(s) but has no "
                             f"## Sources section")
 
@@ -145,7 +149,7 @@ def main():
             if "·" not in pointer:
                 problems.append(f"WARN  {draft.name} [NEEDS DATA] with no "
                                 f"'what · where' pointer: {(pointer or '(bare)')[:50]}")
-        if holes and "Data still to obtain" not in text:
+        if holes and not document and "Data still to obtain" not in text:
             problems.append(f"ERROR {draft.name} has {len(holes)} [NEEDS DATA] "
                             f"placeholder(s) but no '## Data still to obtain' section")
         for ref in sorted((cited | listed) - set(rows), key=lambda s: int(s[1:])):

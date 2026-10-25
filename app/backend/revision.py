@@ -5,12 +5,18 @@ loads those scripts the way `workspace.runmeta()` loads `runmeta.py`, so the app
 agents read the same plan and write the same decisions file. The app writes only
 `subjects/<slug>/decisions.json` (the author's decisions) and the request file that starts
 `/revise` or `/rebuild`.
+
+A Word or PDF document revised in Markdown has a master instead of a plan (`<slug>.md`,
+declared by `document.py start`). The app shows what changed against the original and
+exports the master to Word and PDF with `document.py`, a script, so no agent turn runs.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import json
+import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -59,8 +65,11 @@ def subjects(name: str) -> list[dict[str, Any]]:
         version = changes.latest_version(run, slug)
         check = _json(version / "check.json", {}) if version else {}
         applied = _json(version / "applied.json", {}) if version else {}
+        master = next((d["master"] for d in workspace.run_meta(run).get("documents", [])
+                       if d.get("slug") == slug and (run / d["master"]).is_file()), None)
         out.append({
             "slug": slug,
+            "master": master,
             "path": item["path"],
             "role": item["role"],
             "format": source.get("format") or Path(item["path"]).suffix.lstrip(".").lower(),
@@ -115,7 +124,9 @@ def plan(name: str, slug: str) -> dict[str, Any]:
         })
     review = run / "subjects" / slug / "review.md"
     plan_file = run / "subjects" / slug / "changes.json"
+    revised = run / "subjects" / slug / "revised.md"
     return {
+        "revised": f"subjects/{slug}/revised.md" if revised.is_file() else None,
         "slug": slug,
         "path": item["path"],
         "format": model.get("format", ""),
@@ -170,6 +181,20 @@ def decide(name: str, slug: str, decisions: dict[str, dict[str, Any]]) -> dict[s
     return plan(name, slug)
 
 
+def from_markdown(name: str, slug: str) -> dict[str, Any]:
+    """Rebuild the plan from revised.md after the author edited it. Decisions on changes
+    their edit did not touch stand, because a decision binds to its change's content."""
+    run = workspace.run_dir(name)
+    _find(run, slug)
+    changes = script("changes")
+    try:
+        changes.from_markdown(run, slug)
+        changes.render(run, slug)
+    except SystemExit as exc:
+        raise ValueError(str(exc.code).removeprefix("ERROR ")) from exc
+    return plan(name, slug)
+
+
 def apply_request(name: str, slug: str, mode: str, author: str, notes: str) -> tuple[str, str]:
     """Write the request file and return (command, prompt) for the agent turn."""
     run = workspace.run_dir(name)
@@ -194,3 +219,36 @@ def apply_request(name: str, slug: str, mode: str, author: str, notes: str) -> t
         "and follow the author's choices. Apply only the accepted changes."
     )
     return command, prompt
+
+
+def _document(run: Path, args: list[str], timeout: int) -> tuple[int, str]:
+    """Run document.py on the backend's own interpreter, which has the Office libraries."""
+    done = subprocess.run(
+        [sys.executable, str(workspace.root() / ".claude/scripts/document.py"), *args],
+        cwd=workspace.root(), capture_output=True, text=True, timeout=timeout,
+    )
+    return done.returncode, ((done.stdout or "") + (done.stderr or "")).strip()
+
+
+def document_diff(name: str, slug: str) -> dict[str, Any]:
+    """Write subjects/<slug>/diff.md: what the master changed against the original."""
+    run = workspace.run_dir(name)
+    _find(run, slug)
+    code, out = _document(run, ["diff", str(run), slug, "--write"], 60)
+    if code:
+        raise ValueError(out.removeprefix("ERROR ") or "the comparison failed")
+    return {"path": f"subjects/{slug}/diff.md", "summary": out.split("·")[-1].strip()}
+
+
+def document_export(name: str, slug: str, formats: list[str], track: bool, author: str) -> dict[str, Any]:
+    """Export the master to Word (in the original's design) and, if asked, PDF."""
+    run = workspace.run_dir(name)
+    _find(run, slug)
+    wanted = [f for f in formats if f in ("docx", "pdf")] or ["docx"]
+    args = ["export", str(run), slug, "--to", ",".join(wanted)]
+    if track:
+        args += ["--track", "--author", author.strip()[:120] or "Revision"]
+    code, out = _document(run, args, 600)
+    files = [m.group(1).split(" · ")[0].strip() for m in re.finditer(r"^wrote (.+)$", out, re.M)]
+    problems = [line for line in out.splitlines() if line.startswith(("PROBLEM", "REFUSED", "ERROR"))]
+    return {"ok": code == 0, "files": files, "problems": problems, "output": out[-4000:]}

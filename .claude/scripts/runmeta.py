@@ -11,6 +11,13 @@ normal case) is a research run whose masters are report.md and draft.md; a
 `.run.json` can name other masters:
 
     {"kind": "research", "masters": ["report.md", "draft.md"]}
+
+A revision run adds one master per supplied document it revises in Markdown, named in
+`documents` (written by document.py start, never by hand):
+
+    {"documents": [{"slug": "business-plan", "master": "business-plan.md"}]}
+
+    python3 .claude/scripts/runmeta.py <run> --documents  # slug and master, one per line
 """
 import json
 import sys
@@ -32,9 +39,18 @@ def meta(run) -> dict:
                 out.update({k: v for k, v in data.items() if v})
         except (json.JSONDecodeError, ValueError, OSError):
             pass                     # a corrupt file must not break the gates
-    masters = out.get("masters") or RESEARCH_MASTERS
+    masters = list(out.get("masters") or RESEARCH_MASTERS)
+    docs = [d for d in out.get("documents") or [] if isinstance(d, dict) and d.get("master")]
+    out["documents"] = docs
+    masters += [d["master"] for d in docs if d["master"] not in masters]
     out["masters"] = [m for m in masters if isinstance(m, str) and m.endswith(".md")]
     return out
+
+
+def document(doc):
+    """The `documents` entry for a revised-document master, or None for a report."""
+    doc = Path(doc)
+    return next((d for d in meta(doc.parent)["documents"] if d["master"] == doc.name), None)
 
 
 def masters(run) -> list:
@@ -81,6 +97,9 @@ def main():
     m = meta(run)
     if "--kind" in sys.argv:
         print(m["kind"])
+    elif "--documents" in sys.argv:
+        for d in m["documents"]:
+            print(f"{d['slug']}\t{run / d['master']}")
     elif "--masters" in sys.argv:
         for name in masters(run):
             print(run / name)

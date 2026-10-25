@@ -51,13 +51,28 @@ confidently the document makes it.
 
 ## The pipeline
 
+Word and PDF documents:
+
 ```text
 /audit    research the subject: what is right, wrong, stale, missing, weak  → report.md
+/changes  write the revised document as Markdown, reviewed independently   → <slug>.md, a master of the run
+          the author reads and edits it; /critique, /repair, /expand, /verify act on it as on a report
+export    carry it into the original's design, checked against the original → deliverable/<slug>/vN/<file>.docx, .pdf
+```
+
+Decks, spreadsheets and Markdown files:
+
+```text
+/audit    as above                                                          → report.md
 /changes  turn the findings into a change plan, reviewed independently     → subjects/<slug>/changes.json
           the author accepts, rejects or rewrites each change               → subjects/<slug>/decisions.json
 /revise   apply the accepted changes to a copy of the original             → deliverable/<slug>/vN/<file>
-/rebuild  build a new file in the original's design (PDFs, new decks)       → deliverable/<slug>/vN/<file>
+/rebuild  build a new file in the original's design (new decks)            → deliverable/<slug>/vN/<file>
 ```
+
+The export is a script (`document.py export`), started by the author from the app or
+by `/export`; no agent turn runs. A run holding both an audit and a revised document
+has two masters, and every stage asks which it acts on: `.claude/references/masters.md`.
 
 Each stage keeps the workspace loop: investigate, draft, independent review,
 repair. `/audit` runs the research pipeline in full. `/changes` and `/revise`
@@ -74,6 +89,9 @@ evidence the run holds, and sends scouts for what it lacks.
 subjects/<slug>/source.json      the file, its role, its hash
 subjects/<slug>/model.json       every addressable part, with its ID
 subjects/<slug>/text.md          the readable text, one part per line: quote `before` from here
+subjects/<slug>/document.md      (Word, PDF) the document as Markdown, each block under its <!-- ID -->
+<slug>.md                        (Word, PDF) the revised document: a master of the run, edited in place
+subjects/<slug>/diff.md          what the master changed against document.md, for review
 subjects/<slug>/design.json      fonts, sizes, colours, styles, layouts, page set-up
 subjects/<slug>/references.json  the citation system and its numbering
 subjects/<slug>/voice.md         the document's tone and voice (written by /changes)
@@ -90,6 +108,13 @@ The original in `external_data/` is never modified. Every version starts again
 from it, so v3 is the original plus everything accepted up to then, not v2 edited.
 
 ## The change plan
+
+A Word or PDF document has no plan. Its master, `<slug>.md`, is the document as
+Markdown with each block under a hidden `<!-- ID -->`; the export turns its
+difference from `document.md` into the changes below in memory and applies them, so
+the schema is what decks, spreadsheets and Markdown files are planned in, and what a
+Word export carries out. (`changes.py from-markdown` still turns an older run's
+`revised.md` into a plan the author decides on.)
 
 `subjects/<slug>/changes.json`:
 
@@ -109,25 +134,58 @@ from it, so v3 is the original plus everything accepted up to then, not v2 edite
 
 | Field | Meaning |
 | --- | --- |
-| `op` | `replace`, `insert_after`, `insert_before`, `delete` (Word, PowerPoint, Markdown, PDF plans); `insert_table` (Word); `add_slide` (PowerPoint, PDF plans); `set_cell` (Excel) |
+| `op` | `replace`, `insert_after`, `insert_before`, `delete` (Word, PowerPoint, Markdown, PDF plans); `rewrite_section`, `insert_table`, `clean` (Word); `add_slide` (PowerPoint, PDF plans); `set_cell` (Excel) |
 | `target` | A part ID from `text.md`: `P012`, `T1.R2.C3.P1`, `FN1.P1`, `S03.#5.p2`, `S03`, `Sheet!C14`, `PG04.b2`, `B012` |
 | `before` | `replace`: the exact original text it changes, unique in the target. `delete`: optionally the whole text. `set_cell`: optionally the current value |
-| `after` | The new text, with the markup below. Blocks separated by a blank line become separate paragraphs (Word, Markdown); lines become paragraphs on a slide |
+| `after` | The new text, in the blocks below. Blocks separated by a blank line become separate paragraphs (Word, Markdown); lines become paragraphs on a slide |
 | `like` | The part whose formatting new text copies: a paragraph, a table (`insert_table`), a slide (`add_slide`). A block may start with `{P032}` to take its own donor |
-| `rows` | `insert_table`: rows of cell text, each as wide as `like` |
+| `rows` | `insert_table`: rows of cell text; the first row is the header |
+| `like_table` | The table whose formatting new tables in `after` copy (default: the document's first table) |
+| `options` | `clean`: which marks to remove, all by default: `{"strike": true, "colors": true, "highlight": true, "comments": true}` |
 | `fill`, `drop` | `add_slide`: text per shape ID of the cloned slide (`{"#2": "Title", "#3": "Line one\nLine two"}`), shapes to remove |
 | `kind` | `correct`, `update`, `add`, `remove`, `adjust`, `style` |
 | `basis` | `evidence` (needs `evidence`), `author` (the author's instruction), `consistency` (follows from another change), `editorial` (clarity, structure) |
 | `open` | What the document needs that the evidence cannot supply. Each item is registered with `wanted.py` and named to the author. It is never filled with a guessed value |
 
-Markup in `after`: `**bold**`, `*italic*`, `[label](https://url)`, and `^[note text]`
-for a footnote in a Word document that already uses footnotes. Every link must point
-to a URL that is in `evidence.jsonl`: `changes.py check` fails a deliverable that
-links anywhere else.
+Inline markup in `after`: `**bold**`, `*italic*`, `[label](https://url)`, and
+`^[note text]` for a footnote in a Word document that already uses footnotes. Every
+link must point to a URL that is in `evidence.jsonl`: `changes.py check` fails a
+deliverable that links anywhere else.
 
-**One change, one edit.** The smallest scope that does the job: a phrase over a
-sentence, a sentence over a paragraph. A plan the author cannot review in one
-sitting is a plan they will accept blind. Two edits to one passage are one change.
+Blocks in `after` (Word): a plain block is a paragraph; `## Heading` is a heading
+in the document's own heading style of that level (a level the document lacks
+becomes a bold run-in line, as its bold labels are); lines starting `- ` are bullets
+in the document's own bullet list; a block of `| a | b |` lines is a table in the
+document's own table formatting, as wide as the text column, first row the header;
+`{T2}` alone keeps an original table in a rewritten section; `{P032}` at the start of
+a block takes that paragraph's formatting.
+
+**Match the change to the job.** A wrong figure, a stale date, a name: replace the
+phrase. Incorporating an assessment into the document, adding a theme, reordering an
+argument: rewrite the paragraph or the section (`rewrite_section`), so the story is
+written once, in order, and reads as one piece. Never patch a section with a dozen
+phrase edits that each make sense alone and together break its flow. Whatever the
+size, two edits to one passage are one change, and a section that is rewritten has
+no other change inside it.
+
+**Keep the original's story.** A rewrite starts from the section as the author wrote
+it: its argument, its order, its best sentences stay unless a finding says otherwise.
+New material goes where the argument needs it, with the transition that connects it.
+The result is the author's document improved, never a new document wearing its title.
+
+**Tables from the report.** When the assessment carries a table the document's reader
+needs (costs, margins, market layers, competitor comparison), bring it in as a table,
+cut to the columns that reader uses, with its source cited in the sentence that
+introduces it.
+
+**A draft's working marks are not its design.** Struck-through text is text the author
+deleted; draft colours, highlights and comments are working marks. `text.md` shows
+them: struck parts are labelled, and each comment sits under the paragraph it is
+attached to. Comments are the authors' instructions: address each one in the plan,
+or say in `open` why not. Never edit or revive struck text unless the audit asks for
+it. A plan for a document carrying marks includes one `clean` change, which removes
+them (struck text, draft colours to body colour, links to the link colour, comments),
+so the new version is a finished document; the author accepts it like any other.
 
 **Cascades are changes too.** A new section needs its line in the contents list; a
 corrected figure in the body may appear again in the executive summary, the deck and
@@ -172,8 +230,18 @@ quoted verbatim. New text is written to it. The author's own writing rules in
   numbering, headers, fields and every untouched byte survive.
 - **No formatting the original does not use.** `changes.py check` fails on any font,
   size, colour, highlight or style that the original never uses.
-- **A PDF is rebuilt, never edited.** Ask whether the author has the source file
-  first: editing a `.pptx` or `.docx` always beats rebuilding from a PDF.
+- **New text takes the document's ordinary formatting.** Its font and size come from
+  the donor paragraph's plain body text, never from a bold label, a struck run or a
+  draft colour.
+- **A file Word opens cleanly.** `changes.py check` also fails a Word file with
+  comments left without an anchor, run formatting out of schema order, links to
+  missing relationships, or a table wider than the text column.
+- **Read the whole before anyone decides.** `changes.py preview` applies every
+  change not rejected to a scratch copy and writes `preview.md`, the revised document
+  start to finish. The plan is read there for flow before review.
+- **A PDF is never edited.** Ask whether the author has the source file first:
+  editing a `.pptx` or `.docx` always beats a PDF. A PDF document revised in
+  Markdown exports to a Word file in plain styles; its design is not carried.
 - **Rebuilt files use the design, nothing else.** `deck_kit.py` draws only with
   `theme.json`, whose every value comes from `design.json`; `changes.py fidelity`
   enforces it. Look at the original's pages and set the theme's motifs (header band,

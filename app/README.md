@@ -122,7 +122,15 @@ the HTML re-renders from the saved file. No model call is involved in any of thi
 
 ## Improving supplied documents
 
-A project whose documents have a change plan (`/changes`) shows a **Changes** button.
+A Word or PDF document revised in Markdown (`/changes`, then `document.py start`) has a
+master, `<slug>.md`, and the project shows a **Revised document** button. It opens the
+master, writes `subjects/<slug>/diff.md` (what changed against the original) and exports
+with `document.py export` on the backend's interpreter (`POST
+/api/runs/{name}/documents/{slug}/export`): Word in the original's design, checked
+against it, and PDF through Microsoft Word or LibreOffice. No agent turn runs. A save to
+the master records edit provenance as a save to `report.md` does.
+
+A project whose decks or spreadsheets have a change plan shows a **Changes** button.
 It opens the plan for each document (`backend/revision.py`, which loads the workspace's
 `subject.py` and `changes.py`): the text each change replaces, the new text, the reason
 and the sources. The author accepts, rejects or rewrites each change; the app writes only
@@ -138,11 +146,26 @@ Models lists every Claude subscription the app can use. The default one runs fro
 `~/.claude`. **Add a Claude account** registers another, with a name, an optional email
 (it pre-fills the sign-in page) and an optional folder. Each account is its own Claude
 Code config folder (`CLAUDE_CONFIG_DIR`, `~/.claude-<name>` unless a folder is given), so
-each keeps its own sign-in and plan windows. The folder links settings, skills, commands,
+each can keep its own sign-in. Usage windows follow the account that completes sign-in.
+The folder links settings, skills, commands,
 plugins and conversations back to `~/.claude`, and an existing folder, such as one set up
 for VS Code, keeps its sign-in. Each account card has **Sign in** and **Sign out**, and an
 added one has **Remove account**, which signs it out and takes it out of the app but leaves
 its folder on disk.
+
+The email entered when adding an account pre-fills the **Sign in as** field. You can
+change it before signing in; the app saves it as the expected identity. Models
+checks the email Claude Code actually reports. A connection with the wrong email, or a
+second connection signed in to the same email, is marked unavailable. Before each Claude
+turn the app checks again and refuses a mismatched sign-in. Sign the affected connection
+out, sign in with the intended account, and refresh Models.
+
+For plan usage, the app first reads Claude Code's local account-bound usage snapshot when
+one exists, then records live rate-limit events from turns. The connection running a task
+refreshes its display every 20 seconds; idle connections retain their last reported
+values until a recorded reset time. The time beside each card shows when Claude last
+reported the figures. A new account without either source shows that usage is unverified
+until Claude Code reports it.
 
 **Order of use** in Models decides which account works first: new sessions start on the
 top entry, and when one runs out the app offers to continue on the next; a spent plan is

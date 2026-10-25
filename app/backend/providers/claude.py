@@ -51,7 +51,13 @@ TURN_TIMEOUT_S = 6 * 3600  # a full pipeline run is long; Stop is the real contr
 EARLY_RESULT_GRACE_S = 120
 AGENT_TOOLS = ("Agent", "Task")
 MONITOR_MOD = config.ROOT / ".claude" / "skills" / "research-monitor"
-STRIP_FOR_PLAN = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+STRIP_FOR_PLAN = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+    "CLAUDE_CODE_OAUTH_SCOPES",
+)
 # How long a signed-in answer from `claude auth status` stands before it is checked again.
 AUTH_TTL_S = 600
 
@@ -76,8 +82,9 @@ def claude_binary() -> str | None:
 class ClaudeParser:
     """Normalises one turn's stream-json messages into `Event`s."""
 
-    def __init__(self, provider: str) -> None:
+    def __init__(self, provider: str, account_email: str = "") -> None:
         self.provider = provider
+        self.account_email = account_email
         self.session_id: str | None = None
         self.result: dict[str, Any] | None = None
         self.limit_resets: float | None = None
@@ -219,7 +226,7 @@ class ClaudeParser:
         info = msg.get("rate_limit_info") or {}
         if not isinstance(info, dict):
             return []
-        windows = usage.record_claude_limit(info, self.provider)
+        windows = usage.record_claude_limit(info, self.provider, self.account_email)
         if info.get("status") == "rejected":
             self.limit_rejected = True
             if info.get("resetsAt"):
@@ -317,6 +324,7 @@ class ClaudeProvider:
         )
         self._models: tuple[float, list[dict[str, Any]]] | None = None
         self._auth: tuple[float, dict[str, Any]] | None = None
+        self._usage_bootstrapped_for: str | None = None
 
     def _account(self, env: dict[str, str]) -> dict[str, str]:
         """Point Claude Code at this account's config folder. The default account drops an
@@ -389,7 +397,7 @@ class ClaudeProvider:
 
     # ---- status
 
-    def status(self) -> ConnectionStatus:
+    def status(self, fresh: bool = False) -> ConnectionStatus:
         binary = claude_binary()
         st = ConnectionStatus(
             id=self.id,
@@ -411,7 +419,7 @@ class ClaudeProvider:
                 else "No API key stored."
             )
         else:
-            info = self._auth_info(binary)
+            info = self._auth_info(binary, fresh=fresh)
             st.signed_in = bool(info.get("loggedIn")) and info.get("authMethod") == "claude.ai"
             st.account = info.get("email") or None
             st.removable = bool(self.config_dir)
@@ -426,27 +434,46 @@ class ClaudeProvider:
                 if info.get("loggedIn")
                 else "Not signed in."
             )
+            if st.signed_in and self.email and str(st.account).strip().casefold() != self.email.strip().casefold():
+                st.signed_in = False
+                st.message = (
+                    f"Signed in as {st.account}, but this connection was configured for "
+                    f"{self.email}. Sign out and sign in with the intended account."
+                )
         st.models = self.models()
         return st
 
-    def _auth_info(self, binary: str) -> dict[str, Any]:
-        """`claude auth status` for this folder. A signed-in answer stands for AUTH_TTL_S,
-        and a check that times out or prints nothing keeps the last answer: a slow check is
-        not a sign-out, and every check starts the CLI against the stored sign-in."""
-        if self._auth and self._auth[1].get("loggedIn") and time.time() - self._auth[0] < AUTH_TTL_S:
+    def _auth_info(self, binary: str, fresh: bool = False) -> dict[str, Any]:
+        """Read this folder's Claude sign-in. A fresh check never falls back to stale data."""
+        if not fresh and self._auth and self._auth[1].get("loggedIn") and time.time() - self._auth[0] < AUTH_TTL_S:
             return self._auth[1]
         try:
             info = json.loads(_run([binary, "auth", "status", "--json"], env=self._plan_env()))
         except ValueError:
             info = None
         if not isinstance(info, dict) or "loggedIn" not in info:
-            return self._auth[1] if self._auth else {}
+            return {}
         self._auth = (time.time(), info)
         return info
+
+    def verified_email(self, check_expected: bool = True) -> str:
+        """Read the CLI's current subscription identity, without a cached answer."""
+        binary = claude_binary()
+        info = self._auth_info(binary, fresh=True) if binary else {}
+        email = str(info.get("email") or "").strip().casefold()
+        if not info.get("loggedIn") or info.get("authMethod") != "claude.ai" or not email:
+            raise ProviderError(f"Cannot verify the signed-in Claude account for {self.label}.")
+        if check_expected and self.email and email != self.email.strip().casefold():
+            raise ProviderError(
+                f"{self.label} is signed in as {email}, but was configured for {self.email}. "
+                "Sign out and sign in with the intended account."
+            )
+        return email
 
     def forget_auth(self) -> None:
         """Check the sign-in afresh next time: after signing in or out, or a refused turn."""
         self._auth = None
+        self._usage_bootstrapped_for = None
 
     def _plan_env(self) -> dict[str, str]:
         env = self._account(config.child_env())
@@ -522,19 +549,35 @@ class ClaudeProvider:
         self._models = (time.time(), found)
         return found
 
-    def usage(self) -> UsageWindows | None:
+    def usage(self, refresh_local: bool = False) -> UsageWindows | None:
         if self.billing == "key":
             return UsageWindows(note="Billed per token; no plan windows.")
-        return usage.claude_usage(self.id)
+        if self._auth is None:
+            self.status()
+        if not self._auth or not self._auth[1].get("loggedIn"):
+            return UsageWindows(note="Sign in to see this account's usage.")
+        email = str((self._auth or (0, {}))[1].get("email") or "")
+        why = ""
+        if email and (refresh_local or self._usage_bootstrapped_for != email.casefold()):
+            # A live read of the plan first; Claude Code's own cached snapshot if it fails.
+            why = usage.fetch_claude_usage(self.id, self.config_dir, email)
+            if why:
+                usage.import_claude_local_usage(self.id, self.config_dir, email)
+            self._usage_bootstrapped_for = email.casefold()
+        result = usage.claude_usage(self.id, expected_email=email or None)
+        if why and result.windows:
+            result.note = " ".join(x for x in (result.note, f"Live read unavailable: {why}; showing the last report.") if x)
+        return result
 
-    def start_login(self) -> None:
+    def start_login(self, email: str | None = None) -> None:
         binary = claude_binary()
         if not binary:
             raise ProviderError("Claude Code not found.")
         self.forget_auth()
         cmd = [binary, "auth", "login", "--claudeai"]
-        if self.email:
-            cmd += ["--email", self.email]  # pre-fills the sign-in page with this account
+        requested_email = self.email if email is None else email.strip()
+        if requested_email:
+            cmd += ["--email", requested_email]  # pre-fills the sign-in page
         subprocess.Popen(
             cmd,
             stdin=subprocess.DEVNULL,
@@ -585,7 +628,8 @@ class ClaudeProvider:
             start_new_session=True,
         )
         assert proc.stdin and proc.stdout and proc.stderr
-        parser = ClaudeParser(self.id)
+        email = str((self._auth or (0, {}))[1].get("email") or "")
+        parser = ClaudeParser(self.id, email)
         session = _ControlSession(proc, parser, on_event, permission, options)
         stderr_task = asyncio.create_task(proc.stderr.read())
         watcher = asyncio.create_task(session.watch(cancelled))

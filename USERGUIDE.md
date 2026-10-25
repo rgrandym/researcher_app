@@ -906,9 +906,11 @@ A business plan, an investor deck, a cash-flow model, a two-pager: put it in a p
 
 ```text
 /audit     what is right, wrong, stale, missing or weak, with evidence   → report.md
-/changes   a change plan you accept, reject or rewrite line by line
-/revise    a new version of a Word, PowerPoint, Excel or Markdown file
-/rebuild   a new file in the original's design, for a PDF or a new deck
+/changes   Word or PDF: the revised document, in Markdown, for you to read and edit
+           deck, spreadsheet: a change plan you accept, reject or rewrite line by line
+export     the revised Word or PDF document, in the original's design
+/revise    a new version of a PowerPoint, Excel or Markdown file
+/rebuild   a new deck in the original's design, from a PDF
 ```
 
 ### Changing one document, step by step
@@ -923,11 +925,13 @@ A business plan, an investor deck, a cash-flow model, a two-pager: put it in a p
 
 Only the file you name becomes the document being improved; everything else in `external_data/` stays a source. If the name is ambiguous ("the plan" when there are two), you are asked which file you mean. No audit is needed when you already know what you want: facts the project does not yet hold are researched first. Be specific: "update section 5 with 2026 market figures" gets tighter changes than "improve the plan".
 
-**3. Review the changes.** When the agent finishes, a **Changes** button appears in the project's toolbar. Each change shows the text it replaces, the new text, why, and its sources. **Accept**, **Reject**, or **Rewrite** it in your own words (your wording is used exactly), or use **Accept all**, **Reject all** and **Clear**. Nothing reaches the document until you accept it, and a change the agent edits after you accepted it comes back to you.
+**3. Read and edit the revised document.** For a Word or PDF file the agent writes the whole revised document once, in Markdown, as `<document>.md` in the project folder. When it finishes, a **Revised document** button appears in the project's toolbar: **Open** the document to read it, edit anything (the agent's text or your own), and **Show changes against the original** to see every paragraph that changed, was added or was removed. Leave the `<!-- P013 -->` lines in place: they tie each paragraph to its place in the Word file, which is how your styles, fonts and colours carry over. The `[E12]` marks are the sources behind each new claim; they are removed when you export.
 
-**4. Apply.** Click **Apply accepted changes**. For a Word document choose **Tracked changes** (every edit appears in Word's review pane, under the name you type) or a **Clean copy**. The new file lands in `deliverable/<document>/v1/`; your original is never modified. Applying again later writes `v2`, rebuilt from the untouched original.
+**It is a master, like a report.** `/critique`, `/repair`, `/expand`, `/verify` and `/user-edits` work on it. The project now has two masters, the audit (`report.md`) and the revised document, so each command asks which one you mean unless you name it: `/critique the business plan`.
 
-**In VS Code**, decide in chat ("accept all except C04"; the agent records exactly what you said), then type `/revise`.
+**4. Export.** In **Revised document**, choose Word, PDF or both, and **Tracked changes** if you want every edit in Word's review pane under your name, then **Export**. It takes seconds and runs no agent. The Word file is made from your original, so its design survives, and it is checked against the original before you get it. It lands in `deliverable/<document>/v1/`; your original is never modified, and each export writes the next version from the untouched original. In VS Code, type `/export the business plan`.
+
+**A deck or spreadsheet** gets a change plan instead. Each change shows the text it replaces, the new text, why, and its sources: **Accept**, **Reject**, or **Rewrite** it in your own words, then **Apply accepted changes**, which runs `/revise`. Nothing reaches the file until you accept it, and a change the agent edits after you accepted it comes back to you. In VS Code, decide in chat ("accept all except C04"), then type `/revise`.
 
 ### Other ways to use it
 
@@ -936,7 +940,7 @@ Only the file you name becomes the document being improved; everything else in `
 | A full assessment first: what is wrong, stale or missing | `/audit the business plan docx, for UK angel investors` |
 | Changes from that assessment | `/changes using the audit` |
 | Several documents kept consistent (plan, deck, cash flow) | Name them all; each gets its own tab in the Changes window |
-| A deck you only have as a PDF | `/changes` as above, then **Apply**: it runs `/rebuild` and builds a new `.pptx` in the deck's design |
+| A deck you only have as a PDF | `/rebuild the deck pdf`: a new `.pptx` in the deck's design |
 | A document's look without its content | "use the two-pager as the template", or put it in `external_data/template/` |
 
 The audit verifies the document's claims, checks what a document of that kind needs for its readers, compares figures across documents, and writes a cited report.
@@ -946,14 +950,18 @@ The audit verifies the document's claims, checks what a document of that kind ne
 - **Citations** follow its system. A plan that links source names in parentheses gets linked source names in parentheses; a footnoted one gets footnotes; a numbered one gets the next number and a reference-list entry.
 - **Voice** follows the document: its "we", its way of writing "500,000 pounds" or "USD 9.7 billion", its terms.
 - **Formatting** comes from the document's own paragraphs, tables and slides. A check fails any version that uses a font, colour or style the original does not use, links to a page nobody fetched, or changes anything you did not accept.
-- **Changes are small.** Sentences and paragraphs, not rewrites. A figure that appears elsewhere too (the executive summary, the deck, the cash flow) comes as linked changes you accept together.
+- **Changes fit the job.** A wrong figure is a phrase edit; incorporating an assessment rewrites the sections it touches, keeping your argument and order, with the report's tables brought in where the numbers matter. A figure that appears elsewhere too (the executive summary, the deck, the cash flow) comes as linked changes you accept together.
+- **Drafts come out finished.** Text you struck out, draft colours and comments are working marks, not the document's design. The agents read your comments as instructions and never edit struck text, and the export removes the marks, so the new version is a clean document.
+- **Your text stands.** The writing checks look only at what the agent changed; the sentences you wrote are yours.
 - **Spreadsheets** keep their formulas and charts, and recalculate when opened. Inputs and formulas are changed, never a typed number over a formula, and rows are not inserted.
 
-**A PDF cannot be edited**, so `/rebuild` makes a new deck in its design: its fonts, colours, type sizes, images and motifs, read from the PDF and checked slide by slide against its pages. If you have the `.pptx` or `.docx` the PDF came from, add it instead: editing beats rebuilding.
+**A PDF cannot be edited.** A PDF document is revised in Markdown like a Word file, but its export is a Word file in plain styles; a deck you have only as a PDF is rebuilt with `/rebuild`, in its fonts, colours, type sizes, images and motifs. If you have the `.docx` or `.pptx` the PDF came from, add it instead: editing beats rebuilding.
 
 ```bash
 python3 .claude/scripts/subject.py list   outputs/<run>          # documents declared, and their state
-python3 .claude/scripts/changes.py status outputs/<run>          # proposed, accepted, rejected, stale
+python3 .claude/scripts/document.py diff  outputs/<run> <document>   # what the revised document changed
+python3 .claude/scripts/document.py export outputs/<run> <document> --to docx,pdf
+python3 .claude/scripts/changes.py status outputs/<run>          # a change plan: proposed, accepted, rejected, stale
 python3 .claude/scripts/run_check.py      outputs/<run> --deliver
 ```
 

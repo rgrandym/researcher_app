@@ -6,6 +6,11 @@ disable-model-invocation: true
 
 # Repair
 
+**Which document.** When the run has more than one master (an audit and a revised
+document), act on the one the request names, or ask; then read it wherever this
+skill says `report.md`. A revised document keeps its own form and citations.
+Doctrine: `.claude/references/masters.md`.
+
 Fix the findings. Do not rewrite the report.
 
 When `/repair` is launched from **Apply feedback to article**, read the named

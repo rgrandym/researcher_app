@@ -12,6 +12,8 @@ No function here makes a model call. Claude Code reports its windows in the
 
 from __future__ import annotations
 
+import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -19,6 +21,8 @@ import select
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -98,13 +102,187 @@ def _claude_file(account: str = "claude-sub") -> Any:
     return config.data_dir() / name
 
 
-def record_claude_limit(info: dict[str, Any], account: str = "claude-sub") -> UsageWindows:
+# Live reads of a Claude plan: the same endpoint Claude Code's /usage view reads, with the
+# account's own sign-in from the Keychain. The token is only read, never refreshed: a
+# refresh outside Claude Code spends the refresh token, and the account is signed out.
+USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+PROFILE_URL = "https://api.anthropic.com/api/oauth/profile"
+OAUTH_BETA = "oauth-2025-04-20"
+MIN_FETCH_S = 15  # several views poll the same account; one read serves them all
+BACKOFF_S = 300  # after the endpoint refuses (429 or an error), before trying again
+_fetch_state: dict[str, dict[str, Any]] = {}
+_fetch_lock = threading.Lock()
+_token_owner: dict[str, str] = {}  # sha256 of an access token -> the email it signs in
+
+
+def keychain_service(config_dir: str) -> str:
+    """Claude Code's Keychain entry for a config folder: the plain name for the default
+    folder, a hash of `CLAUDE_CONFIG_DIR` (as given) for any other."""
+    if not config_dir:
+        return "Claude Code-credentials"
+    return f"Claude Code-credentials-{hashlib.sha256(config_dir.encode()).hexdigest()[:8]}"
+
+
+def _oauth_token(config_dir: str) -> tuple[str, float] | None:
+    try:
+        out = subprocess.run(
+            ["security", "find-generic-password", "-s", keychain_service(config_dir), "-w"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if out.returncode:
+            return None
+        oauth = json.loads(out.stdout).get("claudeAiOauth") or {}
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    token, expires = oauth.get("accessToken"), oauth.get("expiresAt")
+    if not isinstance(token, str) or not isinstance(expires, (int, float)):
+        return None
+    return token, float(expires) / 1000
+
+
+def _get(url: str, token: str) -> Any:
+    request = urllib.request.Request(url, headers={
+        "Authorization": f"Bearer {token}", "anthropic-beta": OAUTH_BETA,
+        "Content-Type": "application/json", "User-Agent": "research-app",
+    })
+    with urllib.request.urlopen(request, timeout=15) as response:
+        return json.loads(response.read())
+
+
+def fetch_claude_usage(account: str, config_dir: str, expected_email: str) -> str:
+    """Read the plan's windows now and store them. Returns "" on success, else why not.
+
+    At most one read per account every MIN_FETCH_S; a refusal backs off for BACKOFF_S.
+    The token's owner is checked against the account's sign-in before anything is stored,
+    so one account's windows can never be shown under another."""
+    if not expected_email:
+        return "not signed in"
+    with _fetch_lock:
+        state = _fetch_state.setdefault(account, {})
+        if time.time() < float(state.get("next", 0)):
+            return str(state.get("why", ""))
+        state["next"] = time.time() + MIN_FETCH_S
+        state["why"] = ""
+    found = _oauth_token(config_dir)
+    if found is None:
+        why = "no Claude Code sign-in in the Keychain for this account"
+    elif found[1] <= time.time() + 30:
+        why = "the sign-in token has expired; Claude Code renews it on the next turn"
+    else:
+        why = _fetch_with(account, found[0], expected_email.strip().casefold())
+    if why:
+        with _fetch_lock:
+            _fetch_state[account].update(next=time.time() + (BACKOFF_S if "refused" in why else MIN_FETCH_S), why=why)
+    return why
+
+
+def _fetch_with(account: str, token: str, email: str) -> str:
+    key = hashlib.sha256(token.encode()).hexdigest()
+    try:
+        if key not in _token_owner:
+            profile = _get(PROFILE_URL, token)
+            _token_owner[key] = str((profile.get("account") or {}).get("email") or "").strip().casefold()
+        if _token_owner[key] != email:
+            return f"the Keychain sign-in belongs to {_token_owner[key] or 'another account'}"
+        body = _get(USAGE_URL, token)
+    except urllib.error.HTTPError as exc:
+        return f"the usage endpoint refused the read ({exc.code})"
+    except (OSError, ValueError) as exc:
+        return f"the usage endpoint could not be reached ({exc.__class__.__name__})"
+    incoming: dict[str, Any] = {}
+    for name in _WINDOW_NAMES:
+        raw = body.get(name) if isinstance(body, dict) else None
+        if not isinstance(raw, dict) or not isinstance(raw.get("utilization"), (int, float)):
+            continue
+        reset = raw.get("resets_at")
+        try:
+            reset_at = dt.datetime.fromisoformat(reset).timestamp() if isinstance(reset, str) else None
+        except ValueError:
+            reset_at = None
+        percent = float(raw["utilization"])
+        incoming[name] = {
+            "utilization": percent / 100,
+            "resetsAt": reset_at,
+            "status": "rejected" if percent >= 100 or raw.get("locked_reason") else "allowed",
+        }
+    if not incoming:
+        return "the usage endpoint returned no plan windows"
+    with _claude_file_lock:
+        _claude_file(account).write_text(json.dumps({
+            "account_email": email, "observed_at": time.time(), "source": "live", **incoming,
+        }))
+    return ""
+
+
+def import_claude_local_usage(account: str, config_dir: str, expected_email: str) -> None:
+    """Seed a connection from Claude Code's own account-bound usage snapshot, if present.
+
+    Claude Code writes this after its usage view reads the plan. The snapshot carries the
+    account UUID and fetch time, so an older login cannot be mistaken for this one.
+    """
+    if not expected_email:
+        return
+    path = Path(config_dir) / ".claude.json" if config_dir else Path.home() / ".claude.json"
+    try:
+        local = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return
+    identity = local.get("oauthAccount") or {}
+    snapshot = local.get("cachedUsageUtilization") or {}
+    if not isinstance(identity, dict) or not isinstance(snapshot, dict):
+        return
+    email = str(identity.get("emailAddress") or "").strip().casefold()
+    if email != expected_email.strip().casefold() or snapshot.get("accountUuid") != identity.get("accountUuid"):
+        return
+    fetched = snapshot.get("fetchedAtMs")
+    windows = snapshot.get("utilization")
+    if not isinstance(fetched, (int, float)) or not isinstance(windows, dict):
+        return
+    observed_at = float(fetched) / 1000
+    incoming: dict[str, Any] = {}
+    for key in _WINDOW_NAMES:
+        raw = windows.get(key)
+        if not isinstance(raw, dict) or not isinstance(raw.get("utilization"), (int, float)):
+            continue
+        reset = raw.get("resets_at")
+        try:
+            reset_at = dt.datetime.fromisoformat(reset).timestamp() if isinstance(reset, str) else None
+        except ValueError:
+            reset_at = None
+        percent = float(raw["utilization"])
+        incoming[key] = {
+            "utilization": percent / 100,
+            "resetsAt": reset_at,
+            "status": "rejected" if percent >= 100 else "allowed",
+        }
+    if not incoming:
+        return
+    with _claude_file_lock:
+        try:
+            stored = json.loads(_claude_file(account).read_text())
+        except (OSError, ValueError):
+            stored = {}
+        if stored.get("account_email") == email and float(stored.get("observed_at") or 0) >= observed_at:
+            return
+        _claude_file(account).write_text(json.dumps({
+            "account_email": email, "observed_at": observed_at, **incoming,
+        }))
+
+
+def record_claude_limit(
+    info: dict[str, Any], account: str = "claude-sub", account_email: str = ""
+) -> UsageWindows:
     """Store one `rate_limit_info` from a stream-json `rate_limit_event`."""
     with _claude_file_lock:
         try:
             stored = json.loads(_claude_file(account).read_text())
         except (OSError, ValueError):
             stored = {}
+        if account_email:
+            normalized = account_email.strip().casefold()
+            if stored.get("account_email") != normalized:
+                stored = {}  # an earlier sign-in's windows belong to a different account
+            stored["account_email"] = normalized
         unified = info.get("unifiedWindows")
         if isinstance(unified, dict):
             for key, win in unified.items():
@@ -120,15 +298,18 @@ def record_claude_limit(info: dict[str, Any], account: str = "claude-sub") -> Us
             }
         stored["observed_at"] = time.time()
         _claude_file(account).write_text(json.dumps(stored))
-    return claude_usage(account)
+    return claude_usage(account, expected_email=account_email or None)
 
 
-def claude_usage(account: str = "claude-sub") -> UsageWindows:
+def claude_usage(account: str = "claude-sub", expected_email: str | None = None) -> UsageWindows:
     try:
         stored = json.loads(_claude_file(account).read_text())
     except (OSError, ValueError):
-        return UsageWindows(note="Shown after the first Claude Code turn.")
+        return UsageWindows(note="No verified usage snapshot yet. Open /usage in Claude Code to load one.")
+    if expected_email and stored.get("account_email") != expected_email.strip().casefold():
+        return UsageWindows(note="No verified usage for this sign-in. Open /usage in Claude Code to load it.")
     windows = []
+    reset_since_report = False
     for key, name in _WINDOW_NAMES.items():
         win = stored.get(key)
         if not isinstance(win, dict):
@@ -138,6 +319,7 @@ def claude_usage(account: str = "claude-sub") -> UsageWindows:
         status = win.get("status")
         if resets and float(resets) < time.time():
             util, status = 0.0, "allowed"
+            reset_since_report = True
         windows.append(
             UsageWindow(
                 name=name,
@@ -146,7 +328,12 @@ def claude_usage(account: str = "claude-sub") -> UsageWindows:
                 status=status,
             )
         )
-    return UsageWindows(windows=windows, updated_at=stored.get("observed_at"))
+    return UsageWindows(
+        windows=windows,
+        updated_at=stored.get("observed_at"),
+        note="A window reset since the last report; usage elsewhere has not been checked."
+        if reset_since_report else "",
+    )
 
 
 # ------------------------------------------------------------------ Codex

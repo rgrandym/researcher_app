@@ -123,12 +123,20 @@ class DocxEditor(TextEditor):
         self.notes_made = 0
         self.notes_out = []
         body = self.doc.element.body
-        self.link_rpr = None
-        for h in body.iter(w("hyperlink")):
-            r = h.find(w("r"))
-            if h.get(f"{{{R}}}id") and r is not None and r.find(w("rPr")) is not None:
-                self.link_rpr = self.clean(r.find(w("rPr")))
-                break
+        self.names = officedoc.docx_style_names(self.doc)
+        self.body_color = self._body_color(body)
+        self.link_rpr = self._link_rpr(body)
+        sect = body.find(w("sectPr"))
+        size, mar = (sect.find(w("pgSz")), sect.find(w("pgMar"))) if sect is not None else (None, None)
+        self.text_width = 9360
+        if size is not None and mar is not None:
+            self.text_width = int(float(size.get(w("w"), 12240)) - float(mar.get(w("left"), 1440))
+                                  - float(mar.get(w("right"), 1440)))
+        self.comments = None
+        for rel in self.doc.part.rels.values():
+            if rel.reltype.endswith("/comments") and not rel.is_external:
+                self.comments = officedoc.XmlPart.of(rel.target_part)
+        self.late = []                      # the clean-up runs after every other change
         self.fnref_rpr = None
         for ref in body.iter(w("footnoteReference")):
             rpr = ref.getparent().find(w("rPr"))
@@ -145,6 +153,61 @@ class DocxEditor(TextEditor):
         for mark in TRACK_MARKS:
             for el in rpr.findall(w(mark)):
                 rpr.remove(el)
+        return rpr
+
+    def _body_color(self, body):
+        """The explicit colour of ordinary body text, or None when it carries none."""
+        counts = {}
+        for r in body.iter(w("r")):
+            if officedoc.in_link(r):
+                continue
+            n = sum(len(t.text or "") for t in r.findall(w("t")))
+            struck, color, _ = officedoc.run_marks(r)
+            if n and not struck:
+                counts[color] = counts.get(color, 0) + n
+        if not counts:
+            return None
+        best = max(counts, key=counts.get)
+        return best if best in ("000000", "222222", "333333") or best is None else None
+
+    def _link_rpr(self, body):
+        """The formatting most of the document's links carry, free of working marks."""
+        found = {}
+        for h in body.iter(w("hyperlink")):
+            if not h.get(f"{{{R}}}id"):
+                continue
+            for r in h.findall(w("r")):
+                struck, color, _ = officedoc.run_marks(r)
+                if not struck and r.find(w("rPr")) is not None:
+                    found.setdefault(color, [0, r.find(w("rPr"))])[0] += 1
+        if not found:
+            return None
+        rpr = self.clean(max(found.values(), key=lambda v: v[0])[1])
+        for tag in ("strike", "dstrike", "highlight"):
+            for el in rpr.findall(w(tag)):
+                rpr.remove(el)
+        return rpr
+
+    def plain(self, rpr):
+        """A donor's formatting for new text: its font, size and weight, without the
+        working marks of a draft (strikethrough, draft colour, highlight)."""
+        rpr = self.clean(rpr)
+        if rpr is None:
+            return None
+        for tag in ("strike", "dstrike", "highlight", "color", "shd"):
+            for el in rpr.findall(w(tag)):
+                rpr.remove(el)
+        if self.body_color:
+            col = self.E("w:color")
+            col.set(w("val"), self.body_color)
+            rank = RPR_ORDER.index("color")
+            for child in rpr:
+                ctag = child.tag.rsplit("}", 1)[-1]
+                if ctag in RPR_ORDER and RPR_ORDER.index(ctag) > rank:
+                    child.addprevious(col)
+                    break
+            else:
+                rpr.append(col)
         return rpr
 
     def rpr_set(self, rpr, tag):
@@ -169,19 +232,18 @@ class DocxEditor(TextEditor):
         el.set(w("date"), self.when)
         return el
 
-    def text_run(self, text, rpr, bold=False, italic=False):
+    def text_run(self, text, rpr, bold=False, italic=False, strike=False):
         r = self.E("w:r")
         if rpr is not None:
             r.append(deepcopy(rpr))
-        if bold or italic:
+        if bold or italic or strike:
             rp = r.find(w("rPr"))
             if rp is None:
                 rp = self.E("w:rPr")
                 r.insert(0, rp)
-            if bold:
-                self.rpr_set(rp, "b")
-            if italic:
-                self.rpr_set(rp, "i")
+            for flag, tag in ((bold, "b"), (italic, "i"), (strike, "strike")):
+                if flag:
+                    self.rpr_set(rp, tag)
         for i, line in enumerate(text.split("\n")):
             if i:
                 r.append(self.E("w:br"))
@@ -243,6 +305,18 @@ class DocxEditor(TextEditor):
         r.append(ref)
         return r
 
+    def existing_ref(self, fid):
+        """A reference to a footnote the document already has: `[^3]` in Markdown text."""
+        if self.fn is None or not any(f.get(w("id")) == fid for f in self.notes):
+            raise Refused(f"[^{fid}] refers to a footnote the document does not have")
+        r = self.E("w:r")
+        if self.fnref_rpr is not None:
+            r.append(deepcopy(self.fnref_rpr))
+        ref = self.E("w:footnoteReference")
+        ref.set(w("id"), str(fid))
+        r.append(ref)
+        return r
+
     def make(self, segs, donor, part, inside_link=False, in_note=False):
         out = []
         for seg in segs:
@@ -250,6 +324,8 @@ class DocxEditor(TextEditor):
                 if in_note:
                     raise Refused("a footnote cannot contain another footnote")
                 out.append(self.footnote_ref(seg["footnote"]))
+            elif seg.get("ref") is not None:
+                out.append(self.existing_ref(seg["ref"]))
             elif not seg["text"]:
                 continue
             elif seg.get("link"):
@@ -257,7 +333,7 @@ class DocxEditor(TextEditor):
                     raise Refused("a link cannot sit inside another link")
                 out.append(self.hyperlink(seg["text"], seg["link"], donor, part))
             else:
-                out.append(self.text_run(seg["text"], donor, seg.get("bold"), seg.get("italic")))
+                out.append(self.text_run(seg["text"], donor, seg.get("bold"), seg.get("italic"), seg.get("strike")))
         if self.track:
             out = [self.wrap_ins(el) for el in out]
         return out
@@ -334,6 +410,8 @@ class DocxEditor(TextEditor):
         atom.run.addnext(clone)
 
     def donor(self, p):
+        """Run formatting for new text in or like paragraph `p`: an unmarked run first."""
+        candidates = []
         for r in officedoc.docx_runs(p):
             if r.getparent().tag == w("hyperlink"):
                 continue
@@ -344,9 +422,16 @@ class DocxEditor(TextEditor):
             if rpr is not None and (rpr.find(w("vertAlign")) is not None or rpr.find(w("rStyle")) is not None
                                     and "ootnote" in (rpr.find(w("rStyle")).get(w("val")) or "")):
                 continue
-            return self.clean(rpr)
+            struck, color, hl = officedoc.run_marks(r)
+            bold = rpr is not None and any(
+                rpr.find(w(tag)) is not None and rpr.find(w(tag)).get(w("val")) not in ("0", "false")
+                for tag in ("b", "i"))
+            candidates.append((bool(struck or color or hl), bold, -len(t.text or ""), rpr))
+        if candidates:
+            # The paragraph's ordinary text: unmarked, not a bold or italic label, the longest run.
+            return self.plain(sorted(candidates, key=lambda c: c[:3])[0][3])
         ppr = p.find(w("pPr"))
-        return self.clean(ppr.find(w("rPr")) if ppr is not None else None)
+        return self.plain(ppr.find(w("rPr")) if ppr is not None else None)
 
     def part_of(self, el):
         if self.fn is not None and el.getroottree().getroot() is self.fn.root:
@@ -379,6 +464,15 @@ class DocxEditor(TextEditor):
             return self.delete(ch)
         if op == "insert_table":
             return self.insert_table(ch)
+        if op == "rewrite_section":
+            return self.rewrite_section(ch)
+        if op == "rewrite":
+            return self.rewrite(ch)
+        if op == "clean":
+            if ch.get("target") != "document":
+                raise Refused("clean applies to the whole document: target \"document\"")
+            self.late.append(ch)
+            return None
         raise Refused(f"op {op} is not available for Word documents")
 
     def replace(self, ch):
@@ -390,13 +484,13 @@ class DocxEditor(TextEditor):
         parent = first.getparent()
         in_link = parent.tag == w("hyperlink")
         if in_link and all(x.run.getparent() is parent for x in span):
-            anchor, donor, inside = first, self.clean(first.find(w("rPr"))), True
+            anchor, donor, inside = first, self.link_rpr if self.link_rpr is not None else self.plain(first.find(w("rPr"))), True
         elif in_link:
             anchor, donor, inside = parent, self.donor(p), False
         else:
             rpr = first.find(w("rPr"))
             plain_run = rpr is None or rpr.find(w("vertAlign")) is None
-            anchor, donor, inside = first, self.clean(rpr) if plain_run else self.donor(p), False
+            anchor, donor, inside = first, self.plain(rpr) if plain_run else self.donor(p), False
         for el in self.make(segments(ch["after"] or ""), donor, self.part_of(p), inside):
             anchor.addprevious(el)
         self.remove_runs([x.run for x in span])
@@ -444,16 +538,11 @@ class DocxEditor(TextEditor):
         donor = self.el(ch["like"]) if ch.get("like") else self.default_donor(el)
         if donor.tag != w("p"):
             raise Refused("`like` must be a paragraph")
-        blocks = [b.strip() for b in (ch.get("after") or "").split("\n\n") if b.strip()]
-        if not blocks:
+        made = self.build(ch.get("after") or "", donor, self.part_of(el), ch.get("like_table"))
+        if not made:
             raise Refused("insert needs `after`: the new text")
-        for block in blocks:
-            d = donor
-            m = plans.DONOR.match(block)
-            if m:
-                d = self.el(m.group(1))
-                block = block[m.end():]
-            self.place(ch["target"], el, self.new_paragraph(d, block, self.part_of(el)), after)
+        for new in made:
+            self.place(ch["target"], el, new, after)
 
     def delete(self, ch):
         target = ch["target"]
@@ -488,41 +577,300 @@ class DocxEditor(TextEditor):
         for el in self.make(segments(text), donor, part):
             p.append(el)
 
+    def rewrite(self, ch):
+        """A paragraph's whole text, from Markdown, in the paragraph's own formatting. Its
+        heading, list or footnote form stays; the Markdown prefix only says which it is."""
+        p = self.para(ch["target"])
+        text = (ch.get("after") or "").strip()
+        text = re.sub(r"^(#{1,6}|[-*•]|\d+[.)])\s+", "", text)
+        text = re.sub(r"^\[\^\d+\]:\s*", "", text).replace("\n", " ")
+        part = self.part_of(p)
+        in_note = part is not self.doc.part
+        donor = self.donor(p)
+        self.normalize(p)
+        mark = [r for r in officedoc.docx_runs(p) if r.find(w("footnoteRef")) is not None]
+        old = [r for r in dict.fromkeys(x.run for x in self.atoms(p)) if r not in mark]
+        if self.track:
+            self.remove_runs(old)
+        else:
+            for child in list(p):
+                if child.tag != w("pPr") and child not in mark:
+                    p.remove(child)
+        lead = (" " if in_note and mark else "")
+        for el in self.make(segments(lead + text), donor, part, in_note=in_note):
+            p.append(el)
+
     def insert_table(self, ch):
         el = self.el(ch["target"])
-        like = self.el(ch.get("like") or "")
-        if like.tag != w("tbl"):
+        like = self.el(ch.get("like") or "") if ch.get("like") else None
+        if like is not None and like.tag != w("tbl"):
             raise Refused("`like` must be a table (T1)")
-        tbl = deepcopy(like)
-        rows = tbl.findall(w("tr"))
-        for tr in rows:
-            tbl.remove(tr)
-        header, body = rows[0], rows[1:] or rows[:1]
-        bands = body[:2]
-        for i, values in enumerate(ch.get("rows") or []):
-            tr = deepcopy(header if i == 0 else bands[(i - 1) % len(bands)])
-            cells = tr.findall(w("tc"))
-            if len(cells) != len(values):
-                raise Refused(f"row {i + 1} has {len(values)} cells; the table it copies has {len(cells)}")
-            for tc, value in zip(cells, values):
-                paras = tc.findall(w("p"))
-                for extra in paras[1:]:
-                    tc.remove(extra)
-                self.set_text(paras[0], str(value), self.doc.part)
+        rows = [[str(v) for v in r] for r in ch.get("rows") or []]
+        self.place(ch["target"], el, self.table(rows, like), True)
+
+    # -- blocks: the light Markdown a change's `after` may use
+
+    def build(self, text, donor, part, like_table=None):
+        """Elements for `after` text: paragraphs, `#` headings, `- ` bullets, `|` tables,
+        `{P012}` to take a paragraph's formatting, `{T2}` alone to keep an original table."""
+        out = []
+        like = self.el(like_table) if like_table else None
+        for block in [b.strip("\n") for b in text.split("\n\n") if b.strip()]:
+            block = block.strip()
+            keep = re.fullmatch(r"\{([PT]\d+)\}", block)
+            if keep:
+                out.append(self.el(keep.group(1)))
+                continue
+            d = donor
+            m = plans.DONOR.match(block)
+            if m:
+                d = self.el(m.group(1))
+                block = block[m.end():]
+            lines = block.split("\n")
+            if all(x.strip().startswith("|") for x in lines):
+                rows = [[c.strip() for c in x.strip().strip("|").split("|")] for x in lines
+                        if not re.fullmatch(r"[\s|:-]+", x)]
+                out.append(self.table(rows, like))
+                spacer = self.E("w:p")             # the empty line the document leaves after a table
+                if d.find(w("pPr")) is not None:
+                    spacer.append(deepcopy(d.find(w("pPr"))))
+                out.append(spacer)
+                continue
+            head = re.match(r"(#{1,6})\s+(.*)", block)
+            if head and "\n" not in block:
+                hd = self.heading_donor(len(head.group(1)))
+                text_ = head.group(2) if hd is not None else f"**{head.group(2).strip('*')}**"
+                out.append(self.new_paragraph(hd if hd is not None else d, text_, part))
+                continue
+            if all(re.match(r"\s*[-*•]\s+", x) for x in lines):
+                bullet = self.bullet_donor()
+                bullet = d if bullet is None else bullet
+                for x in lines:
+                    out.append(self.new_paragraph(bullet, re.sub(r"^\s*[-*•]\s+", "", x), part))
+                continue
+            if all(re.match(r"\s*\d+[.)]\s+", x) for x in lines):
+                numbered = self.bullet_donor("number")
+                numbered = d if numbered is None else numbered
+                for x in lines:
+                    out.append(self.new_paragraph(numbered, re.sub(r"^\s*\d+[.)]\s+", "", x), part))
+                continue
+            out.append(self.new_paragraph(d, block, part))
+        return out
+
+    def heading_donor(self, level):
+        """The document's own heading of that level; None when it has none, and the
+        heading becomes a bold line in body formatting, as a run-in label."""
+        for el in self.index.values():
+            if el.tag == w("p"):
+                _, lvl, _ = officedoc.docx_para_info(el, self.names)
+                if lvl == level and officedoc.docx_text(el).strip():
+                    return el
+        return None
+
+    def bullet_donor(self, kind="bullet"):
+        """The document's own bulleted (or numbered) paragraph, if it has one."""
+        kinds = officedoc.list_kinds(self.doc)
+        for el in self.index.values():
+            nid = el.find(f"{w('pPr')}/{w('numPr')}/{w('numId')}") if el.tag == w("p") else None
+            if nid is not None and kinds.get(nid.get(w("val"))) == kind and officedoc.docx_text(el).strip():
+                return el
+        return None
+
+    def table(self, rows, like=None):
+        """A table in the document's own table formatting, as wide as the text column."""
+        if not rows:
+            raise Refused("a table needs rows")
+        n = max(len(r) for r in rows)
+        rows = [r + [""] * (n - len(r)) for r in rows]
+        if like is None:
+            like = next((e for e in self.index.values() if e.tag == w("tbl")), None)
+        weights = [max(4, min(40, max(len(officedoc.plain(r[j])) for r in rows))) for j in range(n)]
+        widths = [int(self.text_width * x / sum(weights)) for x in weights]
+        tbl = self.E("w:tbl")
+        src_rows = like.findall(w("tr")) if like is not None else []
+        tblpr = deepcopy(like.find(w("tblPr"))) if like is not None and like.find(w("tblPr")) is not None else self.E("w:tblPr")
+        for tag in ("tblW", "tblLayout"):
+            for e_ in tblpr.findall(w(tag)):
+                tblpr.remove(e_)
+        tw = self.E("w:tblW")
+        tw.set(w("w"), str(self.text_width))
+        tw.set(w("type"), "dxa")
+        tblpr.append(tw)
+        layout = self.E("w:tblLayout")
+        layout.set(w("type"), "fixed")
+        tblpr.append(layout)
+        tbl.append(tblpr)
+        grid = self.E("w:tblGrid")
+        for wd in widths:
+            col = self.E("w:gridCol")
+            col.set(w("w"), str(wd))
+            grid.append(col)
+        tbl.append(grid)
+        head_tpl = src_rows[0] if src_rows else None
+        body_tpls = src_rows[1:3] or src_rows[:1]
+        for i, values in enumerate(rows):
+            tpl = head_tpl if i == 0 else (body_tpls[(i - 1) % len(body_tpls)] if body_tpls else None)
+            cell_tpl = tpl.find(w("tc")) if tpl is not None else None
+            tr = self.E("w:tr")
+            if tpl is not None and tpl.find(w("trPr")) is not None:
+                tr.append(deepcopy(tpl.find(w("trPr"))))
+            for wd, value in zip(widths, values):
+                tc = self.E("w:tc")
+                tcpr = deepcopy(cell_tpl.find(w("tcPr"))) if cell_tpl is not None and cell_tpl.find(w("tcPr")) is not None else self.E("w:tcPr")
+                for tag in ("tcW", "gridSpan", "vMerge", "hMerge"):
+                    for e_ in tcpr.findall(w(tag)):
+                        tcpr.remove(e_)
+                tcw = self.E("w:tcW")
+                tcw.set(w("w"), str(wd))
+                tcw.set(w("type"), "dxa")
+                tcpr.insert(0, tcw)
+                tc.append(tcpr)
+                donor_p = cell_tpl.find(w("p")) if cell_tpl is not None else None
+                para = self.E("w:p")
+                if donor_p is not None and donor_p.find(w("pPr")) is not None:
+                    para.append(deepcopy(donor_p.find(w("pPr"))))
+                rpr = self.donor(donor_p) if donor_p is not None else None
+                for el in self.make(segments(value), rpr, self.doc.part):
+                    para.append(el)
+                if i == 0 and not any(el.tag == w("r") and el.find(f"{w('rPr')}/{w('b')}") is not None
+                                      for el in para.iter(w("r"))):
+                    for r in para.iter(w("r")):
+                        rp = r.find(w("rPr"))
+                        if rp is None:
+                            rp = self.E("w:rPr")
+                            r.insert(0, rp)
+                        self.rpr_set(rp, "b")
+                tc.append(para)
+                tr.append(tc)
             if self.track:
                 trpr = tr.find(w("trPr"))
                 if trpr is None:
                     trpr = self.E("w:trPr")
-                    tblpr = tr.find(w("tblPrEx"))
-                    if tblpr is not None:
-                        tblpr.addnext(trpr)
-                    else:
-                        tr.insert(0, trpr)
+                    tr.insert(0, trpr)
                 trpr.append(self.revision("ins"))
             tbl.append(tr)
-        self.place(ch["target"], el, tbl, True)
+        return tbl
+
+    # -- sections
+
+    def section(self, heading):
+        """The body elements under a heading, up to the next heading of its level or above."""
+        _, level, _ = officedoc.docx_para_info(heading, self.names)
+        if level is None:
+            raise Refused("rewrite_section targets a heading paragraph")
+        out, el = [], heading.getnext()
+        while el is not None and el.tag in (w("p"), w("tbl"), w("sdt"), w("bookmarkStart"), w("bookmarkEnd")):
+            if el.tag == w("p"):
+                _, lvl, _ = officedoc.docx_para_info(el, self.names)
+                if lvl is not None and lvl <= level and officedoc.docx_text(el).strip():
+                    break
+            out.append(el)
+            el = el.getnext()
+        return out
+
+    def rewrite_section(self, ch):
+        heading = self.el(ch["target"])
+        if heading.tag != w("p"):
+            raise Refused("rewrite_section targets a heading paragraph")
+        old = self.section(heading)
+        first_body = next((e for e in old if e.tag == w("p") and officedoc.docx_text(e).strip()), heading)
+        donor = self.el(ch["like"]) if ch.get("like") else first_body
+        made = self.build(ch.get("after") or "", donor, self.doc.part, ch.get("like_table"))
+        kept = {id(e) for e in made}
+        ids = {id(e): k for k, e in self.index.items()}
+        for e_ in old:
+            if id(e_) in kept:
+                continue
+            key = ids.get(id(e_))
+            if self.track and e_.tag == w("p"):
+                self.normalize(e_)
+                self.remove_runs(list(dict.fromkeys(x.run for x in self.atoms(e_))))
+                self.mark_paragraph(e_, "del")
+            elif self.track and e_.tag == w("tbl"):
+                raise Refused("tracked mode cannot delete a whole table; keep it with {Tn}")
+            elif e_.tag in (w("p"), w("tbl"), w("sdt")):
+                e_.getparent().remove(e_)
+            if key:
+                self.deleted.update(k for k in self.index if k == key or k.startswith(key + "."))
+        ref = heading
+        for new in made:
+            ref.addnext(new)
+            ref = new
+        self.cursor[ch["target"]] = ref
+
+    # -- the clean-up
+
+    def clean_up(self, ch):
+        """Remove the working marks of a draft: struck text, draft colours, highlights, comments."""
+        opts = {"strike": True, "colors": True, "highlight": True, "comments": True, **(ch.get("options") or {})}
+        roots = [self.doc.element.body] + ([self.fn.root] if self.fn is not None else [])
+        link_color = self.link_rpr.find(w("color")) if self.link_rpr is not None else None
+        for root in roots:
+            if opts["strike"]:
+                for p in list(root.iter(w("p"))):
+                    had = officedoc.docx_text(p).strip()
+                    struck = [r for r in officedoc.docx_runs(p) if officedoc.run_marks(r)[0]]
+                    if not struck:
+                        continue
+                    self.normalize(p)
+                    struck = [r for r in officedoc.docx_runs(p) if officedoc.run_marks(r)[0]]
+                    self.remove_runs(struck)
+                    left = "".join(x.text for x in self.atoms(p) if x.run.getparent().tag != w("del"))
+                    if had and not left.strip() and p.getparent() is not None and p.getparent().tag != w("tc"):
+                        if self.track:
+                            self.mark_paragraph(p, "del")
+                        else:
+                            p.getparent().remove(p)
+            for r in root.iter(w("r")):
+                rpr = r.find(w("rPr"))
+                if rpr is None:
+                    continue
+                if opts["highlight"]:
+                    for e_ in rpr.findall(w("highlight")):
+                        rpr.remove(e_)
+                if opts["colors"]:
+                    col = rpr.find(w("color"))
+                    if officedoc.in_link(r):
+                        if col is not None and link_color is not None:
+                            col.set(w("val"), link_color.get(w("val")))
+                    elif col is not None:
+                        if self.body_color:
+                            col.set(w("val"), self.body_color)
+                        else:
+                            rpr.remove(col)
+        if opts["comments"]:
+            body = self.doc.element.body
+            for tag in ("commentRangeStart", "commentRangeEnd"):
+                for e_ in list(body.iter(w(tag))):
+                    e_.getparent().remove(e_)
+            for ref in list(body.iter(w("commentReference"))):
+                run = ref.getparent()
+                run.getparent().remove(run)
+            if self.comments is not None:
+                for c in list(self.comments.root):
+                    self.comments.root.remove(c)
+
+    def drop_orphan_comments(self):
+        """A comment whose anchor an edit removed is removed too; Word mishandles orphans."""
+        if self.comments is None:
+            return
+        body = self.doc.element.body
+        refs = {e.get(w("id")) for e in body.iter(w("commentReference"))}
+        for c in list(self.comments.root.findall(w("comment"))):
+            if c.get(w("id")) not in refs:
+                self.comments.root.remove(c)
+                self.notes_out.append(f"comment {c.get(w('id'))} removed: the text it was attached to is gone")
+        for tag in ("commentRangeStart", "commentRangeEnd"):
+            for e_ in list(body.iter(w(tag))):
+                if e_.get(w("id")) not in refs:
+                    e_.getparent().remove(e_)
 
     def save(self, dest):
+        for ch in self.late:
+            self.clean_up(ch)
+        self.drop_orphan_comments()
+        if self.comments is not None:
+            self.comments.flush()
         if self.fn is not None:
             self.fn.flush()
         self.doc.save(str(dest))

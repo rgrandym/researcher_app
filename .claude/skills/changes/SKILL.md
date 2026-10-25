@@ -1,12 +1,15 @@
 ---
 name: changes
-description: Turn an audit's findings, or the author's own instructions, into a change plan for a supplied document (Word, PowerPoint, Excel, Markdown or PDF), with each change located, evidenced, cited in the document's own style and written in its voice, reviewed independently, and handed to the author to accept or reject. Use after /audit, or when the author asks to change, update, extend or correct an existing document in external_data.
+description: Turn an audit's findings, or the author's own instructions, into a revised version of a supplied document. A Word or PDF document is rewritten as a Markdown master the author reads, edits, critiques and exports to Word and PDF; a deck, spreadsheet or Markdown file gets a change plan the author accepts or rejects. Every edit is evidenced, cited in the document's own style, written in its voice and reviewed independently. Use after /audit, or when the author asks to change, update, extend or correct an existing document in external_data.
 disable-model-invocation: true
 ---
 
 # Changes
 
-Propose; never apply. Every change is the author's to accept.
+The original file is never touched, and nothing reaches a finished file until the
+author says so. A Word or PDF document is revised as a Markdown master that the author
+reads and edits, and exports when it is ready. A deck, spreadsheet or Markdown file
+gets a change plan that the author accepts change by change.
 
 Doctrine, the plan schema and the citation table: `.claude/references/revision.md`.
 Read it first.
@@ -35,54 +38,132 @@ opening. Reuse the file on later rounds; update it if the subject changed.
 
 ## 2. Draft the plan
 
-Write `subjects/<slug>/changes.json` (schema in the doctrine). For each change:
+Read `text.md` whole before writing a change: the story as the author tells it,
+section by section, and the working marks. Struck text is deleted; draft colours
+are working marks; each comment is an instruction from the authors to address or
+to answer in `open`.
 
-- **Locate** it by a part ID from `text.md`. Copy `before` character for
-  character from `text.md`. Pick the smallest span that does the job.
-- **Ground** it: `basis` and `evidence`, and `finding` naming the audit point or
-  the author's instruction it answers. `rationale` says why the document is better
-  for it.
-- **Cite** it in the document's system (`references.json`), with links only to
-  URLs in `evidence.jsonl`. Numbered references continue from `numbered.next`
-  and get their reference-list entry as a paired change.
+### A Word or PDF document: write the revised document
+
+The route for every `.docx` and `.pdf`: one reading, one writing pass, no plan.
+
+```bash
+python3 .claude/scripts/document.py start <run> <slug>
+```
+
+It copies `document.md` to `<run>/<slug>.md` and declares it a master of the run.
+On a later round the master already exists: edit it in place, never start again.
+Edit it as the document, in place:
+
+- Leave every `<!-- P013 -->` / `<!-- T1 -->` line above the block it belongs to.
+  Delete the anchor with a block you delete. New blocks have no anchor.
+- Write in Markdown the document can carry: `## Heading` at the document's levels,
+  `**bold run-in labels**` as it uses them, `- ` bullets, `1. ` numbered items,
+  `| tables |`, `[links](url)`, `[^0]` for its existing footnotes.
+- Cite twice: in the document's own system (`references.json`: links, footnotes),
+  as its reader will see it, and with the evidence ID after the claim (`[E12]`), as
+  in a report. The export removes the IDs; until then they are what /verify checks.
+- Each open item: `<!-- open: where | what is needed | why it cannot be sourced -->`.
+- Struck text (`~~...~~`) is the author's deletion: drop it or leave it, never edit it.
+  The `<!-- comment ... -->` lines are the authors' instructions: act on each one.
+  Answer each in the text, or in an open item saying why not.
+- The text the authors wrote stands unless a finding says otherwise. The gate lints
+  only the lines you changed; theirs are theirs.
+
+The rules under **Other formats** below (keep the story, shape, cascade) hold here as
+well. No `clean` step: the export removes the draft's working marks itself.
+
+### Other formats: the JSON plan
+
+Decks, spreadsheets and Markdown files take `changes.json` directly, as below.
+
+Decide, **section by section**, what each needs: nothing, a correction, or a
+rewrite. When the task is to incorporate an assessment, most sections that the
+audit touches need a rewrite (`rewrite_section`, or `replace` of whole paragraphs),
+not a scatter of phrase edits. Write `subjects/<slug>/changes.json` (schema and
+blocks in the doctrine). For each change:
+
+- **Keep the story.** Start from the section as written: its argument, its order,
+  its good sentences. Put each new point where the argument needs it, with the
+  sentence that connects it to what comes before. The section must read as one
+  piece by one writer.
+- **Locate** it by a part ID from `text.md`. For a phrase, copy `before` character
+  for character. For a section, target its heading.
+- **Shape** it in the document's own forms, with the blocks: its headings, its
+  bullet lists, its tables. Bring the report's tables in where the reader needs the
+  numbers side by side (costs, margins, market layers, competitors), cut to the
+  columns that matter. For a deck, `add_slide` clones the most similar slide.
+- **Ground** it: `basis` and `evidence`, and `finding` naming the audit point, the
+  author's instruction or the comment it answers. `rationale` says why the document
+  is better for it.
+- **Cite** it in the document's system (`references.json`), with links only to URLs
+  in `evidence.jsonl`.
 - **Write** it in the document's voice (`voice.md`), as the author would have.
-- **Shape** it with the document's own parts: `like` for a new paragraph names a
-  paragraph of the same kind (a heading for a heading, a list item for a list
-  item); `insert_table` copies an existing table; `add_slide` clones the most
-  similar slide and `fill`s its shapes.
 - **Cascade** it: the contents line for a new section, the summary that repeats a
   corrected figure, the deck slide and the cash-flow cell that carry the same
   number. Each is a change; paired changes name each other in `pairs_with`.
+- **Clean** it: when the document carries working marks, one `clean` change removes
+  them, so the new version is finished. Say in its rationale what it removes.
 
 What the evidence cannot supply goes in `open`, never into `after` as a guess.
 Register each open item with `wanted.py`.
 
-For a PDF subject, write the same plan against its page blocks (`PG04.b2`) and
-pages (`PG04` for `add_slide`, with the new slide's text in `after`). `/rebuild`
-carries it out.
-
 ## 3. Check and render
+
+For a Word or PDF document, the gate runs on every write to the master. Then:
+
+```bash
+python3 .claude/scripts/document.py diff <run> <slug> --write   # subjects/<slug>/diff.md
+```
+
+Read the master start to finish, as its reader would, with the questions below, and
+go to step 4. For a change plan:
 
 ```bash
 python3 .claude/scripts/changes.py validate <run> <slug>    # must exit 0
-python3 .claude/scripts/changes.py render <run> <slug>      # writes changes.md
+python3 .claude/scripts/changes.py preview  <run> <slug>    # writes preview.md, the revised document
+python3 .claude/scripts/changes.py render   <run> <slug>    # writes changes.md
 ```
 
 Fix every `PROBLEM`. Read every `warn`: a missing citation on a new claim is
-almost always a defect.
+almost always a defect, and a document with working marks needs its `clean` change.
+
+Then read `preview.md` start to finish, as its reader would. Does each section
+follow from the one before? Does every rewritten section still make the author's
+argument? Does a new table sit where the text introduces it? Is any point now made
+twice, or contradicted elsewhere? Fix the plan and preview again until it reads as
+one document.
 
 ## 4. Independent review
 
 Spawn `change-reviewer` (`.claude/agents/change-reviewer.md`) in `PLAN` mode with
-the run, the slug and the audit. It writes `subjects/<slug>/review.md`. Fix every
-blocking and material finding in the plan, validate and render again. Do not
-write or edit the review yourself; if the spawn fails, stop and say so.
+the run, the slug and the audit. For a Word or PDF document it reads the master and
+`diff.md`; for a change plan, `preview.md` and the plan. It writes
+`subjects/<slug>/review.md`. Fix every blocking and material finding (in the master,
+or in the plan, then validate and render again). Do not write or edit the review
+yourself; if the spawn fails, stop and say so.
+
+**One review.** Do not send the plan back for a second one unless the first found a
+blocking problem whose fix rewrote a section. Every extra pass re-reads the whole
+document, and the deliverable gets its own review after it is applied.
 
 ## 5. Hand over
 
-Tell the author how many changes are proposed, grouped by kind, the open items,
-and how to decide: the **Changes** view in the app (accept, reject or rewrite each
-change, then **Apply accepted changes**), or in chat. Then stop.
+**A Word or PDF document.** Tell the author what changed, section by section, and
+the open items. The master is theirs now: they read and edit it like a report, run
+/critique, /repair, /expand or /verify on it, and export it from **Revised
+document** in the app, or with:
+
+```bash
+python3 .claude/scripts/document.py export <run> <slug> --to docx,pdf [--track]
+```
+
+The Word file keeps the original's design; the export checks it against the original.
+Then stop.
+
+**A change plan.** Tell the author how many changes are proposed, grouped by kind,
+the open items, and how to decide: the **Changes** view in the app (accept, reject or
+rewrite each change, then **Apply accepted changes**), or in chat. Then stop.
 
 **Never record a decision the author did not state.** When the author decides in
 chat ("accept all except C04"), record exactly that:
@@ -92,5 +173,5 @@ python3 .claude/scripts/changes.py decide <run> <slug> all accept --by "author i
 python3 .claude/scripts/changes.py decide <run> <slug> C04 reject --by "author in chat"
 ```
 
-Next step: `/revise` for Word, PowerPoint, Excel and Markdown; `/rebuild` for a PDF
-or a new design.
+Next step for a change plan: `/revise` for PowerPoint, Excel and Markdown;
+`/rebuild` for a new design.

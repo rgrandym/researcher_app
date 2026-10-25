@@ -6,6 +6,11 @@ disable-model-invocation: true
 
 # Verify
 
+**Which document.** When the run has more than one master (an audit and a revised
+document), act on the one the request names, or ask; then read it wherever this
+skill says `report.md`. A revised document keeps its own form and citations.
+Doctrine: `.claude/references/masters.md`.
+
 A quality gate, not an editor. You produce verdicts; `/repair` acts on them.
 
 **Scope comes from the request.** Inside the pipeline, verify the whole draft.

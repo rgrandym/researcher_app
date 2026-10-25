@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { ArrowDown, ArrowUp, CircleCheck, CircleX, ExternalLink, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import { api } from "../lib/api";
-import { resetLabel } from "../lib/format";
+import { elapsed, resetLabel } from "../lib/format";
 import type { Caps, Connection, Routing, Settings, Tier } from "../lib/types";
 import { useUi } from "../stores/ui";
 import { useSettings } from "./PromptBar";
@@ -52,13 +52,17 @@ function Card({ c, settings, onSaved, isDefault, onDefault }: { c: Connection; s
   const { setView } = useUi();
   const [key, setKey] = useState("");
   const [message, setMessage] = useState("");
+  const expectedEmail = c.id === "claude-sub"
+    ? settings.claude_default_email ?? ""
+    : settings.claude_accounts.find((account) => account.id === c.id)?.email ?? "";
+  const [loginEmail, setLoginEmail] = useState(expectedEmail);
   const conf = settings.connections[c.id] ?? { model: "", effort: "" };
   const model = c.models.find((m) => m.value === conf.model);
   const efforts = model?.efforts?.length ? model.efforts : ["low", "medium", "high", "xhigh", "max"];
   const refresh = () => void client.invalidateQueries({ queryKey: ["connections"] });
   const act = useMutation({
     mutationFn: async (what: string) => {
-      if (what === "login") return api.post<{ message: string }>(`/api/connections/${c.id}/login`);
+      if (what === "login") return api.post<{ message: string }>(`/api/connections/${c.id}/login`, c.runtime === "claude" ? { email: loginEmail.trim() } : {});
       if (what === "logout") return api.post<{ message: string }>(`/api/connections/${c.id}/logout`);
       if (what === "remove") return api.del(`/api/accounts/${c.id}`);
       if (what === "key") return api.post(`/api/connections/${c.id}/key`, { key });
@@ -69,6 +73,7 @@ function Card({ c, settings, onSaved, isDefault, onDefault }: { c: Connection; s
     onSuccess: (res, what) => {
       setKey("");
       if (what === "login" || what === "logout") setMessage((res as { message: string }).message);
+      if (what === "login") onSaved();
       if (what === "remove") onSaved();
       if (what === "test") setMessage("Checked the binary and the sign-in. No model call was made.");
       if (what === "turn") setView({ kind: "session", id: (res as { session: string }).session });
@@ -105,6 +110,7 @@ function Card({ c, settings, onSaved, isDefault, onDefault }: { c: Connection; s
       </div>
       {(c.usage?.windows ?? []).length > 0 && (
         <div className="mt-2 space-y-1">
+          {c.usage?.updated_at && <div className="text-[0.6875rem] text-faint">Last reported {elapsed(c.usage.updated_at, Date.now() / 1000)} ago</div>}
           {c.usage!.windows.map((w) => (
             <div key={w.name} className="flex items-center gap-2 text-[0.75rem]">
               <span className="w-10 text-faint">{w.name}</span>
@@ -148,10 +154,16 @@ function Card({ c, settings, onSaved, isDefault, onDefault }: { c: Connection; s
       <div className="mt-3 flex flex-wrap gap-2">
         {c.billing === "plan" ? (
           <>
-            <button disabled={!c.installed || c.signed_in} onClick={() => act.mutate("login")} className="rounded-md border border-border px-2.5 py-1 text-[0.75rem] hover:border-accent disabled:opacity-40">
+            {c.runtime === "claude" && !c.signed_in && (
+              <label className="flex items-center gap-2 text-[0.75rem] text-faint">
+                Sign in as
+                <input type="email" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} placeholder="name@example.com" className="w-48 rounded-md border border-border bg-surface px-2 py-1 text-fg" />
+              </label>
+            )}
+            <button disabled={!c.installed || c.signed_in || (c.runtime === "claude" && !loginEmail.trim())} onClick={() => act.mutate("login")} className="rounded-md border border-border px-2.5 py-1 text-[0.75rem] hover:border-accent disabled:opacity-40">
               {c.signed_in ? "Signed in" : c.runtime === "claude" ? "Sign in with Claude" : "Sign in with ChatGPT"}
             </button>
-            {c.runtime === "claude" && c.signed_in && (
+            {c.runtime === "claude" && c.account && (
               <button
                 onClick={() => {
                   if (window.confirm(`Sign ${c.account ?? c.label} out of this connection? Other accounts stay signed in.`)) act.mutate("logout");
@@ -336,7 +348,7 @@ function RoutingPanel({ routing, all, put }: { routing: Routing; all: Connection
 export default function ModelsView() {
   const client = useQueryClient();
   const settings = useSettings();
-  const connections = useQuery({ queryKey: ["connections"], queryFn: () => api.get<Connection[]>("/api/connections"), staleTime: 60_000 });
+  const connections = useQuery({ queryKey: ["connections"], queryFn: () => api.get<Connection[]>("/api/connections?fresh=true"), staleTime: 0, refetchOnMount: "always" });
   const saved = () => void client.invalidateQueries({ queryKey: ["settings"] });
   const put = async (patch: Partial<Settings> | { caps: Caps }) => {
     await api.put("/api/settings", patch);

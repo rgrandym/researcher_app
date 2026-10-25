@@ -17,6 +17,7 @@ type Tone = "good" | "warn" | "bad";
 function connectionTone(c: Connection): { tone: Tone; text: string } {
   if (!c.installed) return { tone: "bad", text: "not installed" };
   if (!c.signed_in) return { tone: "bad", text: c.message || "not signed in" };
+  if (c.billing === "plan" && !c.usage?.windows.length) return { tone: "warn", text: c.usage?.note || "Usage not yet verified" };
   const full = c.usage?.windows.find((w) => w.status === "rejected" || (w.used_percent ?? 0) >= 100);
   if (full) return { tone: "warn", text: `${full.name} limit reached${full.resets_at ? `, resets ${clock(full.resets_at)}` : ""}` };
   return { tone: "good", text: "ready" };

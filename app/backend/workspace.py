@@ -360,7 +360,8 @@ def save_run_file(name: str, rel: str, content: str, base_mtime: float | None) -
         raise Conflict(
             f"{rel} changed on disk since you opened it. Reload it, then make your edit again."
         )
-    if target.parent == base and target.name in ("report.md", "draft.md"):
+    rm = runmeta()
+    if target.parent == base and (rm.is_master(target) if rm else target.name in ("report.md", "draft.md")):
         edit_state.record(target, content)
     target.write_text(content)
     return target.stat().st_mtime
@@ -438,7 +439,7 @@ def export_path(rel: str) -> Path:
     base = outputs().resolve()
     if (
         base not in target.parents
-        or "export" not in target.relative_to(base).parts
+        or not {"export", "deliverable"} & set(target.relative_to(base).parts)
         or not target.is_file()
     ):
         raise ValueError("not an export")

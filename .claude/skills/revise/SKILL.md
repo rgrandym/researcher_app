@@ -9,6 +9,10 @@ disable-model-invocation: true
 Apply what the author accepted; nothing else. Doctrine:
 `.claude/references/revision.md`.
 
+A Word or PDF document revised as a Markdown master (`runmeta.py <run> --documents`
+names it) has no plan to apply: it is exported with `document.py export`, from the
+app's **Revised document** view or by `/export`. Stop and say so.
+
 ## 1. Preconditions
 
 ```bash
@@ -59,8 +63,10 @@ python3 .claude/scripts/deck_kit.py preview <run>/deliverable/<slug>/vN/<file>.p
 
 ## 4. Independent review
 
-Spawn `change-reviewer` in `DELIVERABLE` mode with the run, slug and version. It
-reads `applied.json`, `check.json`, the new `text.md` and any previews, and writes
+Spawn `change-reviewer` in `DELIVERABLE` mode with the run, slug and version, once.
+The plan was reviewed and the check has proved every change landed, so this pass
+looks at the result as a reader would: the seams, the form, the flow. It reads
+`applied.json`, `check.json`, the new `text.md` and any previews, and writes
 `deliverable/<slug>/vN/review.md`. A finding that needs different text becomes a
 proposed change for the author (back to `/changes`); a mechanical defect is fixed
 in the plan's donors and applied again as a new version.

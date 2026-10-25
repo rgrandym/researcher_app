@@ -1,6 +1,6 @@
 // When to read a connection's plan windows. One policy for every place that shows them:
 //   - the connection a running task is using: every 20 s, so the bars track it live;
-//   - once its plan is spent: no more reads until the next reset;
+//   - once its task stops, no more reads until the next reset;
 //   - a connection nothing is using: read once, then again only when a window resets;
 //   - when a task stops: one last read, so the bars show where it ended.
 
@@ -15,14 +15,6 @@ const MAX_WAIT_MS = 2 ** 31 - 1;
 
 const now = () => Date.now() / 1000;
 
-/** A window is spent until its reset passes; the backend clears it on the next read after. */
-export function isSpent(u: Usage | undefined): boolean {
-  const t = now();
-  return (u?.windows ?? []).some(
-    (w) => (w.status === "rejected" || (w.used_percent ?? 0) >= 100) && (w.resets_at == null || w.resets_at > t),
-  );
-}
-
 function nextReset(u: Usage | undefined): number | null {
   const t = now();
   const times = (u?.windows ?? []).map((w) => w.resets_at).filter((r): r is number => r != null && r > t);
@@ -30,7 +22,9 @@ function nextReset(u: Usage | undefined): number | null {
 }
 
 export function usageInterval(u: Usage | undefined, live: boolean): number | false {
-  if (live && !isSpent(u)) return LIVE_POLL_MS;
+  // A spent plan has had its final read: nothing changes until a window resets.
+  const spent = (u?.windows ?? []).some((w) => w.status === "rejected" || (w.used_percent ?? 0) >= 100);
+  if (live && !spent) return LIVE_POLL_MS;
   const reset = nextReset(u);
   return reset == null ? false : Math.min(MAX_WAIT_MS, (reset - now()) * 1000 + 2_000);
 }

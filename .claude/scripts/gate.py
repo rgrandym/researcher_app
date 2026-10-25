@@ -28,7 +28,9 @@ a good intention.
 Under --hook, stdin carries the Claude Code tool payload; a path that is not a
 master document of its run exits 0 in silence. Which documents those are is
 declared in `<run>/.run.json` and read through runmeta.py: report.md and
-draft.md by default. Only the hook updates the
+draft.md by default, plus each revised document of a revision run. In a revised
+document the voice lint skips blocks that are still the original authors' text, and
+the citation audit asks for no Sources list. Only the hook updates the
 mirror, because only the hook knows an agent has just written: a manual run of
 this script after the author has edited by hand must leave their edit visible
 to voice.py learn.
@@ -87,6 +89,27 @@ def gated(doc: Path) -> bool:
     return runmeta.is_master(doc)
 
 
+def original_lines(doc: Path):
+    """For a revised-document master, the line numbers that are the original authors'
+    text unchanged (a paragraph, a table row): their sentences stand (rule 7), so the
+    voice lint skips them. None for a report."""
+    entry = runmeta.document(doc)
+    source = doc.parent / "subjects" / (entry or {}).get("slug", "") / "document.md"
+    if entry is None or not source.is_file():
+        return None
+    original = {line.strip() for line in source.read_text().splitlines() if line.strip()}
+    keep, in_note = set(), False
+    for n, line in enumerate(doc.read_text().splitlines(), 1):
+        # Hidden notes (<!-- why: ... -->, anchors, comments) never reach the reader.
+        opens = line.lstrip().startswith("<!--")
+        if opens or in_note:
+            keep.add(n)
+            in_note = "-->" not in line
+        elif line.strip() and line.strip() in original:
+            keep.add(n)
+    return keep
+
+
 def run(args):
     """Run a checker, return (exit code, stdout+stderr)."""
     p = subprocess.run([sys.executable, *args], capture_output=True, text=True,
@@ -104,16 +127,21 @@ def gate(doc: Path, mark: bool):
     """
     run_dir = doc.parent
     hard, soft = [], []
+    unchanged = original_lines(doc)
 
     code, out = run([str(SCRIPTS / "voice.py"), "lint", str(doc)])
     for line in out.splitlines():
+        at = re.search(r"\.md:(\d+)\b", line)
+        if unchanged and at and int(at.group(1)) in unchanged:
+            continue
         if line.startswith("VOICE"):
             hard.append(line)
         elif line.split(" ")[0] in ("DRIFT", "SHAPE", "ECHO", "ECHO-NEAR",
                                     "OPENER", "DICTION"):
             soft.append(line)
 
-    code, out = run([str(SCRIPTS / "audit_citations.py"), str(run_dir), doc.name])
+    code, out = run([str(SCRIPTS / "audit_citations.py"), str(run_dir), doc.name,
+                     *(["--document"] if unchanged is not None else [])])
     for line in out.splitlines():
         if line.startswith("ERROR"):
             hard.append(line)

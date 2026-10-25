@@ -6,6 +6,11 @@ disable-model-invocation: true
 
 # Critique
 
+**Which document.** When the run has more than one master (an audit and a revised
+document), act on the one the request names, or ask; then read it wherever this
+skill says `report.md`. A revised document keeps its own form and citations.
+Doctrine: `.claude/references/masters.md`.
+
 `/verify` asks "is this true?". The independent critic asks **"does this hold up?"** — true facts assembled into a wrong conclusion is the failure this stage catches.
 
 **Spawn `report-critic` from `.claude/agents/report-critic.md` for every invocation,
