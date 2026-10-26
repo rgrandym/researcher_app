@@ -3,9 +3,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { X } from "lucide-react";
 import { api } from "../lib/api";
+import OfficePane from "./OfficePane";
 
 export interface Subject {
   slug: string;
+  office_file?: string;
   master: string | null;
   path: string;
   role: "subject" | "template";
@@ -72,6 +74,10 @@ function DocumentPanel({ run, subject, onOpenFile }: { run: string; subject: Sub
   const pdfSource = subject.format === "pdf";
   const busy = diff.isPending || exported.isPending;
   const result = exported.data;
+  if (["xlsx", "pptx"].includes(subject.format)) return <>
+    {Object.keys(subject.counts).length > 0 && <button onClick={() => onOpenFile(`subjects/${subject.slug}/changes.json`)} className="mb-3 text-accent underline">Read previous change plan</button>}
+    <OfficePane key={`${run}:${subject.slug}`} run={run} subject={subject} edit onReady={() => undefined} />
+  </>;
   return (
     <div className="space-y-3">
       <p className="text-muted">
@@ -246,7 +252,7 @@ export default function ChangesDialog({ run, subjects, onClose, onStarted, onOpe
           </div>
         )}
         <div className="scroll-thin flex-1 space-y-3 overflow-y-auto px-5 py-4 text-[0.8125rem]">
-          {current?.master && <DocumentPanel run={run} subject={current} onOpenFile={onOpenFile} />}
+          {current?.master && <DocumentPanel key={`${run}:${current.slug}`} run={run} subject={current} onOpenFile={onOpenFile} />}
           {!current?.master && plan.isLoading && <p className="text-faint">Loading…</p>}
           {plan.isError && <p className="text-bad">{(plan.error as Error).message}</p>}
           {plan.data?.revised && (

@@ -361,6 +361,14 @@ def save_run_file(name: str, rel: str, content: str, base_mtime: float | None) -
             f"{rel} changed on disk since you opened it. Reload it, then make your edit again."
         )
     rm = runmeta()
+    # Office masters use the same save/conflict path as prose, with typed-content
+    # validation before edit provenance or the master can be changed.
+    if target.parent == base and (base / "subjects" / target.stem / "office-source.json").is_file():
+        from backend import revision
+
+        office = revision.script("office_master")
+        original = office.baseline(base, target.stem)[1]
+        office.validate(office.decode(content), original)
     if target.parent == base and (rm.is_master(target) if rm else target.name in ("report.md", "draft.md")):
         edit_state.record(target, content)
     target.write_text(content)

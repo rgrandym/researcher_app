@@ -68,6 +68,12 @@ def start(run, slug, seed=None):
     item = subjects.find(run, slug)
     if item["role"] != "subject":
         sys.exit(f"ERROR {item['path']} is a template: its design is copied, the file is not revised")
+    if Path(item["path"]).suffix.lower() in (".xlsx", ".pptx"):
+        import office_master
+
+        master = office_master.start(run, slug, Path(seed) if seed else Path(run) / "external_data" / item["path"])
+        print(f"wrote {master} · editable Office master")
+        return 0
     source = plans.sdir(run, slug) / "document.md"
     if not source.is_file():
         sys.exit(f"ERROR {slug} has no document.md: run subject.py extract {run} {slug} "
@@ -190,13 +196,21 @@ def next_version(run, slug):
     return n, vdir
 
 
-def export(run, slug, formats, track=False, author="Revision", partial=False):
+def export(run, slug, formats, track=False, author="Revision", partial=False, design=None):
     run = Path(run)
     item = subjects.find(run, slug)
     master = master_of(run, slug)
     if not master.is_file():
         sys.exit(f"ERROR no master for {slug}: document.py start {run} {slug}")
     text = master.read_text()
+    if text.startswith("<!-- office-master:1 -->"):
+        import office_master
+
+        fmt = office_master.decode(text)["format"]
+        if set(formats) != {fmt} or track:
+            sys.exit(f"ERROR export this master with --to {fmt}, without --track")
+        print(f"wrote {office_master.export(run, slug, design)}")
+        return 0
     holes = [i for i, line in enumerate(text.splitlines(), 1) if UNVERIFIED.search(line)]
     if holes:
         sys.exit(f"ERROR {master.name} still carries [UNVERIFIED] at line(s) "
@@ -274,7 +288,7 @@ def export(run, slug, formats, track=False, author="Revision", partial=False):
 def main():
     argv = sys.argv[1:]
     opts = {}
-    for key in ("--from", "--to", "--author"):
+    for key in ("--from", "--to", "--author", "--design"):
         if key in argv:
             i = argv.index(key)
             opts[key[2:]] = argv[i + 1]
@@ -292,7 +306,7 @@ def main():
         return diff(run, slug, "--write" in argv)
     if cmd == "export":
         formats = {f.strip() for f in opts.get("to", "docx").split(",")}
-        return export(run, slug, formats, "--track" in argv, opts.get("author", "Revision"), "--partial" in argv)
+        return export(run, slug, formats, "--track" in argv, opts.get("author", "Revision"), "--partial" in argv, opts.get("design"))
     sys.exit(__doc__)
 
 

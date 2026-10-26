@@ -128,6 +128,14 @@ def gate(doc: Path, mark: bool):
     run_dir = doc.parent
     hard, soft = [], []
     unchanged = original_lines(doc)
+    if (run_dir / "subjects" / doc.stem / "office-source.json").is_file():
+        import office_master
+
+        try:
+            original = office_master.baseline(run_dir, doc.stem)[1]
+            office_master.validate(office_master.decode(doc.read_text()), original)
+        except (ValueError, OSError, KeyError) as exc:
+            hard.append(f"ERROR {doc.name}: invalid Office master: {exc}")
 
     code, out = run([str(SCRIPTS / "voice.py"), "lint", str(doc)])
     for line in out.splitlines():

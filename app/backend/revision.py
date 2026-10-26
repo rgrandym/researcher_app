@@ -19,6 +19,7 @@ import re
 import subprocess
 import sys
 import time
+import threading
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -26,6 +27,7 @@ from typing import Any
 from backend import workspace
 
 _modules: dict[str, ModuleType] = {}
+_office_lock = threading.RLock()
 
 
 def script(name: str) -> ModuleType:
@@ -71,6 +73,8 @@ def subjects(name: str) -> list[dict[str, Any]]:
             "slug": slug,
             "master": master,
             "path": item["path"],
+            # The file an Office master was started from, which may be a later deliverable.
+            "office_file": Path(_json(run / "subjects" / slug / "office-source.json", {}).get("filename") or item["path"]).name,
             "role": item["role"],
             "format": source.get("format") or Path(item["path"]).suffix.lstrip(".").lower(),
             "editable": bool(source.get("editable", True)),
@@ -240,10 +244,19 @@ def document_diff(name: str, slug: str) -> dict[str, Any]:
     return {"path": f"subjects/{slug}/diff.md", "summary": out.split("·")[-1].strip()}
 
 
-def document_export(name: str, slug: str, formats: list[str], track: bool, author: str) -> dict[str, Any]:
+def document_export(name: str, slug: str, formats: list[str], track: bool, author: str, design: str | None = None) -> dict[str, Any]:
     """Export the master to Word (in the original's design) and, if asked, PDF."""
     run = workspace.run_dir(name)
-    _find(run, slug)
+    item = _find(run, slug)
+    fmt = Path(item["path"]).suffix[1:].lower()
+    if fmt in ("xlsx", "pptx"):
+        if formats != [fmt] or track:
+            raise ValueError(f"Export this document as .{fmt}, without tracked changes.")
+        with _office_lock:
+            path = script("office_master").export(run, slug, design)
+        return {"ok": True, "files": [path], "problems": [], "output": "Native content round-trip passed."}
+    if design not in (None, "preserve"):
+        raise ValueError("The design choice is available for spreadsheets and presentations.")
     wanted = [f for f in formats if f in ("docx", "pdf")] or ["docx"]
     args = ["export", str(run), slug, "--to", ",".join(wanted)]
     if track:
@@ -252,3 +265,105 @@ def document_export(name: str, slug: str, formats: list[str], track: bool, autho
     files = [m.group(1).split(" · ")[0].strip() for m in re.finditer(r"^wrote (.+)$", out, re.M)]
     problems = [line for line in out.splitlines() if line.startswith(("PROBLEM", "REFUSED", "ERROR"))]
     return {"ok": code == 0, "files": files, "problems": problems, "output": out[-4000:]}
+
+
+def office_start(name: str, slug: str, source: str | None = None) -> dict[str, Any]:
+    """Create once from the original or an explicitly selected existing deliverable."""
+    run = workspace.run_dir(name)
+    item = _find(run, slug)
+    fmt = Path(item["path"]).suffix[1:].lower()
+    if item["role"] != "subject" or fmt not in ("xlsx", "pptx"):
+        raise ValueError("Choose a spreadsheet or presentation subject.")
+    rel = source or f"external_data/{item['path']}"
+    path = workspace.run_file(name, rel)
+    original = (run / "external_data" / item["path"]).resolve()
+    delivered = (run / "deliverable" / slug).resolve()
+    if path.suffix.lower() != f".{fmt}" or (path.resolve() != original and not path.resolve().is_relative_to(delivered)):
+        raise ValueError("Start from this document's supplied file or one of its deliverables.")
+    with _office_lock:
+        master = script("office_master").start(run, slug, path)
+    return {"master": master.name, "slug": slug}
+
+
+def office_content(name: str, slug: str) -> dict[str, Any]:
+    run = workspace.run_dir(name)
+    _find(run, slug)
+    office = script("office_master")
+    _, master = office.paths(run, slug)
+    _, original, meta = office.baseline(run, slug)
+    text = master.read_text()
+    data = office.decode(text)
+    office.validate(data, original)
+    return {"data": data, "text": text, "master": master.name, "mtime": master.stat().st_mtime, "source": meta["source"]}
+
+
+def _stem_key(name: str) -> str:
+    """A file's name without version marks: "v4 - Cash flow forecast-2" → "cash-flow-forecast"."""
+    key = script("subject").slug_of(name)
+    return re.sub(r"^v\d+-|-(?:v?\d+)$", "", key)
+
+
+def _original_of(run: Path, slug: str, path: Path) -> str | None:
+    """The supplied file a deliverable folder revises, by declared slug or by name."""
+    subject = script("subject")
+    item = next((s for s in subject.declared(run) if s["slug"] == slug and s["role"] == "subject"), None)
+    if item:
+        return str(item["path"])
+    ext = run / "external_data"
+    keys = {slug, _stem_key(path.stem)}
+    found = [f for f in sorted(ext.rglob(f"*{path.suffix}")) if f.is_file() and not f.name.startswith(".")
+             and f.suffix.lower() == path.suffix.lower() and _stem_key(f.stem) in keys
+             and "ai_reports" not in f.relative_to(ext).parts] if ext.is_dir() else []
+    return str(found[0].relative_to(ext)) if len(found) == 1 else None
+
+
+def _open_deliverable(name: str, run: Path, path: Path) -> dict[str, Any]:
+    """Start an editable copy from a delivered file; the delivered file is never changed."""
+    slug = path.relative_to(run / "deliverable").parts[0]
+    original = _original_of(run, slug, path)
+    if not original:
+        raise ValueError(f"{path.name} can be viewed, but its supplied original is not in external_data, "
+                         "so there is no baseline to edit against. Add the original there, then open it again.")
+    with _office_lock:
+        subject = script("subject")
+        items = subject.declared(run)
+        if not any(s["slug"] == slug for s in items):
+            if any(s["path"] == original for s in items):
+                raise ValueError(f"{original} is already declared under another name. Open it from its own entry.")
+            meta = subject.run_json(run)
+            meta["subjects"] = [*meta.get("subjects", []), {"path": original, "role": "subject", "slug": slug}]
+            (run / ".run.json").write_text(json.dumps(meta, indent=2) + "\n")
+        return office_start(name, slug, str(path.relative_to(run)))
+
+
+def office_open(name: str, rel: str) -> dict[str, Any]:
+    """Open an uploaded or delivered Office file without requiring a prior audit or change plan."""
+    run = workspace.run_dir(name).resolve()
+    path = workspace.run_file(name, rel).resolve()
+    ext = (run / "external_data").resolve()
+    if path.suffix.lower() not in (".xlsx", ".pptx"):
+        raise ValueError("Choose a .xlsx or .pptx file.")
+    if path.is_relative_to(run / "deliverable"):
+        return _open_deliverable(name, run, path)
+    if not path.is_relative_to(ext):
+        raise ValueError("Choose an uploaded file in external_data or a delivered file.")
+    relative = str(path.relative_to(ext))
+    with _office_lock:
+        subject = script("subject")
+        items = subject.declared(run)
+        item = next((s for s in items if s["path"] == relative and s["role"] == "subject"), None)
+        if not item:
+            # Read before registering, so malformed uploads cannot leave broken entries.
+            script("office_master").read_native(path)
+            slug = subject.slug_of(relative)
+            used = {s["slug"] for s in items}
+            stem, number = slug, 2
+            while slug in used:
+                slug = f"{stem}-{number}"
+                number += 1
+            item = {"path": relative, "role": "subject", "slug": slug}
+            meta = subject.run_json(run)
+            # Keep template declarations intact: edits use a separate master and copy.
+            meta["subjects"] = [*meta.get("subjects", []), item]
+            (run / ".run.json").write_text(json.dumps(meta, indent=2) + "\n")
+        return office_start(name, item["slug"], rel)

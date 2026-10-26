@@ -25,11 +25,11 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from backend import accounts, activity, appearance, autoedits, comments, config, edit_state, final_sections, keychain, render, revision, sessions, usage, workspace
+from backend import accounts, activity, appearance, autoedits, comments, config, edit_state, final_sections, keychain, office_view, render, revision, sessions, usage, workspace
 from backend.providers.base import Event, ProviderError
 from backend.providers.claude import ClaudeProvider
 from backend.turns import TurnManager
@@ -710,6 +710,7 @@ class DocumentExportBody(BaseModel):
     formats: list[str] = ["docx", "pdf"]
     track: bool = False
     author: str = ""
+    design: str | None = None
 
 
 @app.post("/api/runs/{name}/documents/{slug}/export")
@@ -718,10 +719,70 @@ async def document_export(name: str, slug: str, body: DocumentExportBody) -> dic
     if _run_busy(name):
         raise HTTPException(409, "An agent is working on this run. Export when its turn finishes.")
     try:
-        return await asyncio.to_thread(revision.document_export, name, slug, body.formats, body.track, body.author)
+        return await asyncio.to_thread(revision.document_export, name, slug, body.formats, body.track, body.author, body.design)
     except FileNotFoundError as exc:
         raise _bad(exc, 404) from exc
     except ValueError as exc:
+        raise _bad(exc, 400) from exc
+
+
+class OfficeStartBody(BaseModel):
+    source: str | None = None
+
+
+class OfficeOpenBody(BaseModel):
+    path: str
+
+
+@app.post("/api/runs/{name}/documents/open")
+async def office_open(name: str, body: OfficeOpenBody) -> dict[str, Any]:
+    if _run_busy(name):
+        raise HTTPException(409, "An agent is working on this project. Open the editor when it finishes.")
+    try:
+        return await asyncio.to_thread(revision.office_open, name, body.path)
+    except FileNotFoundError as exc:
+        raise _bad(exc, 404) from exc
+    except ValueError as exc:
+        raise _bad(exc, 400) from exc
+
+
+@app.post("/api/runs/{name}/documents/{slug}/start")
+async def office_start(name: str, slug: str, body: OfficeStartBody) -> dict[str, Any]:
+    if _run_busy(name):
+        raise HTTPException(409, "An agent is working on this project. Open the editor when it finishes.")
+    try:
+        return await asyncio.to_thread(revision.office_start, name, slug, body.source)
+    except FileNotFoundError as exc:
+        raise _bad(exc, 404) from exc
+    except ValueError as exc:
+        raise _bad(exc, 400) from exc
+
+
+@app.get("/api/runs/{name}/documents/{slug}/office")
+def office_content(name: str, slug: str) -> dict[str, Any]:
+    try:
+        return revision.office_content(name, slug)
+    except FileNotFoundError as exc:
+        raise _bad(exc, 404) from exc
+    except ValueError as exc:
+        raise _bad(exc, 400) from exc
+
+
+@app.get("/api/runs/{name}/office/outputs")
+def office_outputs(name: str) -> dict[str, Any]:
+    try:
+        return {"outputs": office_view.outputs(name)}
+    except FileNotFoundError as exc:
+        raise _bad(exc, 404) from exc
+
+
+@app.get("/api/runs/{name}/office/html")
+async def office_html(name: str, path: str) -> HTMLResponse:
+    try:
+        return HTMLResponse(await asyncio.to_thread(office_view.html, name, path))
+    except FileNotFoundError as exc:
+        raise _bad(exc, 404) from exc
+    except (ValueError, OSError, KeyError) as exc:
         raise _bad(exc, 400) from exc
 
 

@@ -15,6 +15,7 @@ import type { AppearancePick, AppearanceResponse, AppearanceValues } from "./App
 import SessionView from "./SessionView";
 import CritiqueQuestionsDialog, { type CritiqueAnswers, type CritiqueQuestion } from "./CritiqueQuestionsDialog";
 import ChangesDialog, { type Subject } from "./ChangesDialog";
+import OfficePane, { OfficeHtml, type OfficeFocus } from "./OfficePane";
 import CommentsPanel, { ColourDots, CommentList, useComments, useHighlight, type Anchor, type Comment } from "./CommentsPanel";
 import type { EditorMark } from "./MarkdownEditor";
 import { listen, openPopout, post } from "../lib/live";
@@ -23,6 +24,7 @@ const MarkdownEditor = lazy(() => import("./MarkdownEditor"));
 
 const TEXT = /\.(md|txt|jsonl|json|csv|tsv|py|ya?ml|bib)$/i;
 type Tab = "document" | "chat" | "html" | "edit" | "file";
+interface OfficeOutput { path: string; slug: string; version: string; format: "xlsx" | "pptx"; label: string }
 
 interface Rendered {
   html: string;
@@ -1056,7 +1058,21 @@ export default function RunView({ name, file }: { name: string; file?: string })
     queryFn: () => api.get<{ subjects: Subject[] }>(`/api/runs/${encodeURIComponent(name)}/subjects`),
     refetchInterval: 15_000,
   });
+  // Workbooks and decks the project delivered that have no editable copy yet.
+  const officeOutputs = useQuery({
+    queryKey: ["office-outputs", name],
+    queryFn: () => api.get<{ outputs: OfficeOutput[] }>(`/api/runs/${encodeURIComponent(name)}/office/outputs`),
+    refetchInterval: 15_000,
+  });
+  const [officeFocus, setOfficeFocus] = useState<OfficeFocus | undefined>();
   const [changesOpen, setChangesOpen] = useState(false);
+  const openOffice = useMutation({
+    mutationFn: ({ path }: { path: string; then: Tab }) => api.post<{ master: string }>(`/api/runs/${encodeURIComponent(name)}/documents/open`, { path }),
+    onSuccess: async (result, { then }) => {
+      await Promise.all(["subjects", "run", "office-outputs"].map((key) => client.invalidateQueries({ queryKey: [key, name] })));
+      setDoc(result.master); setEditPath(undefined); setTab(then);
+    },
+  });
   const planned = (subjects.data?.subjects ?? []).filter((s) => s.role === "subject" && (s.master || Object.keys(s.counts).length > 0));
   const revisedOnly = planned.length > 0 && planned.every((s) => s.master);
   const undecided = planned.reduce((n, s) => n + (s.counts.proposed ?? 0) + (s.counts.stale ?? 0), 0);
@@ -1173,9 +1189,18 @@ export default function RunView({ name, file }: { name: string; file?: string })
   if (!data) return <div className="p-6 text-faint">Loading…</div>;
   const primary = data.meta.primary;
   const present = new Set(data.files.map((f) => f.path));
-  const docs = data.meta.masters.filter((m) => present.has(m));
-  const shown = doc && docs.includes(doc) ? doc : primary ?? undefined;
+  const officeSubjects = (subjects.data?.subjects ?? []).filter((s) => s.role === "subject" && ["xlsx", "pptx"].includes(s.format));
+  const outputs = (officeOutputs.data?.outputs ?? []).filter((o) => !officeSubjects.some((s) => s.slug === o.slug));
+  const docs = [...new Set([...data.meta.masters.filter((m) => present.has(m)), ...officeSubjects.map((s) => s.master ?? `${s.slug}.md`), ...outputs.map((o) => o.path)])];
+  const shown = doc && docs.includes(doc) ? doc : primary ?? docs[0];
+  const officeSubject = officeSubjects.find((s) => (s.master ?? `${s.slug}.md`) === shown);
+  const officeOutput = outputs.find((o) => o.path === shown);
+  const office = Boolean(officeSubject || officeOutput);
   const docLabel = (m: string) => {
+    const output = outputs.find((o) => o.path === m);
+    if (output) return output.label;
+    const subject = officeSubjects.find((s) => (s.master ?? `${s.slug}.md`) === m);
+    if (subject) return `${subject.office_file ?? subject.path}${subject.master ? " (editable)" : " (open editor)"}`;
     const entry = data.meta.documents?.find((d) => d.master === m);
     const source = entry && subjects.data?.subjects.find((s) => s.slug === entry.slug)?.path;
     if (source) return `${source.replace(/\.[^.]+$/, "")} (revised)`;
@@ -1185,6 +1210,7 @@ export default function RunView({ name, file }: { name: string; file?: string })
   const critiqueFailed = Boolean(selected && data.critique_failed_at && data.critique_failed_at >= (data.files.find((item) => item.path === selected)?.mtime ?? 0));
   const onSaved = () => {
     setVersion((v) => v + 1);
+    void client.invalidateQueries({ queryKey: ["office-outputs", name] });
     void client.invalidateQueries({ queryKey: ["run", name] });
     void client.invalidateQueries({ queryKey: ["run-file", name] });
   };
@@ -1266,7 +1292,7 @@ export default function RunView({ name, file }: { name: string; file?: string })
           {docs.length > 1 && tab !== "file" && tab !== "chat" && (
             <label className="ml-auto flex items-center gap-1.5 text-[0.75rem] text-muted">
               Showing
-              <select value={shown} onChange={(e) => setDoc(e.target.value)} title="The document the Document, HTML and Edit tabs show" className="max-w-[18rem] truncate rounded-md border border-border bg-bg px-1.5 py-0.5 text-fg outline-none focus:border-accent">
+              <select value={shown} onChange={(e) => { setDoc(e.target.value); setEditPath(undefined); }} title="The document the Document, HTML and Edit tabs show" className="max-w-[18rem] truncate rounded-md border border-border bg-bg px-1.5 py-0.5 text-fg outline-none focus:border-accent">
                 {docs.map((m) => <option key={m} value={m}>{docLabel(m)}</option>)}
               </select>
             </label>
@@ -1282,6 +1308,7 @@ export default function RunView({ name, file }: { name: string; file?: string })
               <Pencil size="0.75rem" /> Edit this file
             </button>
           )}
+          {tab === "file" && selected?.startsWith("external_data/") && /\.(xlsx|pptx)$/i.test(selected) && <button disabled={openOffice.isPending} onClick={() => openOffice.mutate({ path: selected, then: "html" })} className="ml-auto rounded-md border border-accent px-2.5 py-1 text-[0.75rem] text-accent disabled:opacity-40">{openOffice.isPending ? "Opening…" : "Open editable document"}</button>}
           {tab === "file" && selected && /^critique[\w-]*\.md$/.test(selected) && (
             <button onClick={() => { applyCritique.reset(); loadCritiqueQuestions.mutate(selected); }} disabled={loadCritiqueQuestions.isPending || critiqueFailed} title={critiqueFailed ? "Run /critique again with an independent critic first" : undefined} className="ml-auto rounded-md border border-accent px-2.5 py-1 text-[0.75rem] text-accent hover:bg-panel disabled:opacity-40">
               {critiqueFailed ? "Independent review required" : loadCritiqueQuestions.isPending ? "Preparing questions…" : "Apply feedback to article"}
@@ -1292,6 +1319,7 @@ export default function RunView({ name, file }: { name: string; file?: string })
           <div className="border-b border-border px-4 py-1.5 text-[0.75rem] text-warn">This critique needs an independent review. Run /critique again before applying its findings.</div>
         )}
         {applyCritique.isError && <div className="border-b border-border px-4 py-1.5 text-[0.75rem] text-bad">{(applyCritique.error as Error).message}</div>}
+        {openOffice.isError && <div role="alert" className="border-b border-border px-4 py-1.5 text-[0.75rem] text-bad">{openOffice.error.message}</div>}
         {loadCritiqueQuestions.isError && <div className="border-b border-border px-4 py-1.5 text-[0.75rem] text-bad">{(loadCritiqueQuestions.error as Error).message}</div>}
         <div className="min-h-0 flex-1">
           {tab === "chat" &&
@@ -1300,8 +1328,28 @@ export default function RunView({ name, file }: { name: string; file?: string })
             ) : (
               <div className="p-6 text-[0.8125rem] text-faint">{openChat.isError ? (openChat.error as Error).message : "Opening the project's conversation…"}</div>
             ))}
-          {tab === "html" && <HtmlPane run={name} doc={shown} version={version} />}
-          {tab === "edit" && editing && (popped.includes(editing) ? (
+          {office && (tab === "html" || tab === "document") && (
+            <OfficeHtml
+              key={shown}
+              run={name}
+              path={officeSubject ? (officeSubject.master ?? `external_data/${officeSubject.path}`) : officeOutput!.path}
+              name={officeSubject ? (officeSubject.office_file ?? officeSubject.path) : officeOutput!.label}
+              version={version}
+              download={officeOutput?.path ?? officeSubject?.deliverable?.file ?? undefined}
+              editLabel={officeSubject?.master ? "Edit" : "Start editing"}
+              onEdit={() => { setOfficeFocus(undefined); setEditPath(undefined); setTab("edit"); }}
+              onPick={(focus) => { setOfficeFocus(focus); setEditPath(undefined); setTab("edit"); }}
+            />
+          )}
+          {officeSubject && tab === "edit" && editing === shown && <OfficePane key={officeSubject.slug} run={name} subject={officeSubject} edit focus={officeFocus} onReady={onSaved} />}
+          {officeOutput && tab === "edit" && editing === shown && (
+            <div className="space-y-3 p-6 text-[0.8125rem]">
+              <p>{officeOutput.label} was delivered by this project. Editing starts a working copy here; the delivered file stays as it is, and exporting writes the next version beside it.</p>
+              <button disabled={openOffice.isPending} onClick={() => openOffice.mutate({ path: officeOutput.path, then: "edit" })} className="rounded-md border border-accent px-2.5 py-1 text-accent disabled:opacity-40">{openOffice.isPending ? "Opening…" : "Start editing"}</button>
+            </div>
+          )}
+          {tab === "html" && !office && <HtmlPane run={name} doc={shown} version={version} />}
+          {tab === "edit" && editing && !(office && editing === shown) && (popped.includes(editing) ? (
             <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-[0.8125rem] text-muted">
               <div>{editing} is open in its own window. Its unsaved changes show in the HTML tab as you type.</div>
               <div className="flex gap-2">
@@ -1327,7 +1375,7 @@ export default function RunView({ name, file }: { name: string; file?: string })
               }}
             />
           ))}
-          {(tab === "document" || tab === "file") && (
+          {((tab === "document" && !office) || tab === "file") && (
             <div ref={reader} onScroll={(e) => rememberScroll(name, readerKey, e.currentTarget.scrollTop)} className="scroll-thin h-full overflow-y-auto">
               <div className="mx-auto max-w-3xl px-8 py-6">
                 {tab === "file" && selected ? (
