@@ -2,8 +2,8 @@
 
 pandoc gives every table the reference document's "Table" style. A table the author
 styled in the Palette and layout panel is then dressed here, cell by cell: header and
-body fills, banding, text colour, font and size, rule weight, colour, line type and
-layout, and width. A table is found by its caption, "Table n.", above it or below it
+body fills, banding, text colour, font and size (the header row's apart), rule weight,
+colour, line type and layout, width, and the caption's colour and size. A table is found by its caption, "Table n.", above it or below it
 as the Markdown places it, and n is matched to its id in document order, as figures.py
 numbers it.
 """
@@ -18,8 +18,10 @@ from docx import Document  # type: ignore[import-untyped,import-not-found,unused
 from docx.oxml import OxmlElement  # type: ignore[import-untyped,import-not-found,unused-ignore]
 from docx.oxml.ns import qn  # type: ignore[import-untyped,import-not-found,unused-ignore]
 from docx.shared import Pt, RGBColor  # type: ignore[import-untyped,import-not-found,unused-ignore]
+from docx.text.paragraph import Paragraph  # type: ignore[import-untyped,import-not-found,unused-ignore]
 
 CAPTION = re.compile(r"^\s*Table (\d+)\.")
+ANY_CAPTION = re.compile(r"^\s*(Table|Figure) \d+\.")
 LINE = {"solid": "single", "dashed": "dashed", "dotted": "dotted", "double": "double"}
 EDGES = ("top", "left", "bottom", "right", "insideH", "insideV")
 
@@ -60,14 +62,20 @@ def _cell_bottom(cell: Any, item: dict[str, Any] | None, heavy: float = 1.0) -> 
     _border(_child(pr, "w:tcBorders"), "bottom", item, heavy)
 
 
-def _text(cell: Any, item: dict[str, Any], colour: str, font: str) -> None:
-    for paragraph in cell.paragraphs:
-        for run in paragraph.runs:
+def _runs(paragraph: Any, size: float, colour: str, font: str | None = None) -> None:
+    for run in paragraph.runs:
+        if font:
             run.font.name = font
-            run.font.size = Pt(item["font_size_pt"])
-            run.font.color.rgb = RGBColor.from_string(_hex(colour))
+        run.font.size = Pt(size)
+        run.font.color.rgb = RGBColor.from_string(_hex(colour))
+        if font:
             fonts = run._element.get_or_add_rPr().get_or_add_rFonts()
             fonts.set(qn("w:eastAsia"), font)
+
+
+def _text(cell: Any, size: float, colour: str, font: str) -> None:
+    for paragraph in cell.paragraphs:
+        _runs(paragraph, size, colour, font)
 
 
 def style_table(table: Any, item: dict[str, Any], font: str) -> None:
@@ -75,6 +83,7 @@ def style_table(table: Any, item: dict[str, Any], font: str) -> None:
     width = _child(tbl_pr, "w:tblW")
     width.set(qn("w:type"), "pct")
     width.set(qn("w:w"), str(round(item["width_percent"] * 50)))
+    _child(tbl_pr, "w:jc").set(qn("w:val"), "center")  # a narrower table sits in the middle of the text
     look = item.get("borders", "horizontal")
     borders = _child(tbl_pr, "w:tblBorders")
     for edge in EDGES:
@@ -96,13 +105,33 @@ def style_table(table: Any, item: dict[str, Any], font: str) -> None:
         for cell in row.cells:
             if header:
                 _shade(cell, item["header_bg"])
-                _text(cell, item, item["header_fg"], font)
+                _text(cell, item.get("header_font_size_pt", item["font_size_pt"]), item["header_fg"], font)
                 if look in ("minimal", "boxed", "header"):
                     _cell_bottom(cell, item, 1.2)
             else:
                 fill = item["stripe_bg"] if r % 2 == 0 else item["body_bg"]
                 _shade(cell, fill)
-                _text(cell, item, item["body_fg"], font)
+                _text(cell, item["font_size_pt"], item["body_fg"], font)
+
+
+def captions(path: Path, table: tuple[float, str | None], figure: tuple[float, str | None]) -> int:
+    """Every "Table n." and "Figure n." caption in the .docx at `path` in its size (and
+    colour, when one is set); how many."""
+    doc = Document(str(path))
+    count = 0
+    for paragraph in doc.paragraphs:
+        m = ANY_CAPTION.match(paragraph.text)
+        if not m:
+            continue
+        size, colour = table if m.group(1) == "Table" else figure
+        for run in paragraph.runs:
+            run.font.size = Pt(size)
+            if colour:
+                run.font.color.rgb = RGBColor.from_string(_hex(colour))
+        count += 1
+    if count:
+        doc.save(str(path))
+    return count
 
 
 def apply(
@@ -119,6 +148,7 @@ def apply(
     by_number = {str(i): table_id for i, table_id in enumerate(ids_in_order, 1)}
     tables = {id(t._tbl): t for t in doc.tables}
     found: dict[str, Any] = {}
+    captions: dict[str, Any] = {}
     pending: str | None = None  # a caption above, waiting for its table
     previous: Any = None  # the table just passed, for a caption below it
     for block in doc.element.body.iterchildren():
@@ -126,6 +156,8 @@ def apply(
             text = "".join(t.text or "" for t in block.iter(qn("w:t")))
             m = CAPTION.match(text)
             table_id = by_number.get(m.group(1)) if m else None
+            if table_id:
+                captions[table_id] = block
             if table_id and sides.get(table_id) == "below" and previous is not None:
                 found[table_id] = previous
                 pending = None
@@ -142,7 +174,10 @@ def apply(
             pending, previous = None, table
     for table_id, table in found.items():
         if table_id in items:
-            style_table(table, items[table_id], fonts[items[table_id]["font_family"]][0])
+            item = items[table_id]
+            style_table(table, item, fonts[item["font_family"]][0])
+            if table_id in captions and "caption_fg" in item:
+                _runs(Paragraph(captions[table_id], None), item["caption_font_size_pt"], item["caption_fg"])
     styled = sum(1 for table_id in found if table_id in items)
     if styled:
         doc.save(str(path))

@@ -115,18 +115,59 @@ def _rule(item: dict[str, Any], heavy: float = 1.0) -> str:
     return f"{width:.2f}pt {item.get('rule_style', 'solid')} {item['border']}"
 
 
+def _font(name: str) -> str:
+    return ", ".join(f'"{n}"' if " " in n else n for n in appearance.FONT_STACKS[name])
+
+
+# Layout every render carries: each caption directly below its table or figure, in small
+# type and kept with it; tables and charts fitted to the text column, so a change to their
+# settings resizes them within the text instead of spilling past it.
+LAYOUT_CSS = f"""
+/* Captions below, and tables and charts fitted to the text */
+p:has(+ table):not(.table-caption) {{ font: inherit; color: inherit; margin: 0 0 0.85em; break-after: auto; page-break-after: auto; }}
+table {{ max-width: 100%; margin: 1.2em auto 0.35em; }}
+p.table-caption {{ margin: 0 0 1.4em; line-height: 1.35; break-before: avoid; page-break-before: avoid; }}
+p.table-caption, p.table-caption strong {{ font-size: {appearance.CAPTION_PT}pt; }}
+figure {{ margin: 1.4em 0; }}
+figure img {{ display: block; width: 100%; max-width: 100%; height: auto; }}
+figcaption {{ font-size: {appearance.CAPTION_PT}pt; margin-top: 0.35em; line-height: 1.35; }}
+"""
+
+
+def report_css(custom: dict[str, Any]) -> str:
+    """Tables, table captions and figure captions in their own colours, fonts and sizes,
+    so a change to the page palette or fonts does not reach them, nor theirs the page."""
+    t, ch = custom["table_settings"], custom["chart"]
+    return (
+        "\n/* Tables and captions, apart from the page */\n"
+        f"table {{ font-family: {_font(t['font_family'])}; font-size: {t['font_size_pt']}pt; }}\n"
+        f"th {{ font-family: {_font(t['header_font'])}; font-size: {t['header_font_size_pt']}pt; "
+        f"background: {t['header_bg']}; color: {t['header_fg']}; }}\n"
+        f"td {{ background: {t['body_bg']}; color: {t['body_fg']}; }}\n"
+        f"tbody tr:nth-child(even) td {{ background: {t['stripe_bg']}; }}\n"
+        f"th strong, td strong {{ color: inherit; }}\n"
+        f"p.table-caption, p.table-caption strong {{ font-family: {_font(t['header_font'])}; "
+        f"font-size: {t['caption_font_size_pt']}pt; color: {t['caption_fg']}; }}\n"
+        f"figcaption {{ color: {ch['caption_color']}; font-size: {ch['caption_font_size_pt']}pt; }}\n"
+        f"figcaption strong {{ color: {ch['caption_label_color']}; }}\n"
+    )
+
+
 def table_css(overrides: dict[str, dict[str, Any]]) -> str:
     """The stylesheet rules for tables with individual settings, by their HTML ids."""
     rules = []
     for table_id, item in overrides.items():
         sel = f"#report-table-{table_id}"
-        font = ", ".join(f'"{name}"' if " " in name else name for name in appearance.FONT_STACKS[item["font_family"]])
+        cap = f"#report-caption-{table_id}"
         look = item.get("borders", "horizontal")
         rules.append(
-            f"{sel} {{ font-family: {font}; font-size: {item['font_size_pt']}pt; "
-            f"width: {item['width_percent']}%; border-collapse: collapse; border: none; }}\n"
-            f"{sel} th {{ font-family: inherit; background: {item['header_bg']}; color: {item['header_fg']}; "
+            f"{sel} {{ font-family: {_font(item['font_family'])}; font-size: {item['font_size_pt']}pt; "
+            f"width: {item['width_percent']}%; max-width: 100%; margin-left: auto; margin-right: auto; "
+            f"border-collapse: collapse; border: none; }}\n"
+            f"{sel} th {{ font-family: inherit; font-size: {item['header_font_size_pt']}pt; "
+            f"background: {item['header_bg']}; color: {item['header_fg']}; "
             f"padding: {item['cell_padding_em']}em; border: none; }}\n"
+            f"{cap}, {cap} strong {{ font-size: {item['caption_font_size_pt']}pt; color: {item['caption_fg']}; }}\n"
             f"{sel} td {{ background: {item['body_bg']}; color: {item['body_fg']}; "
             f"padding: {item['cell_padding_em']}em; border: none; }}\n"
             f"{sel} tbody tr:nth-child(even) td {{ background: {item['stripe_bg']}; }}"
@@ -148,6 +189,7 @@ def table_css(overrides: dict[str, dict[str, Any]]) -> str:
 
 
 _IMAGE = re.compile(r"!\[([^\]]*)\]\(([^)\s]+)\)")
+_FIGURE_IMAGE = re.compile(r"!\[\*\*Figure \d+\.\*\*[^\n]*?\]\([^)\s]+\)(?!\{)")
 
 
 def _absolute_images(text: str, folder: Path) -> str:
@@ -178,15 +220,19 @@ def build(
     run = workspace.run_dir(run_name)
     master = _source(run, doc)
     src = master
-    if text is not None:
+    # Every table is numbered: one with no caption line gets an untitled one, in a working
+    # copy rendered in place of the document. The document itself is never changed here.
+    raw = master.read_text() if text is None else text
+    captioned = appearance.captions_below(appearance.with_captions(raw))
+    if text is not None or captioned != raw:
         src = out.parent / "src" / master.name
         src.parent.mkdir(parents=True, exist_ok=True)
-        src.write_text(_absolute_images(text, run))
+        src.write_text(_absolute_images(captioned, run))
     if style not in {s["name"] for s in styles()}:
         raise RenderError(f"Unknown style: {style}")
     out.mkdir(parents=True, exist_ok=True)
     figures_dir.mkdir(parents=True, exist_ok=True)
-    custom = appearance.effective(run_name, style)
+    custom = appearance.effective(run_name, style, master.name)
     style_arg = style
     if custom is not None:
         effective_path = out / "_effective-style.json"
@@ -215,6 +261,8 @@ def build(
             ]
         )
     ]
+    # Charts take the width of the text column in Word too (HTML sizes them by CSS).
+    styled.write_text(_FIGURE_IMAGE.sub(r"\g<0>{width=100%}", styled.read_text()))
     placed: dict[str, dict[str, Any]] = {}
     if noted:
         marked, placed = comments.inject(styled.read_text(), noted)
@@ -244,8 +292,11 @@ def build(
     css = [py, _script("style.py"), "css", style_arg, "-o", str(out / "style.css")]
     log.append(_run([*css, "--cover"]))
     table_overrides = custom.get("item_overrides", {}).get("tables", {}) if custom else {}
-    if table_overrides or placed:
-        with (out / "style.css").open("a") as stream:
+    with (out / "style.css").open("a") as stream:
+        stream.write(LAYOUT_CSS)
+        if custom or placed:
+            if custom:
+                stream.write(report_css(custom))
             if table_overrides:
                 stream.write(table_css(table_overrides))
             if placed:
@@ -292,17 +343,23 @@ def build(
         above = re.compile(rf"({caption}(?:(?!</p>).)*</p>\s*)<table\b", re.S)
         below = re.compile(rf"<table\b((?:(?!<table\b).)*?</table>\s*{caption})", re.S)
 
+        # The caption paragraph is tagged too: it is styled with its table, and a click on
+        # it in the preview picks that table.
+        def caption_tag(text: str, table_id: str) -> str:
+            at = text.rfind("<p", 0, text.rfind("<strong>Table"))
+            return text[:at] + f'<p class="table-caption" id="report-caption-{table_id}"' + text[at + 2 :]
+
         def tag_above(match: re.Match[str]) -> str:
             table_id = by_number.get(match.group(2))
             if not table_id or sides.get(table_id) != "above":
                 return match.group(0)
-            return match.group(1) + f'<table id="report-table-{table_id}"'
+            return caption_tag(match.group(1), table_id) + f'<table id="report-table-{table_id}"'
 
         def tag_below(match: re.Match[str]) -> str:
             table_id = by_number.get(match.group(2))
             if not table_id or sides.get(table_id) != "below":
                 return match.group(0)
-            return f'<table id="report-table-{table_id}"' + match.group(1)
+            return f'<table id="report-table-{table_id}"' + caption_tag(match.group(1), table_id)
 
         html.write_text(below.sub(tag_below, above.sub(tag_above, html.read_text())))
     if placed:
@@ -319,6 +376,11 @@ def build(
         "table_ids": table_ids,
         "table_sides": sides,
         "table_overrides": table_overrides,
+        "table_settings": custom["table_settings"] if custom and custom.get("table_custom") else None,
+        "captions": (
+            (custom["table_settings"]["caption_font_size_pt"], custom["table_settings"]["caption_fg"]),
+            (custom["chart"]["caption_font_size_pt"], custom["chart"]["caption_color"]),
+        ) if custom else ((appearance.CAPTION_PT, None), (appearance.CAPTION_PT, None)),
         "log": "\n".join(x for x in log if x),
     }
 
@@ -344,9 +406,14 @@ def _docx(result: dict[str, Any], out: Path) -> Path:
         raise RenderError(f"pandoc: {exc}") from exc
     if done.returncode != 0:
         raise RenderError(f"pandoc (Word) failed:\n{done.stderr.strip()[-1500:]}")
-    docx_tables.apply(
-        target, result["table_ids"], result["table_sides"], result["table_overrides"], appearance.FONT_STACKS
-    )
+    docx_tables.captions(target, *result["captions"])
+    items = dict(result["table_overrides"])
+    if result["table_settings"]:
+        # The report's own table settings dress every captioned table without its own.
+        base = {**result["table_settings"], "cell_padding_em": 0.45, "width_percent": 100,
+                "rule_style": "solid", "borders": "horizontal"}
+        items = {table_id: items.get(table_id, base) for table_id in result["table_ids"]}
+    docx_tables.apply(target, result["table_ids"], result["table_sides"], items, appearance.FONT_STACKS)
     return target
 
 
@@ -383,6 +450,9 @@ def preview(run_name: str, doc: str | None, style: str, cite: bool) -> dict[str,
         if source.exists():
             digest.update(source.read_bytes())
     digest.update(comments.stamp(run_name))
+    # The rendering code itself: an updated app re-renders rather than serving old output.
+    for code in sorted((*Path(__file__).parent.glob("*.py"), *(config.ROOT / ".claude/scripts").glob("*.py"))):
+        digest.update(f"{code.name}:{code.stat().st_mtime_ns}".encode())
     appearance_hash = digest.hexdigest()
     meta: dict[str, Any] = {}
     try:

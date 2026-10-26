@@ -149,7 +149,13 @@ show it, and no export carries it. Given a note, it becomes a comment.
 colours, font, size, padding, width, rule weight, line type (solid, dashed, dotted,
 double) and layout (rows, grid, top-header-bottom, box, header only), with ten ready-made
 designs, for one table or all. The same settings reach the HTML, the PDF and Word
-(`backend/docx_tables.py`).
+(`backend/docx_tables.py`). Text, charts and tables are styled apart: tables and their
+captions have their own colours, fonts and sizes (the header row's and the caption's
+apart from the body's), and charts their own text colours, background, highlight and
+fonts (read by `figures.py` from the style's `chart` block), so a page colour never
+reaches them. The render tags each caption paragraph (`p.table-caption`); with the panel
+open, a click on a table's caption, header or body, or on a chart, opens its settings
+there. The menu numbers figures and tables as the report does, in document order, for the document open in the HTML tab; each document's figure and table settings are its own (`documents` in `.report-style.json`, the primary's under `values.items`). A table with no caption line gets an untitled one in the render's working copy (`appearance.with_captions`), so it is numbered and can be styled under an id taken from its header row; **Add caption to the document** writes a real caption line and moves its settings to the new id. The render's working copy also moves every caption line below its table (`appearance.captions_below`), and every render appends `LAYOUT_CSS`: captions below in 6 pt, charts at the text width (and `{width=100%}` for Word), tables held to it. The preview cache key includes the rendering code, so an updated app re-renders.
 
 **Pop out.** The Edit tab's Pop out opens the editor in its own window (in the Mac app, a
 native window). As you type, the main window's HTML tab renders the unsaved text

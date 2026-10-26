@@ -47,7 +47,7 @@ BLOCK = re.compile(r"^```figure[ \t]*\n(.*?)^```[ \t]*$", re.S | re.M)
 # which is the wrong base once the styled copy is written into export/<style>/.
 MD_IMAGE = re.compile(r"!\[([^\]]*)\]\(([^)\s]+)\)")
 
-TABLE_CAP = re.compile(r"^\*\*(?:Table|Exhibit):\*\*[ \t]*(.+?)[ \t]*\{#(T\w+)\}[ \t]*$", re.M)
+TABLE_CAP = re.compile(r"^\*\*(?:Table|Exhibit):\*\*[ \t]*(.*?)[ \t]*\{#(T\w+)\}[ \t]*$", re.M)
 XREF = re.compile(r"\[\[([FT]\w+)\]\]")
 CITE = re.compile(r"\[E\d+\]")
 
@@ -78,10 +78,17 @@ class Ctx:
 
     def __init__(self, st):
         self.st = st
-        c, f, ch = st["color"], st["fonts"], st["chart"]
+        c, f, ch = dict(st["color"]), st["fonts"], st["chart"]
+        # A chart's own text colours, background and fonts, when the style sets them,
+        # so the page palette and the charts can be styled apart.
+        for key, role in (("title_color", "ink"), ("text_color", "body"),
+                          ("note_color", "muted"), ("background", "surface"),
+                          ("highlight_color", "accent"), ("muted_mark_color", "mute_fill")):
+            if ch.get(key):
+                c[role] = ch[key]
         self.c, self.ch = c, ch
-        self.head = resolve_font(f["heading"])
-        self.body = resolve_font(f["body"])
+        self.head = resolve_font(ch.get("title_font") or f["heading"])
+        self.body = resolve_font(ch.get("label_font") or f["body"])
         self.series = st["series"]
         self.seq = st["sequential"]
         self.div = st["diverging"]
@@ -1300,6 +1307,9 @@ def build(md_path, style_name, outdir, out_md=None, formats=("png", "svg"),
             fig_style["fonts"]["heading"] = [override["heading_font"], *ctx.st["fonts"]["heading"][1:]]
             fig_style["fonts"]["body"] = [override["body_font"], *ctx.st["fonts"]["body"][1:]]
             fig_style["chart"].update({k: v for k, v in override.items() if k not in ("series", "background", "heading_font", "body_font")})
+            fig_style["chart"]["background"] = override["background"]
+            fig_style["chart"]["title_font"] = fig_style["fonts"]["heading"]
+            fig_style["chart"]["label_font"] = fig_style["fonts"]["body"]
             fig_ctx = Ctx(fig_style)
         paths = render(spec, fig_ctx, outdir, formats)
         rendered[spec["id"]] = paths

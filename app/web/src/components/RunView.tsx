@@ -11,7 +11,7 @@ import { prefs, setPref } from "../lib/prefs";
 import { useUi } from "../stores/ui";
 import Markdown from "./Markdown";
 import AppearancePanel from "./AppearancePanel";
-import type { AppearanceResponse, AppearanceValues } from "./AppearancePanel";
+import type { AppearancePick, AppearanceResponse, AppearanceValues } from "./AppearancePanel";
 import SessionView from "./SessionView";
 import CritiqueQuestionsDialog, { type CritiqueAnswers, type CritiqueQuestion } from "./CritiqueQuestionsDialog";
 import ChangesDialog, { type Subject } from "./ChangesDialog";
@@ -436,7 +436,8 @@ function elementAnchor(target: Element): Anchor | null {
   const table = target.closest("table");
   if (table) {
     // The render gives every captioned table its id, whether the caption is above or below.
-    const tagged = /^report-table-(T\w+)$/.exec(table.id);
+    // An untitled table's id (Tx…) exists only in the render, so it is found by its header row.
+    const tagged = /^report-table-(T(?!x[0-9a-f]{6})\w+)$/.exec(table.id);
     if (tagged) {
       const caption = [table.previousElementSibling, table.nextElementSibling].map((el) => /^\s*Table (\d+)\./.exec(el?.textContent ?? "")).find(Boolean);
       return { label: caption ? `Table ${caption[1]}` : "This table", element: { kind: "table", id: tagged[1] } };
@@ -454,8 +455,28 @@ function elementAnchor(target: Element): Anchor | null {
   return null;
 }
 
+/** A click on a figure or a table while the palette is open: which one, and which part. */
+function appearanceTarget(target: Element): Omit<AppearancePick, "seq"> | null {
+  const caption = target.closest("p.table-caption");
+  if (caption) return { kind: "table", id: caption.id.replace(/^report-caption-/, ""), part: "caption" };
+  const table = target.closest("table");
+  if (table) {
+    const part = target.closest("th, thead") ? "header" : target.closest("td") ? "body" : "rules";
+    const tagged = /^report-table-(T\w+)$/.exec(table.id);
+    return { kind: "table", id: tagged?.[1], part };
+  }
+  const figure = target.closest("figure");
+  if (figure) {
+    const m = /Figure (\d+)\./.exec(figure.querySelector("figcaption")?.textContent ?? "");
+    return { kind: "figure", number: m ? Number(m[1]) : undefined, part: target.closest("figcaption") ? "text" : "series" };
+  }
+  return null;
+}
+
 const PICKING_CSS = `
 body.cmt-picking figure:hover, body.cmt-picking table:hover { outline: 2px dashed #E5B300; outline-offset: 3px; cursor: copy; }
+body.ap-picking figure:hover, body.ap-picking table:hover, body.ap-picking p.table-caption:hover { outline: 2px dashed #2F6FEB; outline-offset: 3px; cursor: pointer; }
+body.ap-picking th:hover, body.ap-picking td:hover { box-shadow: inset 0 0 0 2px rgba(47, 111, 235, 0.45); }
 mark.cmt, mark.hl, sup.cmt-ref { cursor: pointer; }
 `;
 
@@ -464,9 +485,13 @@ function HtmlPane({ run, doc, version }: { run: string; doc: string | undefined;
   const styles = useQuery({ queryKey: ["styles"], queryFn: () => api.get<{ name: string; description: string }[]>("/api/styles"), staleTime: Infinity });
   const [style, setStyleState] = useState(() => place(run).style ?? "meridian");
   const [appearanceOpen, setAppearanceOpenState] = useState(() => place(run).panel === "appearance");
+  const appearanceOpenRef = useRef(appearanceOpen);
+  const [appearancePick, setAppearancePick] = useState<AppearancePick | null>(null);
   const setAppearanceOpen = (next: boolean | ((open: boolean) => boolean)) =>
     setAppearanceOpenState((open) => {
       const value = typeof next === "function" ? next(open) : next;
+      appearanceOpenRef.current = value;
+      frame.current?.contentDocument?.body?.classList.toggle("ap-picking", value);
       if (value) remember(run, { panel: "appearance" });
       else if (place(run).panel === "appearance") remember(run, { panel: null });
       return value;
@@ -542,8 +567,8 @@ function HtmlPane({ run, doc, version }: { run: string; doc: string | undefined;
     remember(run, { cite: v });
   };
   const appearance = useQuery({
-    queryKey: ["appearance", run, style, version],
-    queryFn: () => api.get<AppearanceResponse>(`/api/runs/${encodeURIComponent(run)}/appearance?${q({ style })}`),
+    queryKey: ["appearance", run, doc, style, version],
+    queryFn: () => api.get<AppearanceResponse>(`/api/runs/${encodeURIComponent(run)}/appearance?${q({ style, ...(doc ? { doc } : {}) })}`),
     retry: false,
   });
   useEffect(() => {
@@ -579,6 +604,7 @@ function HtmlPane({ run, doc, version }: { run: string; doc: string | undefined;
     if (page?.body) {
       page.body.style.zoom = `${zoom}%`;
       page.body.classList.toggle("cmt-picking", commentsOpenRef.current);
+      page.body.classList.toggle("ap-picking", appearanceOpenRef.current);
       const css = page.createElement("style");
       css.textContent = PICKING_CSS;
       page.head.appendChild(css);
@@ -628,6 +654,9 @@ function HtmlPane({ run, doc, version }: { run: string; doc: string | undefined;
         if (commentsOpenRef.current && target) {
           const found = elementAnchor(target);
           if (found) setAnchor(found);
+        } else if (appearanceOpenRef.current && target) {
+          const found = appearanceTarget(target);
+          if (found) setAppearancePick({ ...found, seq: Date.now() });
         }
       }, 0);
     });
@@ -673,11 +702,22 @@ function HtmlPane({ run, doc, version }: { run: string; doc: string | undefined;
   });
   const saveAppearance = useMutation({
     mutationFn: ({ values, rememberDefault }: { values: AppearanceValues; rememberDefault: boolean }) =>
-      api.put<AppearanceResponse>(`/api/runs/${encodeURIComponent(run)}/appearance`, { style, values, remember_default: rememberDefault }),
+      api.put<AppearanceResponse>(`/api/runs/${encodeURIComponent(run)}/appearance`, { style, values, remember_default: rememberDefault, doc }),
     onSuccess: () => {
       setAppearanceNotice("Appearance saved for this report.");
       setExported(null);
-      void client.invalidateQueries({ queryKey: ["appearance", run, style] });
+      void client.invalidateQueries({ queryKey: ["appearance", run] });
+      void rendered.refetch();
+    },
+  });
+  // The author's caption for an uncaptioned table, written into the document.
+  const addCaption = useMutation({
+    mutationFn: ({ table, title }: { table: string; title: string }) =>
+      api.post<{ id: string }>(`/api/runs/${encodeURIComponent(run)}/table-caption`, { doc, table, title }),
+    onSuccess: () => {
+      setAppearanceNotice("Caption added to the document.");
+      void client.invalidateQueries({ queryKey: ["appearance", run] });
+      void client.invalidateQueries({ queryKey: ["run-file", run] });
       void rendered.refetch();
     },
   });
@@ -686,7 +726,7 @@ function HtmlPane({ run, doc, version }: { run: string; doc: string | undefined;
     onSuccess: () => {
       setAppearanceNotice("Preset restored for this report.");
       setExported(null);
-      void client.invalidateQueries({ queryKey: ["appearance", run, style] });
+      void client.invalidateQueries({ queryKey: ["appearance", run] });
       void rendered.refetch();
     },
   });
@@ -852,8 +892,11 @@ function HtmlPane({ run, doc, version }: { run: string; doc: string | undefined;
         {appearanceOpen && (
           <Panel size={PANELS.appearance} side="right" overlayBelow={740} onClose={() => setAppearanceOpen(false)} className="bg-panel">
             <AppearancePanel
-              key={style}
+              key={`${style}/${doc ?? ""}`}
               data={appearance.data}
+              pick={appearancePick}
+              doc={doc}
+              onAddCaption={doc ? (table, title) => addCaption.mutateAsync({ table, title }).then((r) => r.id) : undefined}
               onApply={(values, rememberDefault) => saveAppearance.mutate({ values, rememberDefault })}
               onReset={() => resetAppearance.mutate()}
               onRetry={() => void appearance.refetch()}

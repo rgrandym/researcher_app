@@ -949,9 +949,9 @@ def list_styles() -> list[dict[str, str]]:
 
 
 @app.get("/api/runs/{name}/appearance")
-def report_appearance(name: str, style: str = "meridian") -> dict[str, Any]:
+def report_appearance(name: str, style: str = "meridian", doc: str | None = None) -> dict[str, Any]:
     try:
-        return appearance.view(name, style)
+        return appearance.view(name, style, doc)
     except (FileNotFoundError, ValueError) as exc:
         raise _bad(exc) from exc
 
@@ -960,12 +960,32 @@ class AppearanceBody(BaseModel):
     style: str
     values: dict[str, Any]
     remember_default: bool = False
+    doc: str | None = None
 
 
 @app.put("/api/runs/{name}/appearance")
 def save_report_appearance(name: str, body: AppearanceBody) -> dict[str, Any]:
     try:
-        return appearance.save(name, body.style, body.values, body.remember_default)
+        return appearance.save(name, body.style, body.values, body.remember_default, body.doc)
+    except (FileNotFoundError, ValueError) as exc:
+        raise _bad(exc) from exc
+
+
+class TableCaptionBody(BaseModel):
+    doc: str
+    table: str
+    title: str
+
+
+@app.post("/api/runs/{name}/table-caption")
+def add_table_caption(name: str, body: TableCaptionBody) -> dict[str, Any]:
+    """The author's caption for an uncaptioned table, written into the document."""
+    if _run_busy(name):
+        raise HTTPException(409, "An agent is working on this run. Add the caption when its turn finishes.")
+    try:
+        return {"ok": True, "id": appearance.add_caption(name, body.doc, body.table, body.title)}
+    except workspace.Conflict as exc:
+        raise _bad(exc, 409) from exc
     except (FileNotFoundError, ValueError) as exc:
         raise _bad(exc) from exc
 
