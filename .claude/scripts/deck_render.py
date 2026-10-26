@@ -10,12 +10,16 @@ pictures are `slide-001.png` onward; a hidden slide keeps its number.
 """
 
 import argparse
+import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 POWERPOINT = Path("/Applications/Microsoft PowerPoint.app")
+# PowerPoint always works in this one folder, so macOS asks for access to it once rather
+# than for every new folder. Beside the app's own (`powerpoint`), so the two never collide.
+WORK = Path(__file__).resolve().parents[2] / "app" / "data" / "office-render" / "powerpoint-cli"
 
 # Opens a copy of the deck, exports it to PDF and closes it, leaving any deck the
 # author has open alone, and quits PowerPoint only if this started it. The paths are
@@ -66,11 +70,17 @@ def pictures(deck_path, out_dir, width=1600):
     deck_path, out_dir = Path(deck_path).resolve(), Path(out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     deck = Presentation(str(deck_path))
-    # A visible folder beside the output: PowerPoint's sandbox asks for access to a hidden one.
-    with tempfile.TemporaryDirectory(prefix="render-", dir=out_dir) as work:
-        src = Path(work) / f"render-{deck_path.stem[:40]}.pptx"
+    # Emptied, never replaced: the access macOS grants belongs to this folder itself.
+    WORK.mkdir(parents=True, exist_ok=True)
+    for leftover in WORK.iterdir():
+        if leftover.is_dir():
+            shutil.rmtree(leftover)
+        else:
+            leftover.unlink()
+    try:
+        src = WORK / f"render-{deck_path.stem[:40]}.pptx"
         src.write_bytes(deck_path.read_bytes())
-        pdf = Path(work) / "deck.pdf"
+        pdf = WORK / "deck.pdf"
         powerpoint_pdf(src, pdf)
         shown = [i for i, s in enumerate(deck.slides) if s._element.get("show") != "0"]
         written = []
@@ -83,6 +93,9 @@ def pictures(deck_path, out_dir, width=1600):
                 target = out_dir / f"slide-{i + 1:03}.png"
                 page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom)).save(target)
                 written.append(target)
+    finally:
+        for leftover in WORK.iterdir():
+            leftover.unlink(missing_ok=True)
     return written
 
 

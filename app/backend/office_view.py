@@ -89,21 +89,25 @@ def html(name: str, rel: str) -> str:
     path = workspace.run_file(name, rel)
     if _is_master(run, path):
         office = revision.script("office_master")
-        source, original, _ = office.baseline(run, path.stem)
-        data = office.decode(path.read_text())
+        source, original, meta = office.baseline(run, path.stem)
+        text = path.read_text()
+        data = office.decode(text)
         office.validate(data, original)
+        # A rebuilt file differs byte for byte at every build (its zip times), so the slide
+        # pictures are keyed by what the deck is made of: the supplied file and the saved edits.
+        key = hashlib.sha256(f"{meta['sha256']}\n{text}".encode()).hexdigest()[:32]
         with tempfile.TemporaryDirectory(prefix="office-view-") as temp:
             target = Path(temp) / f"document.{data['format']}"
             with revision._office_lock:
                 office.build_native(source, data, original, target)
-            return _render(target, path.name)
+            return _render(target, path.name, key)
     if path.suffix.lower() not in OFFICE:
         raise ValueError("Choose a .xlsx workbook or .pptx presentation.")
     return _render(path, path.name)
 
 
-def _render(path: Path, title: str) -> str:
-    body = _workbook(path) if path.suffix.lower() == ".xlsx" else _deck(path)
+def _render(path: Path, title: str, key: str | None = None) -> str:
+    body = _workbook(path) if path.suffix.lower() == ".xlsx" else _deck(path, key)
     return PAGE.format(title=h.escape(title), body=body)
 
 
@@ -507,26 +511,38 @@ def _powerpoint_pdf(src: Path, pdf: Path) -> None:
     revision.script("deck_render").powerpoint_pdf(src, pdf)
 
 
-def _pictures(path: Path, deck: Any) -> tuple[str, dict[int, str]]:
-    """The cache key and slide index -> picture file, exporting through PowerPoint when not cached."""
+def _pictures(path: Path, deck: Any, key: str | None = None) -> tuple[str, dict[int, str]]:
+    """The cache key and slide index -> picture file, exporting through PowerPoint only when
+    this deck has not been drawn before. `key` names the deck's content when the file is a
+    fresh build; a file on disk is keyed by its bytes."""
     import pymupdf  # type: ignore[import-untyped,import-not-found,unused-ignore]
 
-    digest = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            digest.update(chunk)
-    key = digest.hexdigest()[:32]
+    if key is None:
+        digest = hashlib.sha256()
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                digest.update(chunk)
+        key = digest.hexdigest()[:32]
     root = config.data_dir(RENDERS)
     folder = root / key
     index = folder / "slides.json"
     with _powerpoint:
         if not index.is_file():
-            # a visible folder: PowerPoint's sandbox asks for access to a hidden one
+            # PowerPoint always works in this one folder, so macOS asks for access to it once,
+            # not for a new folder at every render. Visible: its sandbox asks for a hidden one.
+            ppt = root / "powerpoint"
+            # Emptied, never replaced: the access macOS grants belongs to this folder itself.
+            ppt.mkdir(exist_ok=True)
+            for leftover in ppt.iterdir():
+                if leftover.is_dir():
+                    shutil.rmtree(leftover)
+                else:
+                    leftover.unlink()
             work = Path(tempfile.mkdtemp(prefix=f"work-{key[:12]}-", dir=root))
             try:
-                src = work / f"preview-{key[:12]}.pptx"
+                src = ppt / f"preview-{key[:12]}.pptx"
                 shutil.copyfile(path, src)
-                pdf = work / "deck.pdf"
+                pdf = ppt / "deck.pdf"
                 _powerpoint_pdf(src, pdf)
                 src.unlink()
                 shown = [i for i, s in enumerate(deck.slides) if s._element.get("show") != "0"]
@@ -622,7 +638,7 @@ def _targets(slide: Any, shapes: Any, scale: float, origin: tuple[float, float, 
     return out
 
 
-def _deck(path: Path) -> str:
+def _deck(path: Path, key: str | None = None) -> str:
     from pptx import Presentation  # type: ignore[import-untyped,import-not-found,unused-ignore]
 
     deck = Presentation(str(path))
@@ -630,7 +646,7 @@ def _deck(path: Path) -> str:
     scale = 960 / width
     px = 960 / (width / 12700)  # px per point at this width
     try:
-        key, pictures = _pictures(path, deck)
+        key, pictures = _pictures(path, deck, key)
         banner = ""
     except Exception as exc:  # noqa: BLE001 - any failure falls back to the approximate preview
         log.warning("deck preview without PowerPoint: %s", exc)

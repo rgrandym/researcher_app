@@ -442,3 +442,30 @@ def test_slides_script_edits_and_measures_the_master(root: Path) -> None:
     assert "12 pt" in issues and "contrast" in issues
     with pytest.raises(ValueError):
         slides.apply(data, [{"op": "order", "slides": [1, 1]}])
+
+
+def test_powerpoint_draws_a_deck_once_until_it_is_edited(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import pymupdf
+
+    from backend import config, office_view
+
+    calls = []
+
+    def fake_powerpoint(src: Path, pdf: Path) -> None:
+        assert src.parent == config.data_dir(office_view.RENDERS) / "powerpoint"  # one folder, asked about once
+        calls.append(src)
+        doc = pymupdf.open()
+        for _ in Presentation(str(src)).slides:
+            doc.new_page()
+        doc.save(pdf)
+
+    monkeypatch.setattr(office_view, "_powerpoint_pdf", fake_powerpoint)
+    presentation(root)
+    content = start()
+    office_view.html(RUN, "sample.md")
+    office_view.html(RUN, "sample.md")  # a reload: the rebuilt file differs, the deck does not
+    assert len(calls) == 1
+    content["data"]["slides"][0]["shapes"][0]["box"]["x"] = 100
+    save(content)
+    office_view.html(RUN, "sample.md")
+    assert len(calls) == 2

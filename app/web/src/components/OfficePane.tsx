@@ -53,6 +53,14 @@ export function OfficeHtml({ run, path, name, version, download, onPick, onEdit,
   };
   const applyRef = useRef(apply);
   applyRef.current = apply;
+  // Exports the saved deck as the next delivered version; the delivered files stay as they are.
+  const exported = useMutation({
+    mutationFn: async () => {
+      await queue.current;
+      return api.post<{ ok: boolean; files: string[]; problems: string[] }>(`/api/runs/${encodeURIComponent(run)}/documents/${encodeURIComponent(design!.slug)}/export`, { formats: ["pptx"] });
+    },
+    onSuccess: () => ["subjects", "office-outputs", "exports"].forEach((key) => void client.invalidateQueries({ queryKey: key === "exports" ? [key] : [key, run] })),
+  });
   const pick = useRef(onPick);
   pick.current = onPick;
   const tellFrame = () => frame.current?.contentWindow?.postMessage({ type: "office-design", on: designing }, "*");
@@ -82,9 +90,17 @@ export function OfficeHtml({ run, path, name, version, download, onPick, onEdit,
       <div className="flex-1" />
       {page.isFetching && !page.isLoading && <span className="text-faint">Redrawing…</span>}
       {design && <button onClick={() => { setDesigning(!designing); setSelection(null); }} className={`rounded-md border px-2.5 py-1 hover:border-accent ${designing ? "border-accent text-accent" : "border-border text-fg"}`}>Palette and layout</button>}
+      {design && <button disabled={exported.isPending || pending > 0} title="Export the saved deck as the next version" onClick={() => exported.mutate()} className="rounded-md border border-border px-2.5 py-1 text-fg hover:border-accent disabled:opacity-40">{exported.isPending ? "Exporting…" : "Export .pptx"}</button>}
       {download && <a className="rounded-md border border-border px-2.5 py-1 text-fg hover:border-accent" href={fileUrl(run, download)} download>Download</a>}
       <button onClick={onEdit} className="rounded-md border border-accent px-2.5 py-1 text-accent hover:bg-panel">{editLabel}</button>
     </div>
+    {(exported.data || exported.isError) && <div role="status" className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-1.5 text-[0.75rem]">
+      {exported.isError ? <span className="text-bad">{exported.error.message}</span> : exported.data!.ok ? <>
+        <span className="text-good">Exported and checked by reopening the file:</span>
+        {exported.data!.files.map((file) => <a key={file} className="text-accent underline" href={fileUrl(run, file)} download>{file.split("/").slice(-2).join("/")}</a>)}
+      </> : <span className="text-bad">Export failed. {exported.data!.problems.join(" ")}</span>}
+      <button onClick={() => exported.reset()} className="ml-auto text-faint hover:text-fg">Dismiss</button>
+    </div>}
     <div className="flex min-h-0 flex-1">
       <div className="flex min-w-0 flex-1 flex-col">
         {page.isLoading && <p className="p-6 text-[0.8125rem] text-faint">Rendering…{path.toLowerCase().endsWith(".pptx") && " PowerPoint draws a new version of a deck once, which can take a minute or two."}</p>}
