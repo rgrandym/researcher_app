@@ -23,7 +23,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from backend import config, keychain, usage
+from backend import config, containment, keychain, usage
 from backend.providers.base import (
     Billing,
     ConnectionStatus,
@@ -360,7 +360,7 @@ class ClaudeProvider:
         # The research-live mod (.claude/skills/research-live) loads here too; the app does
         # its jobs itself (backend/autoedits.py, the HTML tab), so the mod stands aside.
         env["RESEARCH_APP"] = "1"
-        return env
+        return containment.env(env)
 
     def command(self, binary: str, native_session: str | None, options: TurnOptions) -> list[str]:
         cmd = [
@@ -394,8 +394,11 @@ class ClaudeProvider:
             ]
         elif options.read_only:
             cmd += ["--disallowedTools", ",".join(READ_ONLY_OFF)]
+        # Memory lives in the project, so writing it never asks for the home folder.
+        settings: dict[str, Any] = {"autoMemoryDirectory": containment.memory_dir()}
         if options.ask_rules:
-            cmd += ["--settings", json.dumps({"permissions": {"ask": options.ask_rules}})]
+            settings["permissions"] = {"ask": options.ask_rules}
+        cmd += ["--settings", json.dumps(settings)]
         if options.system_append:
             cmd += ["--append-system-prompt", options.system_append]
         return cmd
@@ -773,7 +776,9 @@ class _ControlSession:
             for r in s.get("rules") or []
             if isinstance(r, dict)
         ]
-        if self.options.tools is not None:
+        if refusal := containment.violation(tool, args):
+            decision = PermissionDecision(allow=False, message=refusal)
+        elif self.options.tools is not None:
             decision = self._restricted(tool, args)
         else:
             summary, _ = tool_summary(tool, args)

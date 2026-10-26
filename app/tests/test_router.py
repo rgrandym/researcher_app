@@ -191,7 +191,8 @@ def test_turns_run_in_auto_mode_and_ask_before_deleting(root: Path) -> None:
     assert {"Bash(rm *)", "Bash(git clean *)", "Bash(find * -delete*)"} <= set(asked)
     # A restricted turn (Improve with an agent) keeps asking for everything.
     cmd = ClaudeProvider("claude-sub").command("claude", None, TurnOptions(tools=["Read"]))
-    assert cmd[cmd.index("--permission-mode") + 1] == "default" and "--settings" not in cmd
+    assert cmd[cmd.index("--permission-mode") + 1] == "default"
+    assert "permissions" not in json.loads(cmd[cmd.index("--settings") + 1])
 
 
 def test_interface_preferences_are_kept_in_settings(data: Path) -> None:

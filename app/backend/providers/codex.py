@@ -25,7 +25,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from backend import config, keychain, usage, workspace
+from backend import config, containment, keychain, usage, workspace
 from backend.providers.base import (
     Billing,
     ConnectionStatus,
@@ -247,7 +247,7 @@ class CodexProvider:
         else:
             env.pop("CODEX_API_KEY", None)
             env.pop("OPENAI_API_KEY", None)
-        return env
+        return containment.env(env)
 
     def command(self, binary: str, thread: str | None, options: TurnOptions) -> list[str]:
         root = str(config.ROOT)
@@ -256,6 +256,9 @@ class CodexProvider:
             f'projects."{root}".trust_level': _toml("trusted"),
             "sandbox_mode": _toml("read-only" if options.read_only else "workspace-write"),
             "sandbox_workspace_write.network_access": "true",
+            # Writable: the workspace only. Scratch files go to $TMPDIR, inside app/data.
+            "sandbox_workspace_write.exclude_slash_tmp": "true",
+            "sandbox_workspace_write.exclude_tmpdir_env_var": "true",
             "approval_policy": _toml("never"),
             "web_search": _toml("disabled" if options.web_off else "live"),
         }
