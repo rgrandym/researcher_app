@@ -786,6 +786,15 @@ async def office_html(name: str, path: str) -> HTMLResponse:
         raise _bad(exc, 400) from exc
 
 
+@app.get("/api/office/render/{key}/{file}")
+def office_render_file(key: str, file: str) -> FileResponse:
+    """A slide picture or video from a deck preview's cache. Named by content hash, so it never changes."""
+    try:
+        return FileResponse(office_view.rendered(key, file), headers={"Cache-Control": "private, max-age=86400"})
+    except FileNotFoundError as exc:
+        raise _bad(exc, 404) from exc
+
+
 class ApplyChangesBody(BaseModel):
     slug: str
     mode: str = "tracked"

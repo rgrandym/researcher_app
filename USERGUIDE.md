@@ -989,7 +989,30 @@ A business plan, an investor deck, a cash-flow model, a two-pager: put it in a p
 export     the revised Word or PDF document, in the original's design
 /revise    a new version of a PowerPoint, Excel or Markdown file
 /rebuild   a new deck in the original's design, from a PDF
+/slides    a deck redesigned by an expert slide designer: you accept the plan first
 ```
+
+### Editing and redesigning slides
+
+Open a deck in the project's HTML tab. **Start editing** makes an editable copy; the
+file it came from is never changed, and exporting writes the next version beside it.
+
+- **Palette and layout** turns on Design mode. Click a box to select it, drag it to
+  move it, drag its corner to resize it, and nudge it with the arrow keys (Shift
+  moves 10 pt). The panel sets the selected text's font, size, colour, weight,
+  alignment and fill, the deck's theme colours and fonts, and replacements that
+  change a colour or a font everywhere the deck uses it. Each change is saved at
+  once; the slide pictures redraw a moment later.
+- **Edit** changes the words in text boxes and tables.
+- **`/slides`** reviews the whole deck as a slide designer would: type scale,
+  alignment, colour and contrast, density, consistency. It writes a ranked plan, waits
+  for you to accept it (all, all except some items, or design only with no wording
+  changes), applies it, looks at every slide again, and has the result reviewed
+  independently. It never changes a figure, a name or a source, and boxes you placed
+  or styled by hand stay as you left them unless you accept a change to them.
+
+Your hand edits and `/slides` work on the same copy, so you can alternate between
+them, and `/user-edits` and `/repair` keep working on the project's report as before.
 
 ### Changing one document, step by step
 

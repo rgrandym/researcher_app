@@ -125,6 +125,17 @@ def offline_plan_reads(monkeypatch: pytest.MonkeyPatch) -> None:
     usage._token_owner.clear()
 
 
+@pytest.fixture(autouse=True)
+def no_powerpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test drives the real PowerPoint; a test that wants slide pictures supplies its own export."""
+    from backend import office_view
+
+    def absent(src: Path, pdf: Path) -> None:
+        raise RuntimeError("PowerPoint is not installed on this computer")
+
+    monkeypatch.setattr(office_view, "_powerpoint_pdf", absent)
+
+
 def _write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text)

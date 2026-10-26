@@ -207,3 +207,11 @@ def test_word_document_master_exports_without_a_plan(root: Path) -> None:
     master.write_text(master.read_text().replace("Three founders", "Three founders [UNVERIFIED]"))
     result = asyncio.run(main.document_export(RUN, "plan", main.DocumentExportBody(formats=["docx"])))
     assert not result["ok"] and "UNVERIFIED" in result["output"]
+
+
+def test_a_delivered_file_finds_its_original_whatever_its_version_marks() -> None:
+    key = revision._stem_key
+    assert key("OptimaBiolabs_pitch_deck_V17_10_09_2026") == key("OptimaBiolabs_pitch_deck_V18")
+    assert key("optima-biolabs-pitch-deck") == key("OptimaBiolabs_pitch_deck_V18")
+    assert key("v4 - Cash flow forecast-2") == key("v5 - Cash flow forecast")
+    assert key("Business Plan v0.03") != key("Pitch deck v2")

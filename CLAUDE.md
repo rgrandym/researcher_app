@@ -108,6 +108,8 @@ PowerPoint, Excel, Markdown, edited in place) or `/rebuild` (a PDF, or a new
 design). It improves a document the author supplied in `external_data/`, keeping
 its citation system, styles, fonts, colours, tone and voice; nothing reaches the
 document until the author accepts it. Doctrine: `.claude/references/revision.md`.
+`/slides` redesigns a deck through its editable master the same way: plan, the author
+accepts, apply, look, independent review. Doctrine: `.claude/references/slide-design.md`.
 
 Each stage is a skill in `.claude/skills/`. Doctrine shared by several of them
 lives in `.claude/references/` and is **pointed to, never restated**: a rule

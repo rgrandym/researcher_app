@@ -1339,6 +1339,7 @@ export default function RunView({ name, file }: { name: string; file?: string })
               editLabel={officeSubject?.master ? "Edit" : "Start editing"}
               onEdit={() => { setOfficeFocus(undefined); setEditPath(undefined); setTab("edit"); }}
               onPick={(focus) => { setOfficeFocus(focus); setEditPath(undefined); setTab("edit"); }}
+              design={officeSubject?.master && officeSubject.format === "pptx" ? { slug: officeSubject.slug, master: officeSubject.master } : undefined}
             />
           )}
           {officeSubject && tab === "edit" && editing === shown && <OfficePane key={officeSubject.slug} run={name} subject={officeSubject} edit focus={officeFocus} onReady={onSaved} />}

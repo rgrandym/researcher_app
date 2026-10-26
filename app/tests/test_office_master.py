@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -334,6 +335,46 @@ def test_delivered_presentation_renders_slides_to_click(root: Path) -> None:
     (out / "sample.pptx").write_bytes(source.read_bytes())
     page = asyncio.run(main.office_html(RUN, "deliverable/sample/v1/sample.pptx")).body.decode()
     assert 'data-slide="0"' in page and "data-shape=" in page and "<table>" in page
+    assert "Approximate preview: PowerPoint is not installed" in page
+
+
+def test_presentation_shows_powerpoints_pictures_with_playing_video(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import io
+
+    import pymupdf
+    from backend import office_view
+
+    run, source = presentation(root)
+    deck = Presentation(str(source))
+    movie = deck.slides[1].shapes.add_movie(io.BytesIO(b"\x00\x00\x00\x18ftypmp42"), Inches(1), Inches(1), Inches(4), Inches(3), mime_type="video/mp4")
+    deck.save(source)
+    exports: list[Path] = []
+
+    def export(src: Path, pdf: Path) -> None:  # stands in for PowerPoint: one page per slide
+        exports.append(src)
+        with pymupdf.open() as doc:
+            for _ in range(2):
+                doc.new_page(width=720, height=405)
+            doc.save(pdf)
+
+    monkeypatch.setattr(office_view, "_powerpoint_pdf", export)
+    out = run / "deliverable/sample/v1"
+    out.mkdir(parents=True)
+    (out / "sample.pptx").write_bytes(source.read_bytes())
+    page = asyncio.run(main.office_html(RUN, "deliverable/sample/v1/sample.pptx")).body.decode()
+    assert "Approximate" not in page and page.count('class="page"') == 2
+    assert 'class="shape hit edit"' in page and f'data-shape="{movie.shape_id}"' in page
+    video = re.search(r'<video[^>]*src="/api/office/render/(\w+)/([\w.-]+)\?token=', page)
+    assert video and video.group(2).endswith(".mp4")
+    served = main.office_render_file(video.group(1), video.group(2))
+    assert Path(served.path).read_bytes().endswith(b"ftypmp42")
+    picture = re.search(r'class="page" src="/api/office/render/\w+/(slide-001\.png)', page)
+    assert picture and main.office_render_file(video.group(1), picture.group(1))
+    asyncio.run(main.office_html(RUN, "deliverable/sample/v1/sample.pptx"))
+    assert len(exports) == 1  # the second view reads the cache
+    for bad in ("../slides.json", ".hidden", "slides.json/.."):
+        with pytest.raises(HTTPException):
+            main.office_render_file(video.group(1), bad)
 
 
 def test_let_is_expanded_for_the_calculation_engine() -> None:
@@ -343,3 +384,61 @@ def test_let_is_expanded_for_the_calculation_engine() -> None:
     nested = "=_xlfn.LET(_xlpm.x, C$1, _xlfn.LET(_xlpm.y, _xlpm.x*2, _xlpm.y+_xlpm.x))"
     assert _without_let(nested) == "=((((C$1)*2)+(C$1)))"
     assert _without_let('=SUM(A1:A3) + N("LET(x)")') == '=SUM(A1:A3)+N("LET(x)")'
+
+
+def test_slide_design_moves_restyles_and_rethemes_in_export(root: Path) -> None:
+    run, source = presentation(root)
+    content = start()
+    assert "Georgia" in content["palette"]["fonts"] and "0A141E" in content["palette"]["colors"]
+    data = content["data"]
+    title = data["slides"][0]["shapes"][0]
+    assert title["box"] == {"x": 72.0, "y": 72.0, "w": 432.0, "h": 72.0}
+    assert title["style"] == {"font": "Georgia", "size": 24.0, "bold": True, "color": "0A141E"}
+    title["box"]["x"] = 144
+    title["style"].update(size=30, color="AA0000")
+    data["theme"]["colors"]["accent1"] = "123456"
+    data["theme"]["fonts"]["major"] = "Georgia"
+    data["theme"]["swap_fonts"] = {"Georgia": "Helvetica"}
+    save(content)
+    result = export("pptx")
+    deck = Presentation(run / result["files"][0])
+    shape = deck.slides[0].shapes[0]
+    run_ = shape.text_frame.paragraphs[0].runs[0]
+    assert shape.left == Inches(2) and shape.top == Inches(1)
+    assert run_.font.size == Pt(30) and str(run_.font.color.rgb) == "AA0000"
+    assert run_.font.name == "Helvetica"  # the swap reaches the box's own font
+    theme = revision.script("office_master")._read_theme(deck)
+    assert theme["colors"]["accent1"] == "123456" and theme["fonts"]["major"] == "Georgia"
+    assert shape.text == "Our plan" and "Private speaker note" in deck.slides[0].notes_slide.notes_text_frame.text
+
+
+def test_slide_design_edits_that_would_lose_something_are_refused(root: Path) -> None:
+    presentation(root)
+    content = start()
+    title = content["data"]["slides"][0]["shapes"][0]
+    for broken in ({**title, "style": {}}, {**title, "box": {"x": 1, "y": 1, "w": -5, "h": 1}},
+                   {**title, "style": {**title["style"], "color": "red"}}):
+        content["data"]["slides"][0]["shapes"][0] = broken
+        with pytest.raises(ValueError):
+            save(content)
+
+
+def test_slides_script_edits_and_measures_the_master(root: Path) -> None:
+    run, _ = presentation(root)
+    start()
+    slides = revision.script("slides")
+    office = revision.script("office_master")
+    master = run / "sample.md"
+    data = office.decode(master.read_text())
+    data = slides.apply(data, [
+        {"op": "box", "slide": 1, "shape": data["slides"][0]["shapes"][0]["id"], "box": {"x": 40}},
+        {"op": "style", "slide": 1, "shape": data["slides"][0]["shapes"][0]["id"], "style": {"size": 12, "fill": "FFFFFF", "color": "EEEEEE"}},
+        {"op": "swap_color", "from": "0A141E", "to": "111111"},
+        {"op": "order", "slides": [2, 1]},
+    ])
+    assert data["slides"][1]["shapes"][0]["box"]["x"] == 40 and data["theme"]["swap_colors"] == {"0A141E": "111111"}
+    report = slides.inspect(data)
+    issues = " ".join(report["slides"][1]["issues"])
+    assert "12 pt" in issues and "contrast" in issues
+    with pytest.raises(ValueError):
+        slides.apply(data, [{"op": "order", "slides": [1, 1]}])

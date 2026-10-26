@@ -3,69 +3,134 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, fileUrl } from "../lib/api";
 import { place, rememberDraft } from "../lib/places";
 import type { Subject } from "./ChangesDialog";
+import DeckDesign from "./DeckDesign";
+import type { DeckSelection } from "./DeckDesign";
 
 /** Where a click on the rendered page asks the editor to open. */
 export interface OfficeFocus { sheet?: string; cell?: string; slide?: number; at: number }
 
-/** A workbook or deck rendered as a page; a click on a cell or slide calls onPick. */
-export function OfficeHtml({ run, path, name, version, download, onPick, onEdit, editLabel = "Edit" }: {
+/** A workbook or deck rendered as a page; a click on a cell or slide calls onPick. A deck
+ * with an editable master (`design`) also opens Palette and layout: boxes are moved, resized
+ * and restyled on the page, and the deck's theme and colours changed, each saved to the master. */
+export function OfficeHtml({ run, path, name, version, download, onPick, onEdit, editLabel = "Edit", design }: {
   run: string; path: string; name: string; version: number; download?: string; onPick: (focus: OfficeFocus) => void; onEdit: () => void; editLabel?: string;
+  design?: { slug: string; master: string };
 }) {
+  const client = useQueryClient();
   const frame = useRef<HTMLIFrameElement>(null);
   const page = useQuery({
     queryKey: ["office-html", run, path, version],
     queryFn: () => api.get<string>(`/api/runs/${encodeURIComponent(run)}/office/html?${new URLSearchParams({ path })}`),
     refetchOnWindowFocus: false,
   });
+  const [designing, setDesigning] = useState(false);
+  const [selection, setSelection] = useState<DeckSelection | null>(null);
+  const [pending, setPending] = useState(0);
+  const [failure, setFailure] = useState("");
+  const officeKey = ["office", run, design?.slug];
+  const officeUrl = design ? `/api/runs/${encodeURIComponent(run)}/documents/${encodeURIComponent(design.slug)}/office` : "";
+  const content = useQuery({ queryKey: officeKey, queryFn: () => api.get<Content>(officeUrl), enabled: Boolean(design && designing), refetchOnWindowFocus: false });
+  // Changes are saved one after another, each against the master's latest saved time, and
+  // the slide pictures are drawn again once the changes stop for a moment.
+  const queue = useRef(Promise.resolve());
+  const redraw = useRef<ReturnType<typeof setTimeout>>();
+  const apply = (change: (data: OfficeData) => OfficeData) => {
+    if (!design) return;
+    setPending((n) => n + 1); setFailure("");
+    queue.current = queue.current.then(async () => {
+      const current = await client.ensureQueryData({ queryKey: officeKey, queryFn: () => api.get<Content>(officeUrl) });
+      const data = change(current.data);
+      const text = encode(data);
+      const saved = await api.put<{ mtime: number }>(`/api/runs/${encodeURIComponent(run)}/file`, { path: design.master, content: text, mtime: current.mtime });
+      client.setQueryData(officeKey, { ...current, data, text, mtime: saved.mtime });
+      clearTimeout(redraw.current);
+      redraw.current = setTimeout(() => void client.invalidateQueries({ queryKey: ["office-html", run, path] }), 1500);
+    }).catch((e: Error) => {
+      setFailure(`${e.message} The page shows the last saved design.`);
+      void client.invalidateQueries({ queryKey: officeKey });
+      void client.invalidateQueries({ queryKey: ["office-html", run, path] });
+    }).finally(() => setPending((n) => n - 1));
+  };
+  const applyRef = useRef(apply);
+  applyRef.current = apply;
   const pick = useRef(onPick);
   pick.current = onPick;
+  const tellFrame = () => frame.current?.contentWindow?.postMessage({ type: "office-design", on: designing }, "*");
+  useEffect(tellFrame, [designing]);
   useEffect(() => {
     const listen = (e: MessageEvent) => {
-      const m = e.data as { type?: string; sheet?: string; cell?: string; slide?: number };
-      if (e.source !== frame.current?.contentWindow || m?.type !== "office-pick") return;
-      pick.current({ sheet: m.sheet, cell: m.cell, slide: m.slide, at: Date.now() });
+      const m = e.data as { type?: string; sheet?: string; cell?: string; slide?: number; shape?: string; box?: Box };
+      if (e.source !== frame.current?.contentWindow) return;
+      if (m?.type === "office-pick") pick.current({ sheet: m.sheet, cell: m.cell, slide: m.slide, at: Date.now() });
+      if ((m?.type === "office-select" || m?.type === "office-box") && m.slide !== undefined && m.shape) {
+        const at = { slide: m.slide, shape: m.shape };
+        setSelection(at);
+        if (m.type === "office-box" && m.box) {
+          const box = m.box;
+          applyRef.current((d) => ({
+            ...d, slides: d.slides!.map((s, i) => i !== at.slide ? s : { ...s, shapes: s.shapes.map((sh) => sh.id === at.shape && sh.box ? { ...sh, box } : sh) }),
+          }));
+        }
+      }
     };
     window.addEventListener("message", listen);
     return () => window.removeEventListener("message", listen);
   }, []);
   return <div className="flex h-full flex-col">
     <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-1.5 text-[0.75rem] text-muted">
-      <span className="min-w-0 truncate">{name} · click a cell or slide to edit it there</span>
+      <span className="min-w-0 truncate">{name} · {designing ? "click a box to select it; drag to move, drag its corner to resize" : "click a cell or slide to edit it there"}</span>
       <div className="flex-1" />
+      {page.isFetching && !page.isLoading && <span className="text-faint">Redrawing…</span>}
+      {design && <button onClick={() => { setDesigning(!designing); setSelection(null); }} className={`rounded-md border px-2.5 py-1 hover:border-accent ${designing ? "border-accent text-accent" : "border-border text-fg"}`}>Palette and layout</button>}
       {download && <a className="rounded-md border border-border px-2.5 py-1 text-fg hover:border-accent" href={fileUrl(run, download)} download>Download</a>}
       <button onClick={onEdit} className="rounded-md border border-accent px-2.5 py-1 text-accent hover:bg-panel">{editLabel}</button>
     </div>
-    {page.isLoading && <p className="p-6 text-[0.8125rem] text-faint">Rendering…</p>}
-    {page.isError && <p role="alert" className="p-6 text-[0.8125rem] text-bad">{page.error.message}</p>}
-    {page.data && <iframe ref={frame} title={path} sandbox="allow-scripts" srcDoc={page.data} className="min-h-0 w-full flex-1 border-0 bg-white" />}
+    <div className="flex min-h-0 flex-1">
+      <div className="flex min-w-0 flex-1 flex-col">
+        {page.isLoading && <p className="p-6 text-[0.8125rem] text-faint">Rendering…{path.toLowerCase().endsWith(".pptx") && " PowerPoint draws a new version of a deck once, which can take a minute or two."}</p>}
+        {page.isError && <p role="alert" className="p-6 text-[0.8125rem] text-bad">{page.error.message}</p>}
+        {page.data && <iframe ref={frame} title={path} sandbox="allow-scripts" srcDoc={page.data} onLoad={tellFrame} className="min-h-0 w-full flex-1 border-0 bg-white" />}
+      </div>
+      {design && designing && <aside className="w-72 shrink-0 border-l border-border bg-surface">
+        <DeckDesign content={content.data} selection={selection} onApply={apply} pending={pending > 0} error={failure || (content.isError ? content.error.message : "")} />
+      </aside>}
+    </div>
   </div>;
 }
 
 type CellKind = "text" | "number" | "formula" | "boolean" | "date" | "datetime" | "time" | "error" | "readonly";
 interface Cell { kind: CellKind; value: string | number | boolean }
 interface Sheet { id: string; name: string; cells: Record<string, Cell> }
-interface TextShape { id: string; kind: "text"; paragraphs: string[] }
-interface TableShape { id: string; kind: "table"; rows: string[][] }
-interface Slide { id: string; shapes: (TextShape | TableShape)[] }
-interface OfficeData {
+/** A shape's position and size on the slide, in points. */
+export interface Box { x: number; y: number; w: number; h: number }
+export interface TextStyle { font?: string; size?: number; color?: string; bold?: boolean; italic?: boolean; fill?: string; align?: "left" | "center" | "right" | "justify" }
+export interface TextShape { id: string; kind: "text"; paragraphs: string[]; box?: Box; style?: TextStyle }
+export interface TableShape { id: string; kind: "table"; rows: string[][]; box?: Box }
+/** A picture, chart, video or group: it can be moved and resized, not rewritten. */
+export interface ObjectShape { id: string; kind: "object"; name: string; box?: Box }
+export type Shape = TextShape | TableShape | ObjectShape;
+export interface Slide { id: string; shapes: Shape[] }
+export interface DeckTheme { colors?: Record<string, string>; fonts?: { major?: string; minor?: string }; swap_colors?: Record<string, string>; swap_fonts?: Record<string, string> }
+export interface OfficeData {
   version: 1;
   format: "xlsx" | "pptx";
   design: "preserve" | "new";
   sheets?: Sheet[];
   slides?: Slide[];
+  theme?: DeckTheme;
 }
-interface Content { data: OfficeData; text: string; mtime: number; source: string }
+export interface Content { data: OfficeData; text: string; mtime: number; source: string; palette?: { colors: string[]; fonts: string[] } }
 
-function encode(data: OfficeData): string {
+export function encode(data: OfficeData): string {
   return `<!-- office-master:1 -->\n\n# ${data.format.toUpperCase()} document\n\n\`\`\`office\n${JSON.stringify(data, null, 2)}\n\`\`\`\n`;
 }
-function decode(text: string): OfficeData {
+export function decode(text: string): OfficeData {
   const match = /```office\n([\s\S]*)\n```/.exec(text);
   if (!match) throw new Error("Keep the office block containing the document data.");
   const data = JSON.parse(match[1]) as OfficeData;
   if (data.version !== 1 || !["xlsx", "pptx"].includes(data.format) || !["new", "preserve"].includes(data.design)) throw new Error("Invalid document format or design.");
   if (data.format === "xlsx" && (!Array.isArray(data.sheets) || !data.sheets.length || data.sheets.some((s) => !s || typeof s.id !== "string" || typeof s.name !== "string" || !s.cells || typeof s.cells !== "object" || Object.values(s.cells).some((c) => !c || !["text", "number", "formula", "boolean", "date", "datetime", "time", "error", "readonly"].includes(c.kind))))) throw new Error("Each workbook needs sheets with names and typed cells.");
-  if (data.format === "pptx" && (!Array.isArray(data.slides) || !data.slides.length || data.slides.some((s) => !s || typeof s.id !== "string" || !Array.isArray(s.shapes) || s.shapes.some((sh) => !sh || typeof sh.id !== "string" || (sh.kind === "text" ? !Array.isArray(sh.paragraphs) || sh.paragraphs.some((p) => typeof p !== "string") : sh.kind !== "table" || !Array.isArray(sh.rows) || sh.rows.some((r) => !Array.isArray(r) || r.some((v) => typeof v !== "string"))))))) throw new Error("Each presentation needs slides with text or table shapes.");
+  if (data.format === "pptx" && (!Array.isArray(data.slides) || !data.slides.length || data.slides.some((s) => !s || typeof s.id !== "string" || !Array.isArray(s.shapes) || s.shapes.some((sh) => !sh || typeof sh.id !== "string" || (sh.kind === "text" ? !Array.isArray(sh.paragraphs) || sh.paragraphs.some((p) => typeof p !== "string") : sh.kind === "object" ? typeof sh.name !== "string" : sh.kind !== "table" || !Array.isArray(sh.rows) || sh.rows.some((r) => !Array.isArray(r) || r.some((v) => typeof v !== "string"))))))) throw new Error("Each presentation needs slides with text, table or object shapes.");
   return data;
 }
 function column(index: number): string {
@@ -209,10 +274,10 @@ function PresentationEditor({ slides, onChange, focus }: { slides: Slide[]; onCh
         if (window.confirm(`Remove slide ${index + 1} from the edited presentation?`)) { onChange(slides.filter((s) => s.id !== slide.id)); setIndex(Math.max(0, index - 1)); }
       }}>Remove slide</button>
     </div>
-    <p className="text-[0.75rem] text-muted">Edit slide text and table cells below. Images, charts, speaker notes, and slide layout are retained in the exported deck. Open the PowerPoint export to inspect the complete design.</p>
+    <p className="text-[0.75rem] text-muted">Edit slide text and table cells below. Images, charts, speaker notes, and slide layout are retained in the exported deck. To move, resize or restyle a box, or change the deck's colours and fonts, use Palette and layout in the HTML tab.</p>
     <section aria-label={`Slide ${index + 1} content`} className="space-y-4 rounded border border-border bg-surface p-6 shadow-sm">
-      {slide.shapes.length === 0 && <p className="text-muted">This slide contains no editable text or tables. Add a text box to write on it.</p>}
-      {slide.shapes.map((shape, si) => shape.kind === "text" ? <label className="block" key={shape.id}>
+      {!slide.shapes.some((s) => s.kind !== "object") && <p className="text-muted">This slide contains no editable text or tables. Add a text box to write on it.</p>}
+      {slide.shapes.map((shape, si) => shape.kind === "object" ? null : shape.kind === "text" ? <label className="block" key={shape.id}>
         <span className="text-[0.75rem] text-muted">Text box {si + 1}</span>
         <textarea aria-label={`Text box ${si + 1}`} className={`${control} mt-1 w-full resize-y leading-6`} rows={Math.max(2, shape.paragraphs.length + 1)} value={shape.paragraphs.join("\n")} onChange={(e) => update(slide.shapes.map((s) => s.id === shape.id ? { ...shape, paragraphs: e.target.value.split("\n") } : s))} />
       </label> : <div key={shape.id} className="overflow-auto"><table aria-label={`Table ${si + 1}`} className="w-full"><tbody>

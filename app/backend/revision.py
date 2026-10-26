@@ -290,17 +290,23 @@ def office_content(name: str, slug: str) -> dict[str, Any]:
     _find(run, slug)
     office = script("office_master")
     _, master = office.paths(run, slug)
-    _, original, meta = office.baseline(run, slug)
+    source, original, meta = office.baseline(run, slug)
     text = master.read_text()
     data = office.decode(text)
     office.validate(data, original)
-    return {"data": data, "text": text, "master": master.name, "mtime": master.stat().st_mtime, "source": meta["source"]}
+    result = {"data": data, "text": text, "master": master.name, "mtime": master.stat().st_mtime, "source": meta["source"]}
+    if data["format"] == "pptx":
+        result["palette"] = office.palette(source)  # the colours and fonts the deck sets, for swaps
+    return result
 
 
 def _stem_key(name: str) -> str:
-    """A file's name without version marks: "v4 - Cash flow forecast-2" → "cash-flow-forecast"."""
+    """A file's name without version or date marks, and without hyphens, so the spacing of a
+    name does not matter: "v4 - Cash flow forecast-2" → "cashflowforecast",
+    "OptimaBiolabs_pitch_deck_V17_10_09_2026" and "optima-biolabs-pitch-deck" → "optimabiolabspitchdeck"."""
     key = script("subject").slug_of(name)
-    return re.sub(r"^v\d+-|-(?:v?\d+)$", "", key)
+    key = re.sub(r"(?:-v?\d+)+$", "", re.sub(r"^v\d+-", "", key))
+    return key.replace("-", "")
 
 
 def _original_of(run: Path, slug: str, path: Path) -> str | None:
@@ -310,7 +316,7 @@ def _original_of(run: Path, slug: str, path: Path) -> str | None:
     if item:
         return str(item["path"])
     ext = run / "external_data"
-    keys = {slug, _stem_key(path.stem)}
+    keys = {_stem_key(slug), _stem_key(path.stem)}
     found = [f for f in sorted(ext.rglob(f"*{path.suffix}")) if f.is_file() and not f.name.startswith(".")
              and f.suffix.lower() == path.suffix.lower() and _stem_key(f.stem) in keys
              and "ai_reports" not in f.relative_to(ext).parts] if ext.is_dir() else []

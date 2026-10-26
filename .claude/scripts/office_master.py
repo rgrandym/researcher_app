@@ -71,6 +71,259 @@ def walk_shapes(shapes, prefix=""):
             yield from walk_shapes(shape.shapes, key + "/")
 
 
+# ---------------------------------------------------------------- slide design
+
+A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+THEME_COLORS = ("dk1", "lt1", "dk2", "lt2", "accent1", "accent2", "accent3", "accent4",
+                "accent5", "accent6", "hlink", "folHlink")
+STYLE_KEYS = {"font", "size", "color", "bold", "italic", "fill", "align"}
+ALIGN = {"left": 1, "center": 2, "right": 3, "justify": 4}
+EMU_PER_PT = 12700
+
+
+def _hexcolor(value):
+    return isinstance(value, str) and re.fullmatch(r"[0-9A-F]{6}", value) is not None
+
+
+def _box(shape):
+    if None in (shape.left, shape.top, shape.width, shape.height):
+        return None
+    return {k: round(v / EMU_PER_PT, 2) for k, v in
+            (("x", shape.left), ("y", shape.top), ("w", shape.width), ("h", shape.height))}
+
+
+def _rgb(color):
+    try:
+        return str(color.rgb) if color.type == 1 else None  # MSO_COLOR_TYPE.RGB
+    except AttributeError:
+        return None
+
+
+def _style(shape):
+    """The look of a text shape's first run, as far as it is set on the shape itself."""
+    style = {}
+    first = next((r for p in shape.text_frame.paragraphs for r in p.runs), None)
+    if first is not None:
+        font = first.font
+        if font.name:
+            style["font"] = font.name
+        if font.size:
+            style["size"] = round(font.size.pt, 2)
+        if font.bold is not None:
+            style["bold"] = font.bold
+        if font.italic is not None:
+            style["italic"] = font.italic
+        if (color := _rgb(font.color)):
+            style["color"] = color
+    alignment = shape.text_frame.paragraphs[0].alignment
+    names = {v: k for k, v in ALIGN.items()}
+    if alignment is not None and int(alignment) in names:
+        style["align"] = names[int(alignment)]
+    try:
+        if shape.fill.type == 1 and (fill := _rgb(shape.fill.fore_color)):  # MSO_FILL.SOLID
+            style["fill"] = fill
+    except (AttributeError, TypeError):
+        pass
+    return style
+
+
+def _theme_parts(deck):
+    from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+
+    parts = []
+    for master in deck.slide_masters:
+        part = master.part.part_related_by(RT.THEME)
+        if part not in parts:
+            parts.append(part)
+    return parts
+
+
+def _read_theme(deck):
+    from lxml import etree
+
+    root = etree.fromstring(_theme_parts(deck)[0].blob)
+    colors = {}
+    scheme = root.find(f".//{A}clrScheme")
+    for name in THEME_COLORS:
+        el = scheme.find(A + name) if scheme is not None else None
+        if el is not None and len(el):
+            value = el[0].get("val") if el[0].tag == A + "srgbClr" else el[0].get("lastClr")
+            if value and _hexcolor(value.upper()):
+                colors[name] = value.upper()
+    fonts = {}
+    for key, tag in (("major", "majorFont"), ("minor", "minorFont")):
+        latin = root.find(f".//{A}{tag}/{A}latin")
+        if latin is not None and latin.get("typeface"):
+            fonts[key] = latin.get("typeface")
+    return {"colors": colors, "fonts": fonts}
+
+
+def _write_theme(deck, theme, prior):
+    """Set the theme colours and fonts that changed, in every slide master's theme."""
+    from lxml import etree
+
+    colors = {k: v for k, v in theme.get("colors", {}).items() if prior.get("colors", {}).get(k) != v}
+    fonts = {k: v for k, v in theme.get("fonts", {}).items() if prior.get("fonts", {}).get(k) != v}
+    if not colors and not fonts:
+        return
+    for part in _theme_parts(deck):
+        root = etree.fromstring(part.blob)
+        scheme = root.find(f".//{A}clrScheme")
+        for name, value in colors.items():
+            el = scheme.find(A + name)
+            for child in list(el):
+                el.remove(child)
+            etree.SubElement(el, A + "srgbClr").set("val", value)
+        for key, value in fonts.items():
+            latin = root.find(f".//{A}{'majorFont' if key == 'major' else 'minorFont'}/{A}latin")
+            if latin is not None:
+                latin.set("typeface", value)
+        part._blob = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+
+
+def _runs(shape):
+    frames = [shape.text_frame] if shape.has_text_frame else []
+    if getattr(shape, "has_table", False) and shape.has_table:
+        frames += [cell.text_frame for row in shape.table.rows for cell in row.cells]
+    for frame in frames:
+        for paragraph in frame.paragraphs:
+            yield from paragraph.runs
+
+
+def _apply_style(shape, style, prior):
+    from pptx.dml.color import RGBColor
+    from pptx.util import Pt
+
+    changed = {k: v for k, v in style.items() if prior.get(k) != v}
+    for run in _runs(shape) if changed.keys() - {"align", "fill"} else ():
+        if "font" in changed:
+            run.font.name = changed["font"]
+        if "size" in changed:
+            run.font.size = Pt(changed["size"])
+        if "bold" in changed:
+            run.font.bold = changed["bold"]
+        if "italic" in changed:
+            run.font.italic = changed["italic"]
+        if "color" in changed:
+            run.font.color.rgb = RGBColor.from_string(changed["color"])
+    if "align" in changed:
+        for paragraph in shape.text_frame.paragraphs:
+            paragraph.alignment = ALIGN[changed["align"]]
+    if "fill" in changed:
+        shape.fill.solid()
+        shape.fill.fore_color.rgb = RGBColor.from_string(changed["fill"])
+
+
+def _swap(deck, theme):
+    """Replace a colour or a font wherever the deck sets it on text or a shape's fill."""
+    from pptx.dml.color import RGBColor
+
+    colors = theme.get("swap_colors") or {}
+    fonts = theme.get("swap_fonts") or {}
+    if not colors and not fonts:
+        return
+    for slide in deck.slides:
+        for _, shape in walk_shapes(slide.shapes):
+            for run in _runs(shape):
+                if run.font.name in fonts:
+                    run.font.name = fonts[run.font.name]
+                if (color := _rgb(run.font.color)) in colors:
+                    run.font.color.rgb = RGBColor.from_string(colors[color])
+            try:
+                if shape.fill.type == 1 and (fill := _rgb(shape.fill.fore_color)) in colors:
+                    shape.fill.fore_color.rgb = RGBColor.from_string(colors[fill])
+            except (AttributeError, TypeError):
+                pass
+
+
+def palette(path):
+    """The colours and fonts a deck sets on its text and shapes, most used first."""
+    from collections import Counter
+    from pptx import Presentation
+
+    deck = Presentation(path)
+    colors, fonts = Counter(), Counter()
+    for slide in deck.slides:
+        for _, shape in walk_shapes(slide.shapes):
+            for run in _runs(shape):
+                if run.font.name:
+                    fonts[run.font.name] += 1
+                if (color := _rgb(run.font.color)):
+                    colors[color] += 1
+            try:
+                if shape.fill.type == 1 and (fill := _rgb(shape.fill.fore_color)):
+                    colors[fill] += 1
+            except (AttributeError, TypeError):
+                pass
+    return {"colors": [c for c, _ in colors.most_common(24)], "fonts": [f for f, _ in fonts.most_common(12)]}
+
+
+def _check_box(box):
+    if not isinstance(box, dict) or set(box) != {"x", "y", "w", "h"} or any(
+            type(v) not in (int, float) or not math.isfinite(v) or abs(v) > 20000 for v in box.values()):
+        raise ValueError("A box needs x, y, w and h in points.")
+    if box["w"] < 0 or box["h"] < 0:  # lines and connectors have no height or width
+        raise ValueError("A box cannot have a negative width or height.")
+
+
+def _check_style(style, prior):
+    if not isinstance(style, dict) or not set(style) <= STYLE_KEYS:
+        raise ValueError("A text style takes font, size, color, bold, italic, fill and align.")
+    if not set(prior) <= set(style):
+        raise ValueError("A style setting can be changed but not removed.")
+    for key, value in style.items():
+        ok = {"font": lambda v: isinstance(v, str) and 0 < len(v) <= 64,
+              "size": lambda v: type(v) in (int, float) and 1 <= v <= 400,
+              "color": _hexcolor, "fill": _hexcolor,
+              "bold": lambda v: type(v) is bool, "italic": lambda v: type(v) is bool,
+              "align": lambda v: v in ALIGN}[key](value)
+        if not ok:
+            raise ValueError(f"Invalid text style {key}: {value!r}.")
+
+
+def _check_theme(theme, prior):
+    if not isinstance(theme, dict) or not set(theme) <= {"colors", "fonts", "swap_colors", "swap_fonts"}:
+        raise ValueError("A theme takes colors, fonts, swap_colors and swap_fonts.")
+    colors, fonts = theme.get("colors", {}), theme.get("fonts", {})
+    if not isinstance(colors, dict) or not set(colors) <= set(THEME_COLORS) or not all(map(_hexcolor, colors.values())):
+        raise ValueError("Theme colours are six-digit hex values for dk1 … folHlink.")
+    if not isinstance(fonts, dict) or not set(fonts) <= {"major", "minor"} or not all(
+            isinstance(v, str) and 0 < len(v) <= 64 for v in fonts.values()):
+        raise ValueError("Theme fonts are major (headings) and minor (body) typefaces.")
+    if not set(prior.get("colors", {})) <= set(colors) or not set(prior.get("fonts", {})) <= set(fonts):
+        raise ValueError("Theme colours and fonts can be changed but not removed.")
+    for key, check in (("swap_colors", _hexcolor), ("swap_fonts", lambda v: isinstance(v, str) and 0 < len(v) <= 64)):
+        swap = theme.get(key, {})
+        if not isinstance(swap, dict) or not all(check(k) and check(v) for k, v in swap.items()):
+            raise ValueError(f"{key} maps an old value to a new one.")
+
+
+def _like(actual, expected):
+    """Make the read-back deck comparable with the master: leave out what an older master
+    does not record, carry swaps into the styles they reach (swaps are not read back), and
+    skip styles under the new design, which rewrites every font."""
+    theme = expected.get("theme", {})
+    colors, fonts = theme.pop("swap_colors", None) or {}, theme.pop("swap_fonts", None) or {}
+    if "theme" not in expected:
+        actual.pop("theme", None)
+    kinds = {s["kind"] for item in expected.get("slides", []) for s in item["shapes"]}
+    for got, want in zip(actual.get("slides", []), expected.get("slides", [])):
+        if "object" not in kinds:
+            got["shapes"] = [s for s in got["shapes"] if s["kind"] != "object"]
+        for a, e in zip(got["shapes"], want["shapes"]):
+            style = e.get("style")
+            if style:
+                for key in ("color", "fill"):
+                    if style.get(key) in colors:
+                        style[key] = colors[style[key]]
+                if style.get("font") in fonts:
+                    style["font"] = fonts[style["font"]]
+            for key in ("box", "style"):
+                if key not in e or (key == "style" and expected.get("design") == "new"):
+                    a.pop(key, None)
+                    e.pop(key, None)
+
+
 def read_native(path):
     if not is_zipfile(path):
         raise ValueError("The supplied file is not a readable Office archive.")
@@ -122,14 +375,24 @@ def _read_native(path):
             shapes = []
             for key, shape in walk_shapes(slide.shapes):
                 item = {"id": key}
+                box = _box(shape) if "/" not in key else None
                 if shape.has_text_frame:
                     item.update(kind="text", paragraphs=[p.text for p in shape.text_frame.paragraphs])
+                    style = _style(shape)
+                    if style:
+                        item["style"] = style
                 elif shape.has_table:
                     item.update(kind="table", rows=[[c.text for c in row.cells] for row in shape.table.rows])
+                elif box:
+                    # Pictures, charts, videos and groups: moved and resized, never rewritten.
+                    item.update(kind="object", name=shape.name)
                 else:
                     continue
+                if box:
+                    item["box"] = box
                 shapes.append(item)
             slides.append({"id": str(slide.slide_id), "shapes": shapes})
+        data["theme"] = _read_theme(deck)
         data["slides"] = slides
     else:
         raise ValueError("Choose an .xlsx workbook or .pptx presentation.")
@@ -232,8 +495,13 @@ def validate(data, original):
     if data.get("design") not in ("preserve", "new"):
         raise ValueError("Choose preserve or new for the design.")
     group = "sheets" if data["format"] == "xlsx" else "slides"
-    if set(data) != {"version", "format", "design", group}:
+    optional = {"theme"} if group == "slides" else set()
+    if not {"version", "format", "design", group} <= set(data) <= {"version", "format", "design", group} | optional:
         raise ValueError("Unexpected Office document fields.")
+    if "theme" in original and "theme" not in data:
+        raise ValueError("Keep the presentation's theme; change its values instead.")
+    if "theme" in data:
+        _check_theme(data["theme"], original.get("theme", {}))
     items = data.get(group)
     if not isinstance(items, list) or not items or len(items) > 1000:
         raise ValueError("Keep between 1 and 1,000 sheets or slides.")
@@ -293,14 +561,23 @@ def validate(data, original):
                 prior = old_shapes.get(sid)
                 if prior and shape.get("kind") != prior["kind"]:
                     raise ValueError("An existing shape cannot change type.")
+                if "box" in shape:
+                    _check_box(shape["box"])
+                elif prior and "box" in prior:
+                    raise ValueError("Keep a shape's box; change its values to move it.")
                 if shape.get("kind") == "text":
-                    if set(shape) != {"id", "kind", "paragraphs"} or not isinstance(shape["paragraphs"], list) or not shape["paragraphs"]:
+                    if not {"id", "kind", "paragraphs"} <= set(shape) <= {"id", "kind", "paragraphs", "box", "style"} or not isinstance(shape["paragraphs"], list) or not shape["paragraphs"]:
                         raise ValueError("A text shape needs at least one paragraph.")
                     for value in shape["paragraphs"]:
                         _text(value, soft_breaks=True)
+                    if "style" in shape or (prior and "style" in prior):
+                        _check_style(shape.get("style"), (prior or {}).get("style", {}))
+                elif shape.get("kind") == "object":
+                    if not prior or not {"id", "kind", "name"} <= set(shape) <= {"id", "kind", "name", "box"} or shape["name"] != prior["name"]:
+                        raise ValueError("Pictures, charts and videos keep their name; only their box can change.")
                 elif shape.get("kind") == "table":
                     rows = shape.get("rows")
-                    if set(shape) != {"id", "kind", "rows"} or not isinstance(rows, list) or not rows:
+                    if not {"id", "kind", "rows"} <= set(shape) <= {"id", "kind", "rows", "box"} or not isinstance(rows, list) or not rows:
                         raise ValueError("A table needs rows.")
                     if not isinstance(rows[0], list):
                         raise ValueError("Each table row must be a list of cells.")
@@ -313,9 +590,9 @@ def validate(data, original):
                         for value in row:
                             _text(value, soft_breaks=True)
                 else:
-                    raise ValueError("Editable shapes must be text or table.")
+                    raise ValueError("Editable shapes must be text, table or object.")
             if not set(old_shapes).issubset(ids):
-                raise ValueError("Keep existing text shapes and tables; clear their text to leave them blank.")
+                raise ValueError("Keep existing shapes; clear a text box's text to leave it blank.")
     if group == "sheets" and not set(known).issubset(seen):
         raise ValueError("Keep existing sheets to preserve formula references.")
 
@@ -409,6 +686,9 @@ def build_native(source, data, original, target):
         from pptx.util import Inches, Pt
 
         deck = Presentation(source)
+        if "theme" in data:
+            _write_theme(deck, data["theme"], original.get("theme", {}))
+        known = {i["id"]: {s["id"]: s for s in i["shapes"]} for i in original["slides"]}
         existing = {str(s.slide_id): s for s in deck.slides}
         order = []
         for item in data["slides"]:
@@ -431,8 +711,17 @@ def build_native(source, data, original, target):
                     else:
                         rows = item_shape["rows"]
                         shape = slide.shapes.add_table(len(rows), len(rows[0]), left, top, width, height)
+                prior = known.get(item["id"], {}).get(item_shape["id"], {})
+                if "box" in item_shape and item_shape["box"] != prior.get("box"):
+                    box = item_shape["box"]
+                    shape.left, shape.top, shape.width, shape.height = (
+                        round(box[k] * EMU_PER_PT) for k in ("x", "y", "w", "h"))
+                if item_shape["kind"] == "object":
+                    continue
                 if item_shape["kind"] == "text":
                     _set_frame(shape.text_frame, item_shape["paragraphs"])
+                    if "style" in item_shape:
+                        _apply_style(shape, item_shape["style"], prior.get("style", {}))
                 else:
                     for r, row in enumerate(item_shape["rows"]):
                         for c, value in enumerate(row):
@@ -462,6 +751,8 @@ def build_native(source, data, original, target):
                                 run.font.size = Pt(28 if shape == slide.shapes.title else 18)
                                 run.font.color.rgb = RGBColor.from_string("17365D")
             # Retained images, charts, notes, groups, and relationships stay native.
+        if "theme" in data:
+            _swap(deck, data["theme"])  # after the shapes' own styles, so a swap reaches them too
         slide_ids = deck.slides._sldIdLst
         entries = {entry.id: entry for entry in slide_ids}
         for entry in list(slide_ids):
@@ -492,6 +783,8 @@ def export(run, slug, design=None):
         actual = read_native(target)
         group = "sheets" if data["format"] == "xlsx" else "slides"
         expected = json.loads(json.dumps(data))
+        if group == "slides":
+            _like(actual, expected)
         # Native IDs are assigned on creation; contents and order must round-trip.
         for model in (actual, expected):
             model.pop("design", None)

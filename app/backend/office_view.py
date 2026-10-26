@@ -10,15 +10,25 @@ Formula cells show the value Excel stored with the file. A workbook written by a
 script stores none until Excel recalculates it; those cells are calculated here
 (the `formulas` engine, after LET is expanded, which it does not know), and a
 cell it cannot calculate shows its formula, marked, rather than a guessed number.
+
+A deck is shown as PowerPoint itself draws it: the file is exported to PDF by
+PowerPoint, each page becomes a picture, and transparent targets over every shape
+keep the click-to-edit. Videos play over their poster frame as the deck sets them
+(muted, looping, on entry) and animated GIFs move. Pictures are cached by the file's
+hash, so PowerPoint runs once per version. Without PowerPoint the slides are redrawn
+as HTML, which is approximate, and the page says so.
 """
 
 from __future__ import annotations
 
 import base64
+import hashlib
 import html as h
+import json
 import logging
 import os
 import re
+import shutil
 import tempfile
 import threading
 from datetime import date, datetime, time
@@ -26,7 +36,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any
 
-from backend import revision, workspace
+from backend import config, revision, workspace
 
 OFFICE = (".xlsx", ".pptx")
 MAX_ROWS, MAX_COLS = 2000, 80
@@ -95,6 +105,16 @@ def html(name: str, rel: str) -> str:
 def _render(path: Path, title: str) -> str:
     body = _workbook(path) if path.suffix.lower() == ".xlsx" else _deck(path)
     return PAGE.format(title=h.escape(title), body=body)
+
+
+def rendered(key: str, file: str) -> Path:
+    """A slide picture or a video from a deck's render cache, for the preview to load."""
+    if not re.fullmatch(r"[0-9a-f]{32}", key) or not re.fullmatch(r"[\w-]+(\.[\w-]+)*", file):
+        raise FileNotFoundError(file)
+    path = config.data_dir(RENDERS) / key / file
+    if not path.is_file():
+        raise FileNotFoundError(file)
+    return path
 
 
 # ---------------------------------------------------------------- workbooks
@@ -400,7 +420,7 @@ def _emu_box(shape: Any, scale: float, origin: tuple[float, float, float, float]
     top = (oy + (shape.top or 0) * sy) * scale
     width = (shape.width or 0) * sx * scale
     height = (shape.height or 0) * sy * scale
-    return f"left:{left:.1f}px;top:{top:.1f}px;width:{width:.1f}px;height:{height:.1f}px"
+    return f"left:{left:.3f}px;top:{top:.3f}px;width:{width:.3f}px;height:{height:.3f}px"
 
 
 def _frame(frame: Any, px: float) -> str:
@@ -440,17 +460,7 @@ def _shapes(shapes: Any, scale: float, px: float, origin: tuple[float, float, fl
         key = f"{prefix}{shape.shape_id}"
         box = _emu_box(shape, scale, origin)
         if shape.shape_type == 6:  # group: children use the group's own coordinates
-            xfrm = shape._element.grpSpPr.find("{http://schemas.openxmlformats.org/drawingml/2006/main}xfrm")
-            ox, oy, sx, sy = origin
-            try:
-                off, ext = xfrm.find("{*}off"), xfrm.find("{*}ext")
-                ch_off, ch_ext = xfrm.find("{*}chOff"), xfrm.find("{*}chExt")
-                kx = int(ext.get("cx")) / max(int(ch_ext.get("cx")), 1)
-                ky = int(ext.get("cy")) / max(int(ch_ext.get("cy")), 1)
-                inner = (ox + (int(off.get("x")) - int(ch_off.get("x")) * kx) * sx, oy + (int(off.get("y")) - int(ch_off.get("y")) * ky) * sy, sx * kx, sy * ky)
-            except (AttributeError, TypeError, ValueError):
-                inner = origin
-            out += _shapes(shape.shapes, scale, px, inner, key + "/")
+            out += _shapes(shape.shapes, scale, px, _inner(shape, origin), key + "/")
             continue
         css = [box]
         try:
@@ -474,6 +484,144 @@ def _shapes(shapes: Any, scale: float, px: float, origin: tuple[float, float, fl
     return out
 
 
+def _inner(group: Any, origin: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+    """The origin and scale a group's children are placed with."""
+    xfrm = group._element.grpSpPr.find("{http://schemas.openxmlformats.org/drawingml/2006/main}xfrm")
+    ox, oy, sx, sy = origin
+    try:
+        off, ext = xfrm.find("{*}off"), xfrm.find("{*}ext")
+        ch_off, ch_ext = xfrm.find("{*}chOff"), xfrm.find("{*}chExt")
+        kx = int(ext.get("cx")) / max(int(ch_ext.get("cx")), 1)
+        ky = int(ext.get("cy")) / max(int(ch_ext.get("cy")), 1)
+        return (ox + (int(off.get("x")) - int(ch_off.get("x")) * kx) * sx, oy + (int(off.get("y")) - int(ch_off.get("y")) * ky) * sy, sx * kx, sy * ky)
+    except (AttributeError, TypeError, ValueError):
+        return origin
+
+
+RENDERS = "office-render"
+KEEP_RENDERS = 12  # decks whose pictures stay cached; the oldest beyond this are removed
+PICTURE_WIDTH = 1920  # twice the 960px the slide is shown at, so text stays sharp
+_powerpoint = threading.Lock()  # PowerPoint exports one deck at a time
+
+def _powerpoint_pdf(src: Path, pdf: Path) -> None:
+    revision.script("deck_render").powerpoint_pdf(src, pdf)
+
+
+def _pictures(path: Path, deck: Any) -> tuple[str, dict[int, str]]:
+    """The cache key and slide index -> picture file, exporting through PowerPoint when not cached."""
+    import pymupdf  # type: ignore[import-untyped,import-not-found,unused-ignore]
+
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    key = digest.hexdigest()[:32]
+    root = config.data_dir(RENDERS)
+    folder = root / key
+    index = folder / "slides.json"
+    with _powerpoint:
+        if not index.is_file():
+            # a visible folder: PowerPoint's sandbox asks for access to a hidden one
+            work = Path(tempfile.mkdtemp(prefix=f"work-{key[:12]}-", dir=root))
+            try:
+                src = work / f"preview-{key[:12]}.pptx"
+                shutil.copyfile(path, src)
+                pdf = work / "deck.pdf"
+                _powerpoint_pdf(src, pdf)
+                src.unlink()
+                shown = [i for i, s in enumerate(deck.slides) if s._element.get("show") != "0"]
+                with pymupdf.open(pdf) as doc:
+                    # PowerPoint leaves hidden slides out of the PDF unless told otherwise
+                    order = list(range(len(deck.slides))) if doc.page_count == len(deck.slides) else shown
+                    if doc.page_count != len(order):
+                        raise RuntimeError(f"the PDF has {doc.page_count} pages for {len(deck.slides)} slides")
+                    pictures = {}
+                    for page, i in zip(doc, order, strict=True):
+                        zoom = PICTURE_WIDTH / page.rect.width
+                        name = f"slide-{i + 1:03}.png"
+                        page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom)).save(work / name)
+                        pictures[i] = name
+                pdf.unlink()
+                (work / "slides.json").write_text(json.dumps(pictures))
+                shutil.rmtree(folder, ignore_errors=True)
+                work.rename(folder)
+            finally:
+                shutil.rmtree(work, ignore_errors=True)
+            for old in sorted((d for d in root.iterdir() if d.is_dir() and re.fullmatch(r"[0-9a-f]{32}", d.name)), key=lambda d: d.stat().st_mtime)[:-KEEP_RENDERS]:
+                shutil.rmtree(old, ignore_errors=True)
+        os.utime(folder)
+    return key, {int(i): name for i, name in json.loads(index.read_text()).items()}
+
+
+def _playback(slide: Any, spid: int) -> tuple[bool, bool, bool]:
+    """Whether a video starts on its own, loops and is muted, as the slide's timing says."""
+    timing = slide._element.find("{*}timing")
+    if timing is None:
+        return False, False, False
+    autoplay = loop = muted = False
+    for target in timing.iter("{*}spTgt"):
+        if target.get("spid") != str(spid):
+            continue
+        node = target.getparent()
+        while node is not None and node.tag.split("}")[1] not in ("cMediaNode", "par"):
+            node = node.getparent()
+        if node is None:
+            continue
+        if node.tag.endswith("cMediaNode"):
+            muted = node.get("mute") == "1" or node.get("vol") == "0"
+            ctn = node.find("{*}cTn")
+            loop = ctn is not None and ctn.get("repeatCount") == "indefinite"
+        else:
+            effect = next((c for c in node.iter("{*}cTn") if c.get("presetClass") == "mediacall"), None)
+            autoplay = autoplay or (effect is not None and effect.get("nodeType") in ("afterEffect", "withEffect"))
+    return autoplay, loop, muted
+
+
+def _media_part(shape: Any) -> Any:
+    """The embedded video behind a movie shape, or None when it is linked from outside the file."""
+    nv = shape._element.find("{*}nvPicPr/{*}nvPr")
+    ids = [e.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed") for e in nv.iter("{*}media")] if nv is not None else []
+    ids += [e.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}link") for e in nv.iter("{*}videoFile")] if nv is not None else []
+    for rid in filter(None, ids):
+        rel = shape.part.rels.get(rid)
+        if rel is not None and not rel.is_external:
+            return rel.target_part
+    return None
+
+
+def _targets(slide: Any, shapes: Any, scale: float, origin: tuple[float, float, float, float], url: Any, folder: Path, prefix: str = "") -> list[str]:
+    """What sits over a slide's picture: a click target per shape, playing videos and moving GIFs."""
+    out = []
+    for shape in shapes:
+        key = f"{prefix}{shape.shape_id}"
+        if shape.shape_type == 6:
+            if not prefix:  # a group moves as one in Design mode
+                out.append(f'<div class="shape group" data-shape="{key}" style="{_emu_box(shape, scale, origin)}"></div>')
+            out += _targets(slide, shape.shapes, scale, _inner(shape, origin), url, folder, key + "/")
+            continue
+        box = _emu_box(shape, scale, origin)
+        part = _media_part(shape) if shape.shape_type == 16 else None
+        if part is not None:
+            name = "media-" + re.sub(r"[^\w.-]", "-", part.partname.lstrip("/"))
+            if not (folder / name).is_file():
+                (folder / name).write_bytes(part.blob)
+            autoplay, loop, muted = _playback(slide, shape.shape_id)
+            play = " autoplay muted playsinline" if autoplay else " controls"
+            play += " loop" if loop else ""
+            play += " muted" if muted and not autoplay else ""
+            out.append(f'<video class="shape media" data-shape="{key}" style="{box}" src="{url(name)}" preload="auto"{play}></video>')
+            continue
+        if shape.shape_type == 13 and shape.image.content_type == "image/gif":
+            name = f"gif-{shape.image.sha1}.gif"
+            if not (folder / name).is_file():
+                (folder / name).write_bytes(shape.image.blob)
+            out.append(f'<img class="shape media" data-shape="{key}" style="{box}" src="{url(name)}" alt="">')
+            continue
+        editable = shape.has_text_frame or (getattr(shape, "has_table", False) and shape.has_table)
+        out.append(f'<div class="shape hit{" edit" if editable else ""}" data-shape="{key}" style="{box}"></div>')
+    return out
+
+
 def _deck(path: Path) -> str:
     from pptx import Presentation  # type: ignore[import-untyped,import-not-found,unused-ignore]
 
@@ -481,11 +629,106 @@ def _deck(path: Path) -> str:
     width, height = deck.slide_width or 12192000, deck.slide_height or 6858000
     scale = 960 / width
     px = 960 / (width / 12700)  # px per point at this width
+    try:
+        key, pictures = _pictures(path, deck)
+        banner = ""
+    except Exception as exc:  # noqa: BLE001 - any failure falls back to the approximate preview
+        log.warning("deck preview without PowerPoint: %s", exc)
+        key, pictures = "", {}
+        banner = f'<p class="banner">Approximate preview: {h.escape(str(exc))}. Open the file in PowerPoint to see its exact design, videos and images.</p>'
+    url = lambda name: h.escape(f"/api/office/render/{key}/{name}?token={config.TOKEN}")  # noqa: E731
     slides = []
     for i, slide in enumerate(deck.slides):
-        shapes = _shapes(slide.shapes, scale, px, (0, 0, 1, 1))
-        slides.append(f'<section class="slide-wrap"><h2>Slide {i + 1}</h2><div class="slide" data-slide="{i}" style="height:{height * scale:.0f}px">{"".join(shapes)}</div></section>')
-    return "".join(slides) or '<p class="note">This presentation has no slides.</p>'
+        if i in pictures:
+            over = _targets(slide, slide.shapes, scale, (0, 0, 1, 1), url, config.data_dir(RENDERS) / key)
+            inside = f'<img class="page" src="{url(pictures[i])}" alt="Slide {i + 1}">{"".join(over)}'
+        else:
+            inside = "".join(_shapes(slide.shapes, scale, px, (0, 0, 1, 1)))
+        hidden = " (hidden in the slide show)" if slide._element.get("show") == "0" else ""
+        slides.append(f'<section class="slide-wrap"><h2>Slide {i + 1}{hidden}</h2><div class="slide" data-slide="{i}" style="height:{height * scale:.0f}px">{inside}</div></section>')
+    design = DESIGN.replace("__PX_PER_PT__", f"{12700 * scale:.6f}")
+    return banner + ("".join(slides) or '<p class="note">This presentation has no slides.</p>') + design
+
+
+# Design mode, switched on by the app (`office-design`): a top-level shape is selected with a
+# click, dragged to move, resized from its corner, and nudged with the arrow keys (Shift: 10 pt).
+# Each finished move posts `office-box` with the shape's box in points; a click posts
+# `office-select`. The picture underneath catches up when the edited deck is drawn again.
+DESIGN = """<style>
+body.designing .shape { cursor: move; }
+body.designing .slide > .shape:not([data-shape*="/"]) { outline: 1px dashed rgba(47,111,235,.35); }
+body.designing .shape.selected { outline: 2px solid #2f6feb !important; z-index: 5; }
+body.designing video.media { pointer-events: none; }
+.shape.group { pointer-events: none; }
+body.designing .shape.group { pointer-events: auto; }
+.handle { position: absolute; right: -6px; bottom: -6px; width: 12px; height: 12px; border: 2px solid #fff; border-radius: 3px; background: #2f6feb; cursor: nwse-resize; }
+body:not(.designing) .handle { display: none; }
+</style>
+<script>
+(() => {
+  const PX = __PX_PER_PT__;
+  let designing = false, selected = null, drag = null;
+  const top = (el) => {
+    const key = el.dataset.shape.split("/")[0];
+    return el.closest(".slide").querySelector(`[data-shape="${key}"]:not([data-shape*="/"])`) || el;
+  };
+  const box = (el) => ({ x: +(parseFloat(el.style.left) / PX).toFixed(2), y: +(parseFloat(el.style.top) / PX).toFixed(2), w: +(parseFloat(el.style.width) / PX).toFixed(2), h: +(parseFloat(el.style.height) / PX).toFixed(2) });
+  const send = (type, el) => parent.postMessage({ type, slide: Number(el.closest("[data-slide]").dataset.slide), shape: el.dataset.shape, box: box(el) }, "*");
+  const select = (el) => {
+    document.querySelectorAll(".shape.selected").forEach((s) => s.classList.remove("selected"));
+    document.querySelectorAll(".handle").forEach((h) => h.remove());
+    selected = el;
+    if (!el) return;
+    el.classList.add("selected");
+    const handle = document.createElement("div");
+    handle.className = "handle";
+    el.appendChild(handle);
+  };
+  window.addEventListener("message", (e) => {
+    if (e.data?.type !== "office-design") return;
+    designing = Boolean(e.data.on);
+    document.body.classList.toggle("designing", designing);
+    if (!designing) select(null);
+  });
+  document.addEventListener("mousedown", (e) => {
+    if (!designing) return;
+    const hit = e.target.closest("[data-shape]");
+    if (!hit) { select(null); return; }
+    e.preventDefault();
+    const el = top(hit);
+    if (el !== selected) select(el);
+    const s = el.style;
+    drag = { el, resize: e.target.classList.contains("handle"), x: e.clientX, y: e.clientY, left: parseFloat(s.left), top: parseFloat(s.top), width: parseFloat(s.width), height: parseFloat(s.height), moved: false };
+  }, true);
+  document.addEventListener("mousemove", (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (Math.abs(dx) + Math.abs(dy) > 2) drag.moved = true;
+    if (drag.resize) { drag.el.style.width = Math.max(4, drag.width + dx) + "px"; drag.el.style.height = Math.max(4, drag.height + dy) + "px"; }
+    else { drag.el.style.left = drag.left + dx + "px"; drag.el.style.top = drag.top + dy + "px"; }
+  });
+  document.addEventListener("mouseup", () => {
+    if (!drag) return;
+    const { el, moved } = drag;
+    drag = null;
+    send(moved ? "office-box" : "office-select", el);
+  });
+  document.addEventListener("click", (e) => { if (designing) e.stopImmediatePropagation(); }, true);
+  document.addEventListener("keydown", (e) => {
+    if (!designing || !selected || !e.key.startsWith("Arrow")) return;
+    e.preventDefault();
+    const step = (e.shiftKey ? 10 : 1) * PX;
+    const s = selected.style;
+    if (e.key === "ArrowLeft") s.left = parseFloat(s.left) - step + "px";
+    if (e.key === "ArrowRight") s.left = parseFloat(s.left) + step + "px";
+    if (e.key === "ArrowUp") s.top = parseFloat(s.top) - step + "px";
+    if (e.key === "ArrowDown") s.top = parseFloat(s.top) + step + "px";
+    clearTimeout(selected._nudge);
+    const el = selected;
+    el._nudge = setTimeout(() => send("office-box", el), 400);
+  });
+})();
+</script>"""
 
 
 PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>{title}</title><style>
@@ -508,6 +751,8 @@ col.rh {{ width: 44px; }}
 .grid td:hover {{ box-shadow: inset 0 0 0 2px rgba(47,111,235,.45); }}
 .slide {{ position: relative; width: 960px; overflow: hidden; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.18); }}
 .shape {{ position: absolute; box-sizing: border-box; overflow: hidden; }}
+.page {{ position: absolute; inset: 0; width: 100%; height: 100%; display: block; }}
+.media {{ object-fit: fill; background: transparent; }}
 .shape p {{ margin: 0 0 .25em; }}
 .shape table {{ width: 100%; height: 100%; }}
 .shape td {{ border: 1px solid #c9c9c4; padding: 2px 5px; vertical-align: top; }}
