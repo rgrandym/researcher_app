@@ -820,16 +820,18 @@ class TurnManager:
                 continue
             if not results:
                 continue
-            merged = [f for r in results if r["kind"] == "merge" and not r["problem"] for f in r["files"]]
-            made = [f for r in results if r["kind"] != "merge" for f in r["files"]]
-            problems = [f"{r['doc']}: {r['problem']}" for r in results if r["problem"]]
-            text = (f"Updated {len(made)} exported file{'s' if len(made) != 1 else ''} to match the edited documents: "
-                    + ", ".join(Path(f).name for f in made) + "." if made else "")
-            if merged:
-                text = ("Merged " + ", ".join(Path(f).name for f in merged) + " into its editable document, "
-                        "so the document stays one document. " + text).strip()
-            if problems:
-                text += (" " if text else "") + "Not updated: " + " ".join(problems)
+            merged = [r for r in results if r["kind"] == "merge" and not r["problem"]]
+            made = [f for r in results if r["kind"] != "merge" and not r["problem"] for f in r["files"]]
+            lines = [f"{Path(r['files'][0]).name} was saved outside the editor; its changes are now part of "
+                     f"{r['doc']}." for r in merged]
+            if made:
+                lines.append("The exported files now match the edits: " + ", ".join(Path(f).name for f in made) + ".")
+            for r in results:
+                if r["problem"]:
+                    lines.append(f"Your edits to {r['doc']} are saved and show in the HTML tab, but its exported "
+                                 f"file was not updated, so it is older than the document. Reason: {r['problem']} "
+                                 "Use Update exports in the HTML tab to try again.")
+            text = "\n".join(lines)
             await self._emit(session_id, Event(type="notice", data={"kind": "exports", "run": run, "text": text}))
             await self.hub.publish(session_id, {"type": "exports", "run": run})
 

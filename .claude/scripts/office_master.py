@@ -298,6 +298,20 @@ def _check_theme(theme, prior):
             raise ValueError(f"{key} maps an old value to a new one.")
 
 
+def _same(a, b, key=None):
+    """Equal, except that a shape's position and size need only agree to a hundredth of a point:
+    the file stores whole EMUs and reads back two decimals, so 465.825 returns as 465.83."""
+    if key == "box" and isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(
+            isinstance(a[k], (int, float)) and isinstance(b[k], (int, float)) and abs(a[k] - b[k]) <= 0.011
+            or a[k] == b[k] for k in a)
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_same(a[k], b[k], k) for k in a)
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(_same(x, y, key) for x, y in zip(a, b))
+    return a == b
+
+
 def _like(actual, expected):
     """Make the read-back deck comparable with the master: leave out what an older master
     does not record, carry swaps into the styles they reach (swaps are not read back), and
@@ -923,7 +937,7 @@ def export(run, slug, design=None):
                             cell.update(kind="datetime", value=cell["value"] + "T00:00:00")
                 for shape in item.get("shapes", []):
                     shape.pop("id", None)
-        if actual != expected:
+        if not _same(actual, expected):
             raise ValueError("The native export did not retain all edited content; no export was published.")
         if digest(master) != master_digest:
             raise ValueError("The document changed during export. Export the saved version again.")

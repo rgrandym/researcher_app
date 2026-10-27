@@ -81,4 +81,5 @@ def test_the_turn_reports_what_it_could_not_update(root: Path) -> None:
     sessions.save(session)
     asyncio.run(m._refresh_exports(session.id, started))
     notices = [e for e in sessions.transcript(session.id) if e.type == "notice" and e.data.get("kind") == "exports"]
-    assert len(notices) == 1 and "Not updated: deck.md:" in notices[0].data["text"]
+    assert len(notices) == 1
+    assert "Your edits to deck.md are saved and show in the HTML tab" in notices[0].data["text"]

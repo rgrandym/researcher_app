@@ -536,3 +536,13 @@ def test_a_deck_changed_on_both_sides_is_reported_not_guessed(root: Path) -> Non
     [result] = freshness.refresh(RUN)
     assert result["kind"] == "merge" and "changed in both" in result["problem"].lower()
     assert (run / "sample.md").read_text() == before
+
+
+def test_a_position_finer_than_the_file_keeps_still_exports(root: Path) -> None:
+    run, _ = presentation(root)
+    content = start()
+    shape = content["data"]["slides"][0]["shapes"][0]
+    shape["box"] = {**shape["box"], "x": 465.825}  # stored in whole EMUs, read back as 465.83
+    save(content)
+    result = export("pptx")
+    assert result["files"] and (run / result["files"][0]).is_file()

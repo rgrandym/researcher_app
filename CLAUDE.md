@@ -127,6 +127,8 @@ master through `document.py export`, never from a script that writes the file di
 Only a new document becomes a new file. After each task the app snapshots every changed
 document into `.history/` and re-makes its existing exports. It merges a deck or workbook
 written outside the editor back into its master, and flags a Word file it cannot merge.
+That step runs after the agent has finished and reports its own result, so an agent does
+not export at the end of a task, or say whether the exports are current.
 
 ## Output layout
 
