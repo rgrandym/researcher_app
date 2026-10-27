@@ -119,6 +119,15 @@ A run has one master document, always current: `report.md`. `draft.md` is promot
 during the first repair; every later edit is made to the master in place.
 Exports are derived copies.
 
+**An edited document stays the same document.** A change to a document that already
+exists is made in that document: its master (`report.md`, `<slug>.md`) or the Markdown
+file itself. Never write a copy beside it (`-v2.md`, `-final.md`, a fresh `.docx`,
+`.pptx` or `.xlsx` in `deliverable/`). Word, PowerPoint and Excel files come from the
+master through `document.py export`, never from a script that writes the file directly.
+Only a new document becomes a new file. After each task the app snapshots every changed
+document into `.history/` and re-makes its existing exports. It merges a deck or workbook
+written outside the editor back into its master, and flags a Word file it cannot merge.
+
 ## Output layout
 
 Every run gets its own folder under `outputs/`, named `YYYY-MM-DD-<short-slug>`,

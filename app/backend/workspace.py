@@ -33,6 +33,13 @@ from backend import config, edit_state
 RUN_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}-[A-Za-z0-9._-]+$")
 RUN_IN_PATH = re.compile(r"outputs/(\d{4}-\d{2}-\d{2}-[A-Za-z0-9._-]+)")
 STAGE_LINE = re.compile(r"^ {2}(ok|MISSING)\s+(\S+)\s+(.*)$")
+# Never walked: the app's own history and trash, and tooling a script installed in a run
+# (a virtualenv under deliverable/ holds more files than the run itself).
+UNWALKED = {".history", ".trash", ".git", ".venv", "venv", "node_modules", "__pycache__"}
+# A run's working material, never offered as a document to read: the pipeline's own files
+# at the root, and the folders that hold sources, notes, rounds and derived copies.
+WORKING_FILES = {"prompt.md", "brief.md", "voice.md", "coverage.md", "verification.md", "critique.md", "repair-log.md", "readme.md"}
+WORKING_DIRS = {"notes", "external_data", "rounds", "subjects", "export", "figures", "notebooks", "deliverable"}
 
 
 def root() -> Path:
@@ -212,16 +219,69 @@ def run_check_text(name: str) -> str:
         return f"run_check.py could not run: {exc}"
 
 
+def walk(path: Path, skip: frozenset[str] = frozenset()) -> list[Path]:
+    """Every file and folder under a run, without descending into UNWALKED or `skip`."""
+    out = []
+    for folder, dirs, names in os.walk(path):
+        dirs[:] = sorted(d for d in dirs if d not in UNWALKED and d not in skip)
+        here = Path(folder)
+        out += [here / d for d in dirs] + [here / n for n in sorted(names)]
+    return out
+
+
 def newest_mtime(path: Path) -> float:
     newest = path.stat().st_mtime
-    for p in path.rglob("*"):
-        if "export" in p.parts or ".history" in p.parts:
-            continue
+    for p in walk(path, frozenset({"export"})):
         try:
             newest = max(newest, p.stat().st_mtime)
         except OSError:
             continue
     return newest
+
+
+def snapshot(run: Path, rel: str) -> Path | None:
+    """A dated copy of a document in `<run>/.history/`, named as the gate's snapshots are, so
+    every saved state of every document can be found and restored. Skipped when the newest
+    copy already holds the same text; the last 40 are kept."""
+    doc = run / rel
+    if not doc.is_file():
+        return None
+    hist = run / ".history"
+    hist.mkdir(exist_ok=True)
+    stem = str(Path(rel).with_suffix("")).replace("/", "__")
+    pattern = re.compile(rf"^{re.escape(stem)}-\d{{8}}-\d{{6}}{re.escape(doc.suffix)}$")
+    kept = sorted(p for p in hist.iterdir() if pattern.match(p.name))
+    if kept and kept[-1].read_bytes() == doc.read_bytes():
+        return kept[-1]
+    snap = hist / f"{stem}-{time.strftime('%Y%m%d-%H%M%S')}{doc.suffix}"
+    shutil.copy2(doc, snap)
+    for old in (kept + [snap])[:-40]:
+        old.unlink()
+    return snap
+
+
+def snapshot_changed(name: str, since: float) -> list[str]:
+    """Snapshot every document of a run, master or not, changed at or after `since`."""
+    path = run_dir(name)
+    meta = run_meta(path)
+    files = [str(p.relative_to(path)) for p in walk(path) if p.suffix == ".md" and p.is_file()]
+    docs = [m for m in meta.get("masters", []) if (path / m).is_file()] + readable(files, meta.get("masters", []))
+    return [d for d in docs if (path / d).stat().st_mtime >= since and snapshot(path, d)]
+
+
+def readable(files: list[str], masters: list[str]) -> list[str]:
+    """Markdown in a run that is a document but not a master: a template, a note to a
+    colleague, a new document an agent wrote. Found on disk, so nothing has to register it,
+    and shown without the evidence gate that a master's claims go through."""
+    out = []
+    for rel in files:
+        parts = rel.split("/")
+        if (not rel.endswith(".md") or rel in masters or parts[0] in WORKING_DIRS
+                or any(p.startswith((".", "_")) for p in parts)
+                or (len(parts) == 1 and rel.lower() in WORKING_FILES)):
+            continue
+        out.append(rel)
+    return sorted(out, key=lambda r: (r.count("/"), r))
 
 
 def list_runs() -> list[dict[str, Any]]:
@@ -251,9 +311,8 @@ def run_detail(name: str) -> dict[str, Any]:
     path = run_dir(name)
     meta = run_meta(path)
     files = []
-    for p in sorted(path.rglob("*")):
-        if (p.is_file() and ".history" not in p.parts and ".trash" not in p.parts
-                and not p.name.startswith(".voice-mirror")
+    for p in sorted(walk(path)):
+        if (p.is_file() and not p.name.startswith(".voice-mirror")
                 and p.name != ".critique-isolation-failed"):
             st = p.stat()
             files.append(
@@ -265,6 +324,7 @@ def run_detail(name: str) -> dict[str, Any]:
         "name": name,
         "path": str(path),
         "meta": meta,
+        "readable": readable([f["path"] for f in files], meta.get("masters", [])),
         "stages": stages(name),
         "files": files,
         "critique_failed_at": isolation_marker.stat().st_mtime if isolation_marker.exists() else None,
@@ -372,6 +432,7 @@ def save_run_file(name: str, rel: str, content: str, base_mtime: float | None) -
     if target.parent == base and (rm.is_master(target) if rm else target.name in ("report.md", "draft.md")):
         edit_state.record(target, content)
     target.write_text(content)
+    snapshot(base, str(target.relative_to(base)))
     return target.stat().st_mtime
 
 

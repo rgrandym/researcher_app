@@ -55,26 +55,37 @@ def _native(version: Path) -> Path | None:
     named = version / str(applied.get("file") or "")
     if applied.get("file") and named.is_file() and named.suffix.lower() in OFFICE:
         return named
-    files = sorted(f for f in version.iterdir() if f.is_file() and f.suffix.lower() in OFFICE and not f.name.startswith(("~$", ".")))
-    return files[0] if len(files) == 1 else None
+    files = sorted((f for f in version.iterdir() if f.is_file() and f.suffix.lower() in OFFICE and not f.name.startswith(("~$", "."))), key=lambda f: f.stat().st_mtime)
+    return files[-1] if files else None  # several files and no record: the one written last
+
+
+def _stands_for(run: Path, slug: str, version: Path, native: Path, master: str) -> bool:
+    """Whether the editable master is this file: it was exported from the master, or the master was built from it."""
+    if revision._json(version / "applied.json", {}).get("from") == master:
+        return True
+    source = revision._json(run / "subjects" / slug / "office-source.json", {}).get("source")
+    return source == str(native.relative_to(run))
 
 
 def outputs(name: str) -> list[dict[str, Any]]:
+    """The newest delivered file of each deck or workbook. Where an editable master exists it is
+    listed too, beside this, so a file made outside the editor can still be picked and shown."""
     run = workspace.run_dir(name)
     root = run / "deliverable"
     if not root.is_dir():
         return []
-    masters = {d.get("slug") for d in workspace.run_meta(run).get("documents", []) if (run / str(d.get("master"))).is_file()}
+    masters = {d.get("slug"): str(d.get("master")) for d in workspace.run_meta(run).get("documents", []) if (run / str(d.get("master"))).is_file()}
     out = []
     for folder in sorted(p for p in root.iterdir() if p.is_dir()):
-        if folder.name in masters:
-            continue  # the editable master stands for it
         for version in reversed(_versions(folder)):
             native = _native(version)
             if native:
+                if folder.name in masters and _stands_for(run, folder.name, version, native, masters[folder.name]):
+                    break
                 out.append({
                     "path": str(native.relative_to(run)), "slug": folder.name, "version": version.name,
                     "format": native.suffix[1:].lower(), "label": f"{native.name} ({version.name})",
+                    "editable_master": masters.get(folder.name),
                 })
                 break
     return out

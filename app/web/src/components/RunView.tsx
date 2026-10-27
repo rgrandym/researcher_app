@@ -19,12 +19,13 @@ import OfficePane, { OfficeHtml, type OfficeFocus } from "./OfficePane";
 import CommentsPanel, { ColourDots, CommentList, useComments, useHighlight, type Anchor, type Comment } from "./CommentsPanel";
 import type { EditorMark } from "./MarkdownEditor";
 import { listen, openPopout, post } from "../lib/live";
+import { subscribe } from "../lib/socket";
 
 const MarkdownEditor = lazy(() => import("./MarkdownEditor"));
 
 const TEXT = /\.(md|txt|jsonl|json|csv|tsv|py|ya?ml|bib)$/i;
 type Tab = "document" | "chat" | "html" | "edit" | "file";
-interface OfficeOutput { path: string; slug: string; version: string; format: "xlsx" | "pptx"; label: string }
+interface OfficeOutput { path: string; slug: string; version: string; format: "xlsx" | "pptx"; label: string; editable_master?: string | null }
 
 interface Rendered {
   html: string;
@@ -740,7 +741,7 @@ function HtmlPane({ run, doc, version }: { run: string; doc: string | undefined;
     },
   });
   const saveFigures = useMutation({
-    mutationFn: () => api.post<{ saved: string[] }>(`/api/runs/${encodeURIComponent(run)}/figures/save`, { style, cite }),
+    mutationFn: () => api.post<{ saved: string[] }>(`/api/runs/${encodeURIComponent(run)}/figures/save`, { doc, style, cite }),
     onSuccess: (r) => setSaved(`${r.saved.length} file(s) saved to export/${style}/figures/.`),
   });
   const showingLive = liveText !== null && Boolean(live.data);
@@ -1053,17 +1054,27 @@ export default function RunView({ name, file }: { name: string; file?: string })
   const [chat, setChat] = useState<string | null>(null);
   const [critiqueReview, setCritiqueReview] = useState<{ path: string; questions: CritiqueQuestion[] } | null>(null);
   // Documents this project improves (revision runs), and the dialog where the author decides on their changes.
+  // Both are read again only when a file in the run changed, rather than on a timer of their own.
+  const changed = useMemo(() => Math.max(0, ...(run.data?.files ?? []).map((f) => f.mtime)), [run.data]);
   const subjects = useQuery({
-    queryKey: ["subjects", name],
+    queryKey: ["subjects", name, changed],
     queryFn: () => api.get<{ subjects: Subject[] }>(`/api/runs/${encodeURIComponent(name)}/subjects`),
-    refetchInterval: 15_000,
+    placeholderData: keepPreviousData,
   });
   // Workbooks and decks the project delivered that have no editable copy yet.
   const officeOutputs = useQuery({
-    queryKey: ["office-outputs", name],
+    queryKey: ["office-outputs", name, changed],
     queryFn: () => api.get<{ outputs: OfficeOutput[] }>(`/api/runs/${encodeURIComponent(name)}/office/outputs`),
-    refetchInterval: 15_000,
+    placeholderData: keepPreviousData,
   });
+  // When any task ends, read the run again at once: a document it wrote or changed is in the
+  // menu and the HTML tab without waiting for the next poll or reopening the project.
+  // After it, the app makes the edited documents' exports again; show those too when ready.
+  useEffect(() => subscribe((m) => {
+    if (!((m.type === "state" && !m.running) || (m.type === "exports" && m.run === name))) return;
+    void client.invalidateQueries({ queryKey: ["run", name] });
+    void client.invalidateQueries({ queryKey: ["run-file", name] });
+  }), [name, client]);
   const [officeFocus, setOfficeFocus] = useState<OfficeFocus | undefined>();
   const [changesOpen, setChangesOpen] = useState(false);
   const openOffice = useMutation({
@@ -1073,6 +1084,11 @@ export default function RunView({ name, file }: { name: string; file?: string })
       setDoc(result.master); setEditPath(undefined); setTab(then);
     },
   });
+  const refreshExports = useMutation({
+    mutationFn: (doc: string) => api.post<{ results: { doc: string; files: string[]; problem: string | null }[] }>(`/api/runs/${encodeURIComponent(name)}/exports/refresh`, { doc }),
+    onSettled: () => void client.invalidateQueries({ queryKey: ["run", name] }),
+  });
+  const refreshProblems = refreshExports.isError ? [(refreshExports.error as Error).message] : (refreshExports.data?.results ?? []).flatMap((r) => (r.problem ? [r.problem] : []));
   const planned = (subjects.data?.subjects ?? []).filter((s) => s.role === "subject" && (s.master || Object.keys(s.counts).length > 0));
   const revisedOnly = planned.length > 0 && planned.every((s) => s.master);
   const undecided = planned.reduce((n, s) => n + (s.counts.proposed ?? 0) + (s.counts.stale ?? 0), 0);
@@ -1190,8 +1206,10 @@ export default function RunView({ name, file }: { name: string; file?: string })
   const primary = data.meta.primary;
   const present = new Set(data.files.map((f) => f.path));
   const officeSubjects = (subjects.data?.subjects ?? []).filter((s) => s.role === "subject" && ["xlsx", "pptx"].includes(s.format));
-  const outputs = (officeOutputs.data?.outputs ?? []).filter((o) => !officeSubjects.some((s) => s.slug === o.slug));
-  const docs = [...new Set([...data.meta.masters.filter((m) => present.has(m)), ...officeSubjects.map((s) => s.master ?? `${s.slug}.md`), ...outputs.map((o) => o.path)])];
+  const outputs = officeOutputs.data?.outputs ?? [];
+  const masterDocs = [...new Set([...data.meta.masters.filter((m) => present.has(m)), ...officeSubjects.map((s) => s.master ?? `${s.slug}.md`), ...outputs.map((o) => o.path)])];
+  const otherDocs = (data.readable ?? []).filter((m) => !masterDocs.includes(m));
+  const docs = [...masterDocs, ...otherDocs];
   const shown = doc && docs.includes(doc) ? doc : primary ?? docs[0];
   const officeSubject = officeSubjects.find((s) => (s.master ?? `${s.slug}.md`) === shown);
   const officeOutput = outputs.find((o) => o.path === shown);
@@ -1206,6 +1224,11 @@ export default function RunView({ name, file }: { name: string; file?: string })
     if (source) return `${source.replace(/\.[^.]+$/, "")} (revised)`;
     return data.meta.documents?.length && m === "report.md" ? "Audit (report.md)" : m;
   };
+  // Exports and delivered files older than their document. The app makes them again after a
+  // task; these are the ones still waiting, or that it could not make (`blocked`).
+  const staleCopies = (m: string) => (data.stale ?? []).filter((s) => s.doc === m);
+  const shownStale = shown ? staleCopies(shown) : [];
+  const shownBlocked = shownStale.filter((s) => s.blocked);
   const editing = editPath ?? shown;
   const critiqueFailed = Boolean(selected && data.critique_failed_at && data.critique_failed_at >= (data.files.find((item) => item.path === selected)?.mtime ?? 0));
   const onSaved = () => {
@@ -1262,6 +1285,7 @@ export default function RunView({ name, file }: { name: string; file?: string })
           </button>
         </div>
         {remove.isError && <div className="border-b border-border px-5 py-1.5 text-[0.75rem] text-bad">{(remove.error as Error).message}</div>}
+        {refreshProblems.length > 0 && <div className="whitespace-pre-wrap border-b border-border px-5 py-1.5 text-[0.75rem] text-bad">{refreshProblems.join("\n")}</div>}
         <div className="flex gap-1 border-b border-border px-4 py-1.5">
           {tabs
             .filter((t) => t.show)
@@ -1289,11 +1313,33 @@ export default function RunView({ name, file }: { name: string; file?: string })
                 </button>
               ),
             )}
+          {shownStale.length > 0 && tab !== "file" && tab !== "chat" && (
+            <button
+              disabled={refreshExports.isPending || shownBlocked.length === shownStale.length}
+              onClick={() => refreshExports.mutate(shown!)}
+              title={[
+                ...shownStale.filter((s) => s.kind === "merge").map((s) => `${s.files[0]} was made outside the editor. Click to merge it into this document, then export.`),
+                shownStale.some((s) => s.kind !== "merge") ? `Older than the document:\n${shownStale.filter((s) => s.kind !== "merge").flatMap((s) => s.files).join("\n")}` : "",
+                ...shownBlocked.map((s) => s.blocked!),
+                shownBlocked.length < shownStale.length ? "Click to make them again, as they were last made." : "",
+              ].filter(Boolean).join("\n\n")}
+              className={clsx("rounded-md border border-warn px-1.5 py-0.5 text-[0.6875rem] text-warn enabled:hover:bg-panel disabled:cursor-help", docs.length <= 1 && "ml-auto")}
+            >
+              {refreshExports.isPending ? "Updating exports…" : shownBlocked.length === shownStale.length ? "Export out of date: needs a decision" : "Update exports"}
+            </button>
+          )}
           {docs.length > 1 && tab !== "file" && tab !== "chat" && (
-            <label className="ml-auto flex items-center gap-1.5 text-[0.75rem] text-muted">
+            <label className={clsx("flex items-center gap-1.5 text-[0.75rem] text-muted", shownStale.length === 0 && "ml-auto")}>
               Showing
               <select value={shown} onChange={(e) => { setDoc(e.target.value); setEditPath(undefined); }} title="The document the Document, HTML and Edit tabs show" className="max-w-[18rem] truncate rounded-md border border-border bg-bg px-1.5 py-0.5 text-fg outline-none focus:border-accent">
-                {docs.map((m) => <option key={m} value={m}>{docLabel(m)}</option>)}
+                {otherDocs.length > 0 ? (
+                  <>
+                    <optgroup label="Documents">{masterDocs.map((m) => <option key={m} value={m}>{docLabel(m)}{staleCopies(m).length ? " · export out of date" : ""}</option>)}</optgroup>
+                    <optgroup label="Other documents">{otherDocs.map((m) => <option key={m} value={m}>{m}</option>)}</optgroup>
+                  </>
+                ) : (
+                  masterDocs.map((m) => <option key={m} value={m}>{docLabel(m)}{staleCopies(m).length ? " · export out of date" : ""}</option>)
+                )}
               </select>
             </label>
           )}
@@ -1343,7 +1389,13 @@ export default function RunView({ name, file }: { name: string; file?: string })
             />
           )}
           {officeSubject && tab === "edit" && editing === shown && <OfficePane key={officeSubject.slug} run={name} subject={officeSubject} edit focus={officeFocus} onReady={onSaved} />}
-          {officeOutput && tab === "edit" && editing === shown && (
+          {officeOutput?.editable_master && tab === "edit" && editing === shown && (
+            <div className="space-y-3 p-6 text-[0.8125rem]">
+              <p>{officeOutput.label} was made outside the editor. The editable document for this deck is built from an earlier file and does not include this version, so editing it would not change this file.</p>
+              <button onClick={() => { setDoc(officeOutput.editable_master!); setEditPath(undefined); }} className="rounded-md border border-accent px-2.5 py-1 text-accent">Show the editable document</button>
+            </div>
+          )}
+          {officeOutput && !officeOutput.editable_master && tab === "edit" && editing === shown && (
             <div className="space-y-3 p-6 text-[0.8125rem]">
               <p>{officeOutput.label} was delivered by this project. Editing starts a working copy here; the delivered file stays as it is, and exporting writes the next version beside it.</p>
               <button disabled={openOffice.isPending} onClick={() => openOffice.mutate({ path: officeOutput.path, then: "edit" })} className="rounded-md border border-accent px-2.5 py-1 text-accent disabled:opacity-40">{openOffice.isPending ? "Opening…" : "Start editing"}</button>

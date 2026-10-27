@@ -4,6 +4,8 @@ outputs/, and the checks that block a bad save."""
 from __future__ import annotations
 
 import json
+import os
+import time
 import base64
 from pathlib import Path
 from typing import Any
@@ -179,3 +181,35 @@ def test_save_commits_only_that_file(root: Path, tmp_path: Any) -> None:
         ".claude/skills/research/SKILL.md", "---\nname: research\n---\n", "bad"
     )
     assert not blocked["ok"] and "description" in blocked["problems"][0]
+
+
+def test_new_documents_are_listed_without_registering(root: Path) -> None:
+    run = workspace.run_dir(RUN)
+    for rel, text in {
+        "templates/technical-note.md": "# Technical note\n\n[FILL] the assay.\n",
+        "letter-to-investors.md": "# Letter\n",
+        "verification.md": "# Verification\n",          # the pipeline's own
+        "notes/scout-1.md": "# Notes\n",                 # working material
+        "export/meridian/report.md": "# Copy\n",          # a derived copy
+        "deliverable/model/.venv/lib/site.md": "x\n",     # tooling a script installed
+    }.items():
+        (run / rel).parent.mkdir(parents=True, exist_ok=True)
+        (run / rel).write_text(text)
+    detail = workspace.run_detail(RUN)
+    assert detail["readable"] == ["letter-to-investors.md", "templates/technical-note.md"]
+    assert not any(".venv" in f["path"] for f in detail["files"])
+
+
+def test_every_document_keeps_a_dated_copy_of_each_saved_state(root: Path) -> None:
+    run = workspace.run_dir(RUN)
+    (run / "templates").mkdir()
+    (run / "templates/note.md").write_text("# Note\n")
+    workspace.save_run_file(RUN, "templates/note.md", "# Note\n\nFirst round.\n", None)
+    workspace.save_run_file(RUN, "templates/note.md", "# Note\n\nFirst round.\n", None)  # unchanged
+    copies = sorted((run / ".history").glob("templates__note-*.md"))
+    assert [c.read_text() for c in copies] == ["# Note\n\nFirst round.\n"]
+    started = time.time()
+    os.utime(run / "templates/note.md", (started - 60, started - 60))  # saved before this task
+    (run / "letter.md").write_text("# Letter\n\nAn agent wrote this.\n")
+    assert workspace.snapshot_changed(RUN, started) == ["letter.md"]
+    assert len(list((run / ".history").glob("letter-*.md"))) == 1

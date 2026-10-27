@@ -29,7 +29,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from backend import accounts, activity, appearance, autoedits, comments, config, edit_state, final_sections, keychain, office_view, render, revision, sessions, usage, workspace
+from backend import accounts, activity, appearance, autoedits, comments, config, edit_state, final_sections, freshness, keychain, office_view, render, revision, sessions, usage, workspace
 from backend.providers.base import Event, ProviderError
 from backend.providers.claude import ClaudeProvider
 from backend.turns import TurnManager
@@ -513,9 +513,25 @@ def runs() -> list[dict[str, Any]]:
 @app.get("/api/runs/{name}")
 def run(name: str) -> dict[str, Any]:
     try:
-        return workspace.run_detail(name)
+        return {**workspace.run_detail(name), "stale": freshness.stale(name)}
     except (FileNotFoundError, ValueError) as exc:
         raise _bad(exc, 404) from exc
+
+
+class RefreshBody(BaseModel):
+    doc: str | None = None
+
+
+@app.post("/api/runs/{name}/exports/refresh")
+async def refresh_exports(name: str, body: RefreshBody) -> dict[str, Any]:
+    """Make a document's out-of-date exports and delivered files again, as they were last made."""
+    if _run_busy(name):
+        raise HTTPException(409, "An agent is working on this run. Update the exports when its turn finishes.")
+    try:
+        results = await asyncio.to_thread(freshness.refresh, name, {body.doc} if body.doc else None)
+    except (FileNotFoundError, ValueError) as exc:
+        raise _bad(exc) from exc
+    return {"results": results}
 
 
 class ProjectChat(BaseModel):
@@ -1218,6 +1234,7 @@ def remove_comment(name: str, cid: str) -> dict[str, bool]:
 
 
 class FiguresBody(BaseModel):
+    doc: str | None = None
     style: str
     cite: bool = True
     names: list[str] = []
@@ -1227,8 +1244,8 @@ class FiguresBody(BaseModel):
 @app.post("/api/runs/{name}/figures/save")
 def save_figures(name: str, body: FiguresBody) -> dict[str, Any]:
     try:
-        saved = render.save_figures(name, body.style, body.cite, body.names, body.kinds)
-    except (FileNotFoundError, ValueError) as exc:
+        saved = render.save_figures(name, body.style, body.cite, body.names, body.kinds, body.doc)
+    except (render.RenderError, FileNotFoundError, ValueError) as exc:
         raise _bad(exc) from exc
     return {"saved": saved}
 

@@ -38,6 +38,7 @@ NEEDS = re.compile(r"\[NEEDS\s+DATA")
 WORD = re.compile(r"[A-Za-z][A-Za-z\'-]{2,}")
 _STYLE = re.compile(r"<(style|script)\b.*?</\1>", re.S | re.I)
 _TAG = re.compile(r"<[^>]+>", re.S)
+_COMMENT = re.compile(r"<!--.*?-->", re.S)
 
 
 def words_of(t, path=None):
@@ -52,6 +53,9 @@ def words_of(t, path=None):
     counting those would report a document as larger the more of it was lost.
     """
     ext = Path(path).suffix.lower() if path else ""
+    # Comments never render: a revised document's <!-- why: ... --> notes would otherwise
+    # count as text its export had lost.
+    t = _COMMENT.sub(" ", t)
     if ext in (".html", ".htm", ".docx", ".pptx", ".xlsx"):
         t = _TAG.sub(" ", _STYLE.sub(" ", t))
     return len(WORD.findall(t))

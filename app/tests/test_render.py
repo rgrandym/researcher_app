@@ -264,3 +264,18 @@ Text after.
     assert "figure img { display: block; width: 100%;" in css
     assert "{width=100%}" in (root / "o" / "_styled.md").read_text()
     assert "**Table:** Prices by year {#T1}\n\n| Year" in doc.read_text()  # the document keeps its layout
+
+
+@pytest.mark.skipif(not shutil.which("pandoc"), reason="pandoc not installed")
+def test_documents_render_apart_even_with_one_name(root: Path) -> None:
+    run = root / "outputs" / RUN
+    (run / "templates").mkdir()
+    (run / "templates/note.md").write_text("# Note template\n\n[FILL] the result.\n")
+    (run / "note.md").write_text("# Note\n\nThe finished note.\n")
+    template = Path(render.preview(RUN, "templates/note.md", "meridian", False)["html"]).read_text()
+    assert "[FILL] the result." in template
+    finished = render.preview(RUN, "note.md", "meridian", False)
+    assert not finished["cached"] and "The finished note." in Path(finished["html"]).read_text()
+    # Each document keeps its own page: showing one does not rebuild or overwrite the other.
+    again = render.preview(RUN, "templates/note.md", "meridian", False)
+    assert again["cached"] and "[FILL] the result." in Path(again["html"]).read_text()

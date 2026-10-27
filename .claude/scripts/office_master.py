@@ -764,6 +764,131 @@ def build_native(source, data, original, target):
         deck.save(target)
 
 
+
+class Conflict(ValueError):
+    """Both the master and another file changed the same slide, shape, sheet or cell."""
+
+
+def _merge_value(base, ours, theirs, where, conflicts):
+    if ours == theirs or ours == base:
+        return theirs
+    if theirs == base:
+        return ours
+    conflicts.append(where)
+    return ours
+
+
+def _merge_children(base, ours, theirs, where, conflicts):
+    """Shapes (a list keyed by id) or cells (a dict keyed by reference), merged three ways."""
+    if isinstance(theirs, dict):
+        out = {}
+        for key in list(theirs) + [k for k in ours if k not in theirs]:
+            b, o, t = base.get(key), ours.get(key), theirs.get(key)
+            value = _merge_value(b, o, t, f"{where} {key}", conflicts)
+            if value is not None:
+                out[key] = value
+        return out
+    by = lambda items: {i["id"]: i for i in items}  # noqa: E731
+    b, o, t = by(base), by(ours), by(theirs)
+    out = []
+    for key in [i["id"] for i in theirs] + [i["id"] for i in ours if i["id"] not in t]:
+        value = _merge_value(b.get(key), o.get(key), t.get(key), f"{where} shape {key}", conflicts)
+        if value is not None:
+            out.append(value)
+    return out
+
+
+def merge(base, ours, theirs):
+    """Three-way merge of Office models by slide or sheet ID, then by shape or cell. An item
+    or value changed on one side only takes that side; changed on both, differently, is a
+    conflict. Raises Conflict naming every one, so nothing is merged by guesswork."""
+    group = "sheets" if theirs["format"] == "xlsx" else "slides"
+    kids = "cells" if group == "sheets" else "shapes"
+    conflicts = []
+    by = lambda m: {i["id"]: i for i in m[group]}  # noqa: E731
+    b, o, t = by(base), by(ours), by(theirs)
+    order = [i["id"] for i in theirs[group]]
+    for i, item in enumerate(ours[group]):  # an item only the master added goes after its neighbour
+        if item["id"] not in t and item["id"] not in b:
+            after = next((ours[group][j]["id"] for j in range(i - 1, -1, -1) if ours[group][j]["id"] in order), None)
+            order.insert(order.index(after) + 1 if after else 0, item["id"])
+    items = []
+    for key in order:
+        bi, oi, ti = b.get(key), o.get(key), t.get(key)
+        where = f"{group[:-1]} {key}"
+        if bi is not None and (oi is None or ti is None):  # deleted on one side
+            kept = ti if oi is None else oi
+            if kept != bi:
+                conflicts.append(f"{where} (deleted on one side, changed on the other)")
+                items.append(kept)
+            continue
+        if oi is None or ti is None or bi is None:
+            items.append(oi or ti)
+            continue
+        item = {}
+        for field in list(ti) + [f for f in oi if f not in ti]:
+            if field == kids:
+                item[kids] = _merge_children(bi.get(kids, [] if kids == "shapes" else {}), oi.get(kids, [] if kids == "shapes" else {}), ti.get(kids, [] if kids == "shapes" else {}), where, conflicts)
+            else:
+                value = _merge_value(bi.get(field), oi.get(field), ti.get(field), f"{where} {field}", conflicts)
+                if value is not None:
+                    item[field] = value
+        items.append(item)
+    out = dict(theirs, **{group: items})
+    for field in ("design", "theme"):
+        if field in theirs or field in ours:
+            value = _merge_value(base.get(field), ours.get(field), theirs.get(field), field, conflicts)
+            if value is not None:
+                out[field] = value
+    if conflicts:
+        raise Conflict("Changed in both the editable document and the other file: " + "; ".join(conflicts[:20]))
+    return out
+
+
+def rebase(run, slug, path, base_path=None):
+    """Fold a deck or workbook written outside the editor into the editable master, so the
+    document stays one document. The file becomes the master's source (its slides, sheets and
+    design are kept exactly) and the master's own edits are merged onto it. `base_path` is the
+    file it was made from: by default the newest export of the master older than it, else the
+    master's source. Changes nothing, and raises Conflict, when both changed the same thing."""
+    import document
+
+    run = Path(run).resolve()
+    folder, master = paths(run, slug)
+    source, original, meta = baseline(run, slug)
+    path = Path(path).resolve()
+    if not path.is_relative_to(run):
+        raise ValueError("The file must be inside this project.")
+    if base_path is None:
+        made = []
+        for applied in (run / "deliverable" / slug).glob("v*/applied.json"):
+            info = json.loads(applied.read_text())
+            native = applied.parent / str(info.get("file") or "")
+            if info.get("from") == master.name and native.is_file() and native.stat().st_mtime <= path.stat().st_mtime and native != path:
+                made.append(native)
+        base_path = max(made, key=lambda f: f.stat().st_mtime) if made else source
+    base = read_native(base_path)
+    theirs = read_native(path)
+    ours = decode(master.read_text())
+    if theirs["format"] != original["format"]:
+        raise ValueError("The file is not the same kind of document as the master.")
+    merged = merge(base, ours, theirs)
+    validate(merged, theirs)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    for name in ("document.md", "office-source.json"):  # the old baseline, for the record
+        shutil.copy2(folder / name, folder / f"{Path(name).stem}-before-{stamp}{Path(name).suffix}")
+    shutil.copy2(path, folder / f"office-original.{theirs['format']}")
+    (folder / "document.md").write_text(encode(theirs))
+    (folder / "office-source.json").write_text(json.dumps({
+        "format": theirs["format"], "sha256": digest(folder / f"office-original.{theirs['format']}"),
+        "model_sha256": digest(folder / "document.md"), "source": str(path.relative_to(run)),
+        "filename": path.name, "rebased_from": meta.get("source"), "merge_base": str(Path(base_path).resolve().relative_to(run)),
+    }, indent=2) + "\n")
+    master.write_text(encode(merged))
+    document.register(run, slug, master)
+    return master
+
+
 def export(run, slug, design=None):
     import document
 

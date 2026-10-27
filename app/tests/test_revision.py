@@ -215,3 +215,49 @@ def test_a_delivered_file_finds_its_original_whatever_its_version_marks() -> Non
     assert key("optima-biolabs-pitch-deck") == key("OptimaBiolabs_pitch_deck_V18")
     assert key("v4 - Cash flow forecast-2") == key("v5 - Cash flow forecast")
     assert key("Business Plan v0.03") != key("Pitch deck v2")
+
+
+def test_tracked_export_keeps_edited_tables_and_replaces_reshaped_ones(root: Path) -> None:
+    import docx
+
+    run = root / "outputs" / RUN
+    (run / "external_data").mkdir(exist_ok=True)
+    d = docx.Document()
+    d.add_heading("Plan", level=1)
+    d.add_heading("1. Use of funds", level=2)
+    d.add_paragraph("The principal cost lines are shown below:")
+    t = d.add_table(rows=3, cols=2)
+    for r, row in enumerate([("Cost line", "Total"), ("Salary", "£60k"), ("Assays", "£132k")]):
+        for c, v in enumerate(row):
+            t.cell(r, c).text = v
+    d.add_heading("2. Risks", level=2)
+    t = d.add_table(rows=3, cols=2)
+    for r, row in enumerate([("Risk", "Mitigation"), ("Weak moat", "Patents"), ("Thin runway", "Gates")]):
+        for c, v in enumerate(row):
+            t.cell(r, c).text = v
+    d.save(str(run / "external_data" / "plan.docx"))
+    scripts = root / ".claude/scripts"
+    for args in (["add", str(run), "plan.docx"], ["extract", str(run)]):
+        subprocess.run([sys.executable, str(scripts / "subject.py"), *args], check=True, capture_output=True)
+    subprocess.run([sys.executable, str(scripts / "document.py"), "start", str(run), "plan"], check=True, capture_output=True)
+    revision._modules.clear()
+    master = run / "plan.md"
+    text = master.read_text().replace("| £60k |", "| £70k |").replace("| Thin runway | Gates |\n", "")
+    master.write_text(text)
+    result = asyncio.run(main.document_export(RUN, "plan", main.DocumentExportBody(formats=["docx"], track=True)))
+    assert result["ok"] and not result["problems"], result["output"]
+    applied = json.loads((run / "deliverable/plan/v1/applied.json").read_text())
+    ops = {c["id"]: c["op"] for c in applied["changes"]}
+    assert ops.get("C-T1.R2.C2.P1") == "rewrite"  # an edited cell, the table kept
+    assert any(op == "rewrite_section" for op in ops.values())  # a table that lost a row is replaced
+    out = docx.Document(str(run / "deliverable/plan/v1/plan.docx"))
+    xml = out.element.xml
+    assert "£70k" in xml and "w:delText" in xml and "Thin runway" in xml  # the old row, as a tracked deletion
+
+
+def test_a_footnote_marker_before_a_colon_is_a_marker() -> None:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / ".claude/scripts"))
+    import officedoc
+
+    assert officedoc.segments("shown below[^0]:") == [{"text": "shown below"}, {"text": "", "ref": "0"}, {"text": ":"}]
+    assert officedoc.segments("[^1]: A definition.")[0] == {"text": "[^1]:"}

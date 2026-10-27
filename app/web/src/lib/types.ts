@@ -89,6 +89,10 @@ export interface RunDetail {
   meta: { kind: string; doc_kind?: string; masters: string[]; primary: string | null; documents?: { slug: string; master: string }[] };
   stages: Stage[];
   files: { path: string; size: number; mtime: number }[];
+  /** Markdown documents that are not masters: templates, notes, new documents an agent wrote. */
+  readable: string[];
+  /** Exports and delivered files older than the document they copy; `blocked` says why one cannot be made again. */
+  stale: { doc: string; kind: "export" | "deliverable" | "merge"; files: string[]; blocked: string | null }[];
   critique_failed_at: number | null;
   master: string;
   evidence_rows: number;

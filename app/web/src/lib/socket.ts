@@ -8,6 +8,7 @@ export type ServerMessage =
   | { type: "event"; session: string; event: AppEvent }
   | { type: "state"; session: string; running: boolean }
   | { type: "error"; session: string; text: string }
+  | { type: "exports"; session: string; run: string }
   | { type: "pong" };
 
 type Listener = (msg: ServerMessage) => void;

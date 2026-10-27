@@ -365,6 +365,22 @@ class DocxEditor(TextEditor):
                 if parent.tag == w("hyperlink") and parent.find(f".//{w('r')}") is None:
                     parent.getparent().remove(parent)
 
+    def delete_table(self, tbl):
+        """A whole table deleted as Word itself tracks it: every row marked deleted and every
+        cell's text struck, so the reader sees the old table go and accepting removes it."""
+        for tr in tbl.findall(w("tr")):
+            for para in tr.iter(w("p")):
+                self.normalize(para)
+                self.remove_runs(list(dict.fromkeys(x.run for x in self.atoms(para))))
+                self.mark_paragraph(para, "del")
+            trpr = tr.find(w("trPr"))
+            if trpr is None:
+                trpr = self.E("w:trPr")
+                ex = tr.find(w("tblPrEx"))  # a row's properties follow its exceptions, if any
+                (ex.addnext if ex is not None else lambda e: tr.insert(0, e))(trpr)
+            change = trpr.find(w("trPrChange"))
+            (change.addprevious if change is not None else trpr.append)(self.revision("del"))
+
     def mark_paragraph(self, p, tag):
         ppr = p.find(w("pPr"))
         if ppr is None:
@@ -549,8 +565,9 @@ class DocxEditor(TextEditor):
         el = self.el(target)
         if el.tag == w("tbl"):
             if self.track:
-                raise Refused("tracked mode cannot delete a whole table; delete its cells' text instead")
-            el.getparent().remove(el)
+                self.delete_table(el)
+            else:
+                el.getparent().remove(el)
             self.deleted.update(k for k in self.index if k == target or k.startswith(target + "."))
             return
         if ch.get("before") and plans.norm(ch["before"]) != plans.norm(officedoc.docx_text(el)):
@@ -787,7 +804,7 @@ class DocxEditor(TextEditor):
                 self.remove_runs(list(dict.fromkeys(x.run for x in self.atoms(e_))))
                 self.mark_paragraph(e_, "del")
             elif self.track and e_.tag == w("tbl"):
-                raise Refused("tracked mode cannot delete a whole table; keep it with {Tn}")
+                self.delete_table(e_)
             elif e_.tag in (w("p"), w("tbl"), w("sdt")):
                 e_.getparent().remove(e_)
             if key:
@@ -865,10 +882,28 @@ class DocxEditor(TextEditor):
                 if e_.get(w("id")) not in refs:
                     e_.getparent().remove(e_)
 
+    def drop_deleted_note_marks(self):
+        """A rewritten paragraph that keeps its footnote deletes the old marker and inserts a
+        new one. Word refuses to open a file whose note has two markers, even a deleted one,
+        so the deleted marker goes: the note keeps one marker, in its new place."""
+        body = self.doc.element.body
+        for tag in ("footnoteReference", "endnoteReference"):
+            refs = list(body.iter(w(tag)))
+            live = {r.get(w("id")) for r in refs if not any(a.tag == w("del") for a in r.iterancestors())}
+            for ref in refs:
+                gone = next((a for a in ref.iterancestors() if a.tag == w("del")), None)
+                if gone is None or ref.get(w("id")) not in live:
+                    continue
+                run = next(a for a in ref.iterancestors() if a.tag == w("r"))
+                run.getparent().remove(run)
+                if gone.find(w("r")) is None:
+                    gone.getparent().remove(gone)
+
     def save(self, dest):
         for ch in self.late:
             self.clean_up(ch)
         self.drop_orphan_comments()
+        self.drop_deleted_note_marks()
         if self.comments is not None:
             self.comments.flush()
         if self.fn is not None:

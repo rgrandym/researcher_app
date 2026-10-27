@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from backend import activity, config, handoff, router, sessions, usage, workspace
+from backend import activity, config, freshness, handoff, router, sessions, usage, workspace
 from backend.providers.base import (
     Event,
     PermissionDecision,
@@ -167,6 +167,7 @@ class TurnManager:
         self.locks: dict[str, str] = {}  # run name -> session id
         self.last_turn_end: dict[str, float] = {}
         self.failover_tried: dict[str, set[str]] = {}  # session -> accounts that failed
+        self.background: set[asyncio.Task[None]] = set()  # export refreshes after a turn
 
     # ------------------------------------------------------------------ queries
 
@@ -801,6 +802,36 @@ class TurnManager:
             )
         running.ended = True
         await self.hub.publish(session_id, {"type": "state", "running": False})
+        if result.end_reason == "done":
+            task = asyncio.create_task(self._refresh_exports(session_id, started))
+            self.background.add(task)
+            task.add_done_callback(self.background.discard)
+
+    async def _refresh_exports(self, session_id: str, started: float) -> None:
+        """After the turn, make again the exports and delivered files of every document it
+        changed, as they were last made, so a copy the author sends shows the current text.
+        Runs after "not running", so the author is never kept waiting for it."""
+        for run in sessions.load(session_id).runs:
+            try:
+                # A dated copy of every document the turn changed, so each round can be restored.
+                await asyncio.to_thread(workspace.snapshot_changed, run, started)
+                results = await asyncio.to_thread(freshness.refresh, run, None, started)
+            except (ValueError, FileNotFoundError):
+                continue
+            if not results:
+                continue
+            merged = [f for r in results if r["kind"] == "merge" and not r["problem"] for f in r["files"]]
+            made = [f for r in results if r["kind"] != "merge" for f in r["files"]]
+            problems = [f"{r['doc']}: {r['problem']}" for r in results if r["problem"]]
+            text = (f"Updated {len(made)} exported file{'s' if len(made) != 1 else ''} to match the edited documents: "
+                    + ", ".join(Path(f).name for f in made) + "." if made else "")
+            if merged:
+                text = ("Merged " + ", ".join(Path(f).name for f in merged) + " into its editable document, "
+                        "so the document stays one document. " + text).strip()
+            if problems:
+                text += (" " if text else "") + "Not updated: " + " ".join(problems)
+            await self._emit(session_id, Event(type="notice", data={"kind": "exports", "run": run, "text": text}))
+            await self.hub.publish(session_id, {"type": "exports", "run": run})
 
     # ------------------------------------------------------------------ staged pipeline
 

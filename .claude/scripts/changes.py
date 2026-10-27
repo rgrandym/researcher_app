@@ -551,7 +551,11 @@ def check(run, slug, version=None):
                 continue
             new_text += N[j1:j2]
             for i in range(i1, i2):
-                if L[i][0] not in touched:
+                # A cell whose text is still there, within a row or so of the stretch, survived:
+                # when most cells of a table change, the alignment can pair an old value with an
+                # equal new one elsewhere and leave an unchanged cell among the edited ones.
+                near = N[max(0, j1 - 8):j2 + 8]
+                if L[i][0] not in touched and not (L[i][0].startswith("T") and L[i][1] in near):
                     problems.append(f"{L[i][0]} changed without an accepted change: {L[i][1][:90]!r}")
             if all(norm(t) in notes for t in N[j1:j2]) and i1 == i2:
                 continue                      # footnotes the accepted changes created
@@ -718,6 +722,37 @@ def from_markdown(run, slug):
     return 0
 
 
+def _md_rows(md):
+    """A Markdown table's cells, row by row, without its separator line."""
+    rows = []
+    for line in md.strip().splitlines():
+        line = line.strip()
+        if not line.startswith("|") or re.fullmatch(r"\|?(\s*:?-+:?\s*\|)+\s*:?-*:?\s*", line):
+            continue
+        cells = re.split(r"(?<!\\)\|", line.strip("|"))
+        rows.append([c.strip() for c in cells])
+    return rows
+
+
+def cell_edits(tid, before, after, known):
+    """An edited table as rewrites of the cells that changed (T1.R3.C2.P1), so tracked
+    changes mark those cells and the table itself stays. None when rows or columns were
+    added or removed, or a changed cell has no paragraph to target: the caller rewrites
+    the section instead."""
+    rb, ra = _md_rows(before), _md_rows(after)
+    if not rb or len(rb) != len(ra) or any(len(x) != len(y) for x, y in zip(rb, ra)):
+        return None
+    out = []
+    for r, (xb, xa) in enumerate(zip(rb, ra), 1):
+        for c, (cb, ca) in enumerate(zip(xb, xa), 1):
+            if cb != ca:
+                target = f"{tid}.R{r}.C{c}.P1"
+                if target not in known:
+                    return None
+                out.append((target, ca))
+    return out
+
+
 def plan_from_markdown(run, slug, text, source):
     """The change plan that turns document.md into `text`: one change per edited paragraph,
     or one rewrite per section whose blocks were added, removed or reordered. IDs come from
@@ -727,6 +762,7 @@ def plan_from_markdown(run, slug, text, source):
     if not (d / "document.md").is_file():
         sys.exit(f"ERROR {slug} has no document.md: run subject.py extract (Word documents only)")
     model = model_of(run, slug)
+    cell_ids = {p_["id"] for p_ in model["parts"] if p_.get("kind") == "cell"}
     O, _ = md_blocks((d / "document.md").read_text())
     R, opens = md_blocks(text)
     known = {b["id"] for b in O}
@@ -778,10 +814,18 @@ def plan_from_markdown(run, slug, text, source):
                                 "kind": "remove", **note([], f"Removed with the section {where}.")})
             continue
         same_ids = [b["id"] for b in o] == [b["id"] for b in r]
-        tables_edited = any(b["id"].startswith("T") and b["md"] != rb["md"] for b, rb in zip(o, r)) if same_ids else True
-        if same_ids and not tables_edited:
+        cells = {}
+        if same_ids:
             for b, rb in zip(o, r):
-                if b["md"] != rb["md"]:
+                if b["id"].startswith("T") and b["md"] != rb["md"]:
+                    cells[b["id"]] = cell_edits(b["id"], b["md"], rb["md"], cell_ids)
+        if same_ids and None not in cells.values():
+            for b, rb in zip(o, r):
+                if b["id"] in cells:
+                    for target, after in cells[b["id"]]:
+                        changes.append({"id": f"C-{target}", "op": "rewrite", "target": target, "after": after,
+                                        "kind": "adjust", **note([rb], f"Table {b['id']} revised in {where}.")})
+                elif b["md"] != rb["md"]:
                     changes.append({"id": f"C-{b['id']}", "op": "rewrite", "target": b["id"], "after": rb["md"],
                                     "kind": "adjust", **note([rb], f"Revised in {where}.")})
             continue

@@ -89,7 +89,8 @@ def strip_tokens(text):
 #   **bold**   *italic*   ~~struck~~   [label](https://url)   ^[new footnote]   [^3] existing footnote
 MARKUP = re.compile(
     r"~~(?P<s>.+?)~~"
-    r"|\[\^(?P<ref>\d+)\](?!:)"
+    r"|(?P<defn>(?<![^\n])\[\^\d+\]:)"             # a definition, at a line's start: literal
+    r"|\[\^(?P<ref>\d+)\]"
     r"|\*\*(?P<b>.+?)\*\*"
     r"|(?<![\w*])\*(?P<i>[^*\s][^*]*?)\*(?![\w*])"
     r"|\[(?P<lt>[^\]]+)\]\((?P<lu>(?:https?|mailto):[^)\s]+)\)"
@@ -104,6 +105,8 @@ def segments(text):
             out.append({"text": text[pos:m.start()]})
         if m.group("s") is not None:
             out += [{**seg, "strike": True} for seg in segments(m.group("s"))]
+        elif m.group("defn") is not None:
+            out.append({"text": m.group("defn")})
         elif m.group("ref") is not None:
             out.append({"text": "", "ref": m.group("ref")})
         elif m.group("b") is not None:

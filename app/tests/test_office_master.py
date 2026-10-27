@@ -316,6 +316,24 @@ def test_delivered_workbook_is_listed_rendered_and_opened_for_editing(root: Path
     assert (run / path).is_file()  # the delivered file is never changed
 
 
+def test_file_made_outside_the_editor_is_listed_beside_the_master(root: Path) -> None:
+    run = delivered_forecast(root)
+    path = "deliverable/cash-flow-forecast/v5/v5 - Cash flow forecast.xlsx"
+    asyncio.run(main.office_open(RUN, main.OfficeOpenBody(path=path)))
+    assert main.office_outputs(RUN)["outputs"] == []
+    newer = run / "deliverable/cash-flow-forecast/v6"
+    newer.mkdir()
+    book = load_workbook(run / path)
+    book["Budget"]["B3"] = 0.2
+    book.save(newer / "v6 - Cash flow forecast.xlsx")
+    listed = main.office_outputs(RUN)["outputs"]
+    assert [(o["version"], o["editable_master"]) for o in listed] == [("v6", "cash-flow-forecast.md")]
+    assert "20.0%" in asyncio.run(main.office_html(RUN, listed[0]["path"])).body.decode()
+    exported = asyncio.run(main.document_export(RUN, "cash-flow-forecast", main.DocumentExportBody(formats=["xlsx"])))
+    assert exported["files"] == ["deliverable/cash-flow-forecast/v7/v7 - Cash flow forecast.xlsx"]
+    assert main.office_outputs(RUN)["outputs"] == []  # the master's own export stands for itself
+
+
 def test_delivered_file_without_its_original_is_viewable_not_editable(root: Path) -> None:
     run = delivered_forecast(root)
     (run / "external_data/v4 - Cash flow forecast-2.xlsx").unlink()
@@ -469,3 +487,52 @@ def test_powerpoint_draws_a_deck_once_until_it_is_edited(root: Path, monkeypatch
     save(content)
     office_view.html(RUN, "sample.md")
     assert len(calls) == 2
+
+
+def _deck_written_by_a_script(run: Path, v1: str, text: str | None = None) -> Path:
+    """What an agent did by hand: copy the delivered deck, change it, save it as a new version."""
+    deck = Presentation(run / v1)
+    if text is not None:
+        deck.slides[0].shapes[0].text_frame.paragraphs[0].runs[0].text = text
+    else:
+        slide = deck.slides.add_slide(deck.slide_layouts[6])
+        slide.shapes.add_textbox(Inches(1), Inches(1), Inches(6), Inches(1)).text_frame.text = "Activin A market"
+    folder = run / "deliverable/sample/v2"
+    folder.mkdir()
+    deck.save(folder / "sample V19.pptx")
+    return folder / "sample V19.pptx"
+
+
+def test_a_deck_written_outside_the_editor_is_merged_into_the_same_document(root: Path) -> None:
+    from backend import freshness
+
+    run, _ = presentation(root)
+    content = start()
+    [v1] = export("pptx")["files"]
+    _deck_written_by_a_script(run, v1)
+    content = main.office_content(RUN, "sample")
+    content["data"]["slides"][0]["shapes"][0]["paragraphs"] = ["Our corrected plan"]
+    save(content)
+    [merged, exported] = freshness.refresh(RUN)
+    assert merged["kind"] == "merge" and merged["problem"] is None
+    assert exported["files"] == ["deliverable/sample/v3/sample V19.pptx"] and exported["problem"] is None
+    deck = Presentation(run / exported["files"][0])
+    assert [s.shapes[0].text for s in deck.slides if s.shapes] == ["Our corrected plan", "Activin A market"]
+    assert freshness.stale(RUN) == [] and main.office_outputs(RUN)["outputs"] == []
+    assert len(main.office_content(RUN, "sample")["data"]["slides"]) == 3  # the master holds the new slide
+
+
+def test_a_deck_changed_on_both_sides_is_reported_not_guessed(root: Path) -> None:
+    from backend import freshness
+
+    run, _ = presentation(root)
+    content = start()
+    [v1] = export("pptx")["files"]
+    _deck_written_by_a_script(run, v1, text="Their plan")
+    content = main.office_content(RUN, "sample")
+    content["data"]["slides"][0]["shapes"][0]["paragraphs"] = ["Our corrected plan"]
+    save(content)
+    before = (run / "sample.md").read_text()
+    [result] = freshness.refresh(RUN)
+    assert result["kind"] == "merge" and "changed in both" in result["problem"].lower()
+    assert (run / "sample.md").read_text() == before

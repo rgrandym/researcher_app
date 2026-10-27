@@ -435,11 +435,27 @@ def _cache(run_name: str, style: str, cite: bool) -> Path:
     return config.data_dir("render", run_name, f"{style}-{'cited' if cite else 'ids'}")
 
 
+def _doc_cache(run_name: str, style: str, cite: bool, run: Path, src: Path) -> Path:
+    """Each document's own preview cache: two windows showing different documents of a run
+    neither rebuild in turn nor write over each other's intermediate files."""
+    key = str(src.relative_to(run.resolve())).replace("/", "__")
+    return _cache(run_name, style, cite) / "docs" / key
+
+
+_preview_locks: dict[str, threading.Lock] = {}
+
+
 def preview(run_name: str, doc: str | None, style: str, cite: bool) -> dict[str, Any]:
     """Render into the app's cache, unless the cached HTML is newer than its inputs."""
     run = workspace.run_dir(run_name)
     src = _source(run, doc)
-    cache = _cache(run_name, style, cite)
+    cache = _doc_cache(run_name, style, cite, run, src)
+    cache.mkdir(parents=True, exist_ok=True)
+    with _preview_locks.setdefault(str(cache), threading.Lock()):
+        return _preview(run_name, doc, style, cite, run, src, cache)
+
+
+def _preview(run_name: str, doc: str | None, style: str, cite: bool, run: Path, src: Path, cache: Path) -> dict[str, Any]:
     stamp = cache / "source.json"
     inputs = [src, run / "evidence.jsonl", config.ROOT / ".claude/styles" / f"{style}.json"]
     newest = max((p.stat().st_mtime for p in inputs if p.exists()), default=0)
@@ -519,6 +535,11 @@ def preview_file(run_name: str, style: str, cite: bool, rel: str) -> Path:
 # ------------------------------------------------------------------ export
 
 
+def record_path(out: Path, stem: str) -> Path:
+    """Where an export records how it was made, beside the files it wrote."""
+    return out / f".{stem}.export.json"
+
+
 def export(
     run_name: str,
     doc: str | None,
@@ -577,6 +598,11 @@ def export(
         check = (
             "Export check passed.\n" if done.returncode == 0 else "Export check found losses:\n"
         ) + check
+    # How this copy was made, so it can be made again the same way when the document changes.
+    record_path(out, result["stem"]).write_text(json.dumps({
+        "doc": str(_source(run, doc).relative_to(run.resolve())),
+        "cite": cite, "comments": with_comments, "formats": formats,
+    }) + "\n")
     return {
         "files": [str(p.relative_to(config.ROOT)) for p in made],
         "folder": str(out.relative_to(config.ROOT)),
@@ -587,11 +613,11 @@ def export(
 
 
 def save_figures(
-    run_name: str, style: str, cite: bool, names: list[str], kinds: list[str]
+    run_name: str, style: str, cite: bool, names: list[str], kinds: list[str], doc: str | None = None
 ) -> list[str]:
-    """Copy rendered figures from the preview into <run>/export/<style>/figures/."""
+    """Copy rendered figures from a document's preview into <run>/export/<style>/figures/."""
     run = workspace.run_dir(run_name)
-    src = _cache(run_name, style, cite) / "figures"
+    src = _doc_cache(run_name, style, cite, run, _source(run, doc)) / "figures"
     dest = run / "export" / style / "figures"
     dest.mkdir(parents=True, exist_ok=True)
     saved = []
