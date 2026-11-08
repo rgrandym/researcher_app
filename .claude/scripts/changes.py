@@ -174,7 +174,7 @@ def table_problems(after):
     for block in [b.strip() for b in (after or "").split("\n\n") if b.strip()]:
         lines = [x for x in DONOR.sub("", block).split("\n") if not re.fullmatch(r"[\s|:-]+", x)]
         if lines and all(x.strip().startswith("|") for x in lines):
-            widths = {len(x.strip().strip("|").split("|")) for x in lines}
+            widths = {len(re.split(r"(?<!\\)\|", x.strip().strip("|"))) for x in lines}
             if len(widths) > 1:
                 out.append(f"a table's rows have different numbers of cells ({sorted(widths)})")
     return out

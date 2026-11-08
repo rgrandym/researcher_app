@@ -165,6 +165,18 @@ def test_presentation_text_table_notes_and_added_slide(root: Path, design: str) 
     assert source.read_bytes() == original
 
 
+def test_shape_added_mid_slide_exports_in_place(root: Path) -> None:
+    run, _ = presentation(root)
+    content = start()
+    shapes = content["data"]["slides"][0]["shapes"]
+    shapes.insert(1, {"id": "new-middle", "kind": "text", "paragraphs": ["Inserted"], "box": {"x": 100, "y": 300, "w": 200, "h": 40}})
+    save(content)
+    result = export("pptx", "preserve")
+    deck = Presentation(run / result["files"][0])
+    texts = [s.text for s in deck.slides[0].shapes if s.has_text_frame]
+    assert texts.index("Inserted") == 1
+
+
 def test_failed_export_does_not_publish_version(root: Path) -> None:
     run, _ = workbook(root)
     content = start()

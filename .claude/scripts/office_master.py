@@ -638,9 +638,22 @@ def _set_paragraph(paragraph, text):
         run.text = value
 
 
+def _like_paragraph(frame):
+    """A paragraph added by an edit starts as a copy of the one before it, so it keeps the
+    spacing, alignment, font, size and colour instead of falling back to the deck default."""
+    last = frame.paragraphs[-1]
+    paragraph = frame.add_paragraph()
+    if last._p.pPr is not None:
+        paragraph._p.insert(0, copy(last._p.pPr))
+    if last.runs and last.runs[0]._r.rPr is not None:
+        run = paragraph.add_run()
+        run._r.insert(0, copy(last.runs[0]._r.rPr))
+    return paragraph
+
+
 def _set_frame(frame, paragraphs):
     for index, value in enumerate(paragraphs):
-        paragraph = frame.paragraphs[index] if index < len(frame.paragraphs) else frame.add_paragraph()
+        paragraph = frame.paragraphs[index] if index < len(frame.paragraphs) else _like_paragraph(frame)
         _set_paragraph(paragraph, value)
     for paragraph in list(frame.paragraphs)[len(paragraphs):]:
         frame._txBody.remove(paragraph._p)
@@ -714,17 +727,23 @@ def build_native(source, data, original, target):
                     placeholder._element.getparent().remove(placeholder._element)
             order.append(slide.slide_id)
             shapes = dict(walk_shapes(slide.shapes))
+            created = set()
             for index, item_shape in enumerate(item["shapes"]):
                 shape = shapes.get(item_shape["id"])
                 if shape is None:
+                    created.add(item_shape["id"])
                     height = (deck.slide_height - Inches(1)) // max(1, len(item["shapes"]))
                     left, top = Inches(.6), Inches(.5) + index * height
                     width = deck.slide_width - Inches(1.2)
                     if item_shape["kind"] == "text":
                         shape = slide.shapes.add_textbox(left, top, width, height)
+                        frame = shape.text_frame  # a text box wraps at its width and sits exactly on its box
+                        frame.word_wrap = True
+                        frame.margin_left = frame.margin_right = frame.margin_top = frame.margin_bottom = 0
                     else:
                         rows = item_shape["rows"]
                         shape = slide.shapes.add_table(len(rows), len(rows[0]), left, top, width, height)
+                    shapes[item_shape["id"]] = shape
                 prior = known.get(item["id"], {}).get(item_shape["id"], {})
                 if "box" in item_shape and item_shape["box"] != prior.get("box"):
                     box = item_shape["box"]
@@ -743,6 +762,18 @@ def build_native(source, data, original, target):
                             if cell.is_spanned and value != cell.text:
                                 raise ValueError("Edit the top-left cell of a merged presentation table.")
                             _set_frame(cell.text_frame, value.split("\n"))
+            # A new shape is appended on top; the master says where it sits in the stacking order.
+            for index, item_shape in enumerate(item["shapes"]):
+                if item_shape["id"] not in created:
+                    continue
+                element = shapes[item_shape["id"]]._element
+                before = shapes.get(item["shapes"][index - 1]["id"]) if index else None
+                if before is not None and before._element.getparent() is element.getparent():
+                    before._element.addnext(element)
+                elif index == 0:
+                    first = next((e for e in element.getparent() if e.tag.endswith(("}sp", "}pic", "}graphicFrame", "}grpSp", "}cxnSp"))), None)
+                    if first is not None and first is not element:
+                        first.addprevious(element)
             if data["design"] == "new":
                 slide._element.set("showMasterSp", "0")
                 slide.background.fill.solid()
