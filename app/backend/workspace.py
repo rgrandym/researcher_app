@@ -174,6 +174,15 @@ def run_meta(path: Path) -> dict[str, Any]:
     meta: dict[str, Any] = rm.meta(path)
     primary = rm.primary(path)
     meta["primary"] = primary.name if primary else None
+    if (path / "report.md").is_file():
+        meta["masters"] = [m for m in meta["masters"] if m != "draft.md"]
+    # Code documents belong to the current search but keep their own run metadata.
+    # Expose only their master in the HTML document selector; notes stay in Finder.
+    for child in sorted((path / "code-docs").glob("*/.run.json")):
+        if rm.meta(child.parent).get("kind") == "code-doc":
+            meta["masters"].extend(
+                str((child.parent / name).relative_to(path)) for name in rm.masters(child.parent)
+            )
     return meta
 
 
@@ -849,6 +858,12 @@ def masters_changed_since(runs: set[str], since: float) -> list[Path]:
             doc = path / m
             if doc.is_file() and doc.stat().st_mtime >= since:
                 out.append(doc)
+        if rm:
+            for child in (path / "code-docs").glob("*/.run.json"):
+                for m in rm.masters(child.parent):
+                    doc = child.parent / m
+                    if doc.is_file() and doc.stat().st_mtime >= since:
+                        out.append(doc)
     return out
 
 

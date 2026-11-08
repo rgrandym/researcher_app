@@ -105,9 +105,10 @@ def project_note(run: str) -> str:
     doc = f" Its master document is outputs/{run}/{master}." if master else ""
     return (
         f"\n\n(This conversation is inside the project outputs/{run}.{doc} Questions and "
-        "commands are about this project unless the author says otherwise; a command "
-        "that takes a run acts on it. Read its files as the question needs, by grep and "
-        "range rather than whole.)"
+        "commands are about this project unless the author explicitly starts a new search. "
+        "Put every document and supporting file produced by a task inside this project's "
+        "folder. For /code-doc, pass --project outputs/" + run + " to codedoc.py start. "
+        "Read its files as the question needs, by grep and range rather than whole.)"
     )
 
 
@@ -483,7 +484,7 @@ class TurnManager:
                     f"\n\n(This app session has worked on {runs}. "
                     "Use it if the command names no run.)"
                 )
-        if session.project and native is None and (route_text == prompt or continuing):
+        if session.project and (route_text == prompt or continuing):
             prompt += project_note(session.project)
         if question and router.runtime_of(seg.provider) == "codex":
             prompt += f"\n\n({QUESTION})"  # Codex takes no system note; its sandbox is read-only

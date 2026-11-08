@@ -81,6 +81,23 @@ def test_start_scaffolds_a_code_doc_run_and_finds_it_again(root: Path) -> None:
     assert len(list((root / "outputs").glob("*code-doc*"))) == 1
 
 
+def test_project_code_doc_stays_in_project_and_is_found_on_rerun(root: Path) -> None:
+    standalone, _ = _run(root)
+    project = root / "outputs/2026-11-08-widget-audit"
+    project.mkdir(parents=True)
+    args = ("start", "widget", "--target", "src/widget.py", "--scope", "src/widget.py",
+            "--prompt", "/code-doc src/widget.py", "--project", "outputs/2026-11-08-widget-audit")
+    first = _script(root, *args)
+    assert first.returncode == 0, first.stderr
+    run = project / "code-docs/widget"
+    assert first.stdout.split()[0] == str(run.relative_to(root))
+    assert (run / ".run.json").is_file()
+    again = _script(root, *args)
+    assert again.returncode == 0, again.stderr
+    assert again.stdout.split()[0] == str(run.relative_to(root))
+    assert list((root / "outputs").glob("*code-doc*")) == [standalone]
+
+
 def test_a_cited_document_passes(root: Path) -> None:
     run, master = _run(root)
     master.write_text(DOC)

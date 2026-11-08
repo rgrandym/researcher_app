@@ -200,6 +200,20 @@ def test_new_documents_are_listed_without_registering(root: Path) -> None:
     assert not any(".venv" in f["path"] for f in detail["files"])
 
 
+def test_project_html_documents_include_final_report_and_code_doc_only(root: Path) -> None:
+    run = workspace.run_dir(RUN)
+    (run / "report.md").write_text("# Final report\n")
+    child = run / "code-docs/widget"
+    child.mkdir(parents=True)
+    (child / ".run.json").write_text('{"kind":"code-doc","masters":["widget.md"]}')
+    (child / "widget.md").write_text("# Widget\n")
+    (child / "notes.md").write_text("# Intermediate note\n")
+    detail = workspace.run_detail(RUN)
+    assert detail["meta"]["primary"] == "report.md"
+    assert detail["meta"]["masters"] == ["report.md", "code-docs/widget/widget.md"]
+    assert "code-docs/widget/notes.md" in {f["path"] for f in detail["files"]}
+
+
 def test_every_document_keeps_a_dated_copy_of_each_saved_state(root: Path) -> None:
     run = workspace.run_dir(RUN)
     (run / "templates").mkdir()

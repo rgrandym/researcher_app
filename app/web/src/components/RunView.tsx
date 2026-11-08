@@ -1208,8 +1208,7 @@ export default function RunView({ name, file }: { name: string; file?: string })
   const officeSubjects = (subjects.data?.subjects ?? []).filter((s) => s.role === "subject" && ["xlsx", "pptx"].includes(s.format));
   const outputs = officeOutputs.data?.outputs ?? [];
   const masterDocs = [...new Set([...data.meta.masters.filter((m) => present.has(m)), ...officeSubjects.map((s) => s.master ?? `${s.slug}.md`), ...outputs.map((o) => o.path)])];
-  const otherDocs = (data.readable ?? []).filter((m) => !masterDocs.includes(m));
-  const docs = [...masterDocs, ...otherDocs];
+  const docs = masterDocs;
   const shown = doc && docs.includes(doc) ? doc : primary ?? docs[0];
   const officeSubject = officeSubjects.find((s) => (s.master ?? `${s.slug}.md`) === shown);
   const officeOutput = outputs.find((o) => o.path === shown);
@@ -1222,7 +1221,7 @@ export default function RunView({ name, file }: { name: string; file?: string })
     const entry = data.meta.documents?.find((d) => d.master === m);
     const source = entry && subjects.data?.subjects.find((s) => s.slug === entry.slug)?.path;
     if (source) return `${source.replace(/\.[^.]+$/, "")} (revised)`;
-    return data.meta.documents?.length && m === "report.md" ? "Audit (report.md)" : m;
+    return m === "report.md" ? "Final report (report.md)" : m;
   };
   // Exports and delivered files older than their document. The app makes them again after a
   // task; these are the ones still waiting, or that it could not make (`blocked`).
@@ -1332,14 +1331,7 @@ export default function RunView({ name, file }: { name: string; file?: string })
             <label className={clsx("flex items-center gap-1.5 text-[0.75rem] text-muted", shownStale.length === 0 && "ml-auto")}>
               Showing
               <select value={shown} onChange={(e) => { setDoc(e.target.value); setEditPath(undefined); }} title="The document the Document, HTML and Edit tabs show" className="max-w-[18rem] truncate rounded-md border border-border bg-bg px-1.5 py-0.5 text-fg outline-none focus:border-accent">
-                {otherDocs.length > 0 ? (
-                  <>
-                    <optgroup label="Documents">{masterDocs.map((m) => <option key={m} value={m}>{docLabel(m)}{staleCopies(m).length ? " · export out of date" : ""}</option>)}</optgroup>
-                    <optgroup label="Other documents">{otherDocs.map((m) => <option key={m} value={m}>{m}</option>)}</optgroup>
-                  </>
-                ) : (
-                  masterDocs.map((m) => <option key={m} value={m}>{docLabel(m)}{staleCopies(m).length ? " · export out of date" : ""}</option>)
-                )}
+                {masterDocs.map((m) => <option key={m} value={m}>{docLabel(m)}{staleCopies(m).length ? " · export out of date" : ""}</option>)}
               </select>
             </label>
           )}

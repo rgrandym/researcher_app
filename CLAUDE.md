@@ -105,6 +105,9 @@ lists the passages to fix; it never edits the report.
 `/code-doc` writes the source-of-truth document for a feature or file of the
 project's code, every statement cited `path:line`, in its own `code-doc` run;
 it runs only when the author types it and updates the same document on re-run.
+When invoked inside an existing search project, its run lives under that project's
+`code-docs/` folder. All files produced by a task in a search project stay in that
+project; only a new search gets a new top-level folder under `outputs/`.
 
 **Revision:** `/audit` → `/changes` → the author accepts → `/revise` (Word,
 PowerPoint, Excel, Markdown, edited in place) or `/rebuild` (a PDF, or a new
@@ -135,8 +138,9 @@ not export at the end of a task, or say whether the exports are current.
 
 ## Output layout
 
-Every run gets its own folder under `outputs/`, named `YYYY-MM-DD-<short-slug>`,
-and nothing from a run is written anywhere else. Scaffold it with:
+Every new search gets its own folder under `outputs/`, named
+`YYYY-MM-DD-<short-slug>`. A task started inside an existing search writes inside
+that project's folder. Scaffold a new search with:
 
 ```bash
 bash .claude/scripts/new_run.sh "<slug>" "<the user's prompt, verbatim>"

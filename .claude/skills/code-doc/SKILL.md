@@ -46,13 +46,17 @@ first) and wait. Do not document a guess.
 
 ```bash
 python3 .claude/scripts/codedoc.py start <slug> --target "<what the author typed>" \
-        --scope <path> [<path> ...] --prompt "<the author's message, verbatim>"
+        --scope <path> [<path> ...] --prompt "<the author's message, verbatim>" \
+        [--project outputs/<current-project>]
 ```
 
-It prints the run folder and the master. A target already documented returns its
+When invoked from a project's Chat tab, pass that project with `--project`. The
+document and its notes, review and stamp then stay in
+`<project>/code-docs/<slug>/`. Use a new top-level run only when the author starts
+a new search outside a project. It prints the run folder and the master. A target already documented returns its
 existing run, widens the scope if needed and appends the new request to
 `prompt.md`: the document is updated in place, never written beside itself. A new
-target gets `outputs/YYYY-MM-DD-code-doc-<slug>/` with the master `<slug>.md`.
+target outside a project gets `outputs/YYYY-MM-DD-code-doc-<slug>/` with the master `<slug>.md`.
 
 On a re-run, first:
 

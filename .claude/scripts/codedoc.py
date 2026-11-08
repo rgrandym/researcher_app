@@ -8,7 +8,8 @@ exist, every statement carries one or is a labelled gap, and the document says
 when the code it describes has changed.
 
     python3 .claude/scripts/codedoc.py start <slug> --target "<what was typed>" \
-            --scope <path> [<path> ...] --prompt "<the request, verbatim>"
+            --scope <path> [<path> ...] --prompt "<the request, verbatim>" \
+            [--code-root <path>] [--project outputs/<run>]
     python3 .claude/scripts/codedoc.py find "<target>"     # the run already documenting it
     python3 .claude/scripts/codedoc.py inventory <run>     # files in scope, with line counts
     python3 .claude/scripts/codedoc.py check <doc>         # ERROR / WARN lines, exit 1 on ERROR
@@ -16,10 +17,16 @@ when the code it describes has changed.
     python3 .claude/scripts/codedoc.py status <run>        # what changed since; exit 1 if anything
     python3 .claude/scripts/codedoc.py stages <run>        # stage table, used by run_check.py
 
-A code-doc run is a folder under outputs/ whose `.run.json` has kind "code-doc",
+A code-doc run is a folder under outputs/ or a project's `code-docs/` directory whose `.run.json` has kind "code-doc",
 one master `<slug>.md`, the target as typed and the scope as paths relative to the
-project root. Running /code-doc again on the same target finds that run and the
+code root. Running /code-doc again on the same target finds that run and the
 master is updated in place.
+
+The code root is the project itself unless the run's `.run.json` names another
+repository in `code_root`, which is how a document in this workspace describes
+code that lives in a sibling checkout. Scope paths, `path:line` references, the
+inventory and the stamp all resolve against it; the run folder itself always
+stays under this project's `outputs/`.
 """
 import hashlib
 import json
@@ -34,6 +41,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import runmeta  # noqa: E402
 
 KIND = "code-doc"
+# The repository the document describes: this project, unless a run names another.
+CODE_ROOT = ROOT
 GAP = "[Not defined in codebase]"
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build",
              ".pytest_cache", ".mypy_cache", ".history", "outputs"}
@@ -72,7 +81,38 @@ ARTIFACTS = [
 
 # ------------------------------------------------------------------ helpers
 
+def use_code_root(where) -> Path:
+    """Point the code lookups at the repository a run documents. Idempotent."""
+    global CODE_ROOT
+    CODE_ROOT = ROOT
+    path = Path(where)
+    run = path if path.is_dir() else path.parent
+    declared = runmeta.meta(run).get("code_root")
+    if declared:
+        q = Path(declared)
+        q = q if q.is_absolute() else ROOT / q
+        if q.is_dir():
+            CODE_ROOT = q.resolve()
+    return CODE_ROOT
+
+
+def skip_dirs() -> set:
+    """`outputs` is this project's run folders; in another repository it is code."""
+    return SKIP_DIRS if CODE_ROOT == ROOT else SKIP_DIRS - {"outputs"}
+
+
 def rel(path) -> str:
+    """A code path, relative to the code root."""
+    p = Path(path)
+    p = p if p.is_absolute() else CODE_ROOT / p
+    try:
+        return str(p.resolve().relative_to(CODE_ROOT))
+    except ValueError:
+        return str(p)
+
+
+def run_rel(path) -> str:
+    """A run path, relative to this project. Run folders never move."""
     p = Path(path)
     p = p if p.is_absolute() else ROOT / p
     try:
@@ -82,10 +122,10 @@ def rel(path) -> str:
 
 
 def inside(path: str):
-    """The file a reference names, if it lies inside the project. None otherwise."""
-    p = (ROOT / path).resolve()
+    """The file a reference names, if it lies inside the code root. None otherwise."""
+    p = (CODE_ROOT / path).resolve()
     try:
-        p.relative_to(ROOT)
+        p.relative_to(CODE_ROOT)
     except ValueError:
         return None
     return p
@@ -108,7 +148,7 @@ def sha(path: Path) -> str:
 
 def git(*args) -> str:
     try:
-        p = subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True, timeout=30)
+        p = subprocess.run(["git", *args], cwd=CODE_ROOT, capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired):
         return ""
     return p.stdout.strip() if p.returncode == 0 else ""
@@ -125,9 +165,9 @@ def expand(scope) -> list:
             out.add(rel(p))
             continue
         tracked = git("ls-files", "--cached", "--others", "--exclude-standard", "--", rel(p))
-        files = [ROOT / f for f in tracked.splitlines()] if tracked else list(p.rglob("*"))
+        files = [CODE_ROOT / f for f in tracked.splitlines()] if tracked else list(p.rglob("*"))
         for f in files:
-            if f.is_file() and not (set(Path(rel(f)).parts) & SKIP_DIRS) and line_count(f):
+            if f.is_file() and not (set(Path(rel(f)).parts) & skip_dirs()) and line_count(f):
                 out.add(rel(f))
     return sorted(out)
 
@@ -142,7 +182,8 @@ def master(run) -> Path:
 
 def runs():
     base = ROOT / "outputs"
-    for path in sorted(base.glob("*/.run.json")) if base.is_dir() else []:
+    paths = (list(base.glob("*/.run.json")) + list(base.glob("*/code-docs/*/.run.json"))) if base.is_dir() else []
+    for path in sorted(paths):
         meta = runmeta.meta(path.parent)
         if meta.get("kind") == KIND:
             yield path.parent, meta
@@ -154,36 +195,63 @@ def norm(target: str) -> str:
 
 # ------------------------------------------------------------------ commands
 
-def find(target: str):
-    """The newest code-doc run whose target matches, by target text or by scope."""
+def find(target: str, project: str = ""):
+    """The newest matching code document, limited to a project when supplied."""
     want = norm(target)
+    parent = (ROOT / project).resolve() if project else None
     hits = [run for run, meta in runs()
-            if norm(meta.get("target", "")) == want or want in [norm(s) for s in meta.get("scope", [])]]
+            if (parent is None or run.parent.parent == parent)
+            and (norm(meta.get("target", "")) == want
+                 or want in [norm(s) for s in meta.get("scope", [])])]
     return hits[-1] if hits else None
 
 
-def start(slug: str, target: str, scope: list, prompt: str) -> Path:
+def start(slug: str, target: str, scope: list, prompt: str, code_root: str = "",
+          project: str = "") -> Path:
+    global CODE_ROOT
+    if code_root:
+        q = Path(code_root)
+        q = (q if q.is_absolute() else ROOT / q).resolve()
+        if not q.is_dir():
+            sys.exit(f"ERROR code root is not a directory: {code_root}")
+        CODE_ROOT = q
     bad = [s for s in scope if inside(s) is None or not inside(s).exists()]
     if bad:
         sys.exit(f"ERROR scope paths that do not exist inside the project: {', '.join(bad)}")
     scope = [rel(s) for s in scope]
-    existing = find(target)
+    existing = find(target, project)
     if existing:
         data = json.loads((existing / ".run.json").read_text())
         data["scope"] = sorted(set(data.get("scope", [])) | set(scope))
+        if CODE_ROOT != ROOT:
+            data["code_root"] = str(CODE_ROOT)
         (existing / ".run.json").write_text(json.dumps(data, indent=2) + "\n")
         _append_prompt(existing, prompt)
         return existing
     clean = re.sub(r"[^a-z0-9-]+", "-", slug.lower()).strip("-")[:50] or "code"
-    run = ROOT / "outputs" / f"{date.today().isoformat()}-code-doc-{clean}"
+    if project:
+        project_path = (ROOT / project).resolve()
+        try:
+            relative = project_path.relative_to(ROOT / "outputs")
+        except ValueError:
+            sys.exit(f"ERROR project must be a run under outputs/: {project}")
+        if len(relative.parts) != 1 or not project_path.is_dir():
+            sys.exit(f"ERROR project must be an existing top-level run: {project}")
+        run = project_path / "code-docs" / clean
+    else:
+        run = ROOT / "outputs" / f"{date.today().isoformat()}-code-doc-{clean}"
+    if run.exists():
+        sys.exit(f"ERROR a different folder already uses {run_rel(run)}")
     (run / "notes").mkdir(parents=True, exist_ok=True)
     data = {"kind": KIND, "doc_kind": KIND, "masters": [f"{clean}.md"], "target": target,
             "scope": sorted(set(scope)),
             "created": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    if CODE_ROOT != ROOT:
+        data["code_root"] = str(CODE_ROOT)
     (run / ".run.json").write_text(json.dumps(data, indent=2) + "\n")
     if not (run / "prompt.md").is_file():
         (run / "prompt.md").write_text(
-            f"# Request\n\n**Date:** {date.today().isoformat()}\n**Run:** {rel(run)}\n"
+            f"# Request\n\n**Date:** {date.today().isoformat()}\n**Run:** {run_rel(run)}\n"
             f"**Target:** {target}\n\n## Verbatim prompt\n\n{prompt}\n")
     return run
 
@@ -195,7 +263,8 @@ def _append_prompt(run: Path, prompt: str):
 
 
 def inventory(run) -> list:
-    return [(f, line_count(ROOT / f)) for f in expand(load(run).get("scope", []))]
+    use_code_root(run)
+    return [(f, line_count(CODE_ROOT / f)) for f in expand(load(run).get("scope", []))]
 
 
 def blocks(text: str):
@@ -265,6 +334,7 @@ def check(doc: Path):
     text = doc.read_text()
     name = doc.name
     run = doc.parent
+    use_code_root(run)
     lines = text.splitlines()
 
     # Structure: the five sections, in order, with the three specification parts.
@@ -361,12 +431,14 @@ def cited_files(doc: Path) -> set:
 
 def stamp(run) -> dict:
     run = Path(run)
+    use_code_root(run)
     files = sorted(set(expand(load(run).get("scope", []))) | cited_files(master(run)))
     data = {
         "commit": git("rev-parse", "HEAD") or None,
         "dirty": [f for f in git("status", "--porcelain", "--", *files).splitlines()] if files else [],
         "stamped": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "files": {f: sha(ROOT / f) for f in files if (ROOT / f).is_file()},
+        "code_root": str(CODE_ROOT) if CODE_ROOT != ROOT else None,
+        "files": {f: sha(CODE_ROOT / f) for f in files if (CODE_ROOT / f).is_file()},
     }
     (run / "sources.json").write_text(json.dumps(data, indent=2) + "\n")
     return data
@@ -375,6 +447,7 @@ def stamp(run) -> dict:
 def changed(run) -> list:
     """What changed in the code since the document was stamped, one line each."""
     run = Path(run)
+    use_code_root(run)
     path = run / "sources.json"
     if not path.is_file():
         return ["never stamped: the document records no state of the code"]
@@ -383,7 +456,7 @@ def changed(run) -> list:
     doc = master(run)
     text = doc.read_text() if doc.is_file() else ""
     for f, digest in sorted(old.items()):
-        p = ROOT / f
+        p = CODE_ROOT / f
         if not p.is_file():
             out.append(f"DELETED {f}{_where(text, f)}")
         elif sha(p) != digest:
@@ -407,6 +480,7 @@ def _where(text: str, f: str) -> str:
 def stages(run) -> list:
     """(label, ok, detail) for each stage of a code-doc run."""
     run = Path(run)
+    use_code_root(run)
     doc = master(run)
     out = []
     prompt = run / "prompt.md"
@@ -453,15 +527,17 @@ def main():
 
     if cmd == "start":
         if not rest or rest[0].startswith("--") or not opt("--target") or not opt("--scope", True):
-            sys.exit("usage: codedoc.py start <slug> --target T --scope P [P ...] --prompt TEXT")
-        run = start(rest[0], opt("--target"), opt("--scope", True), opt("--prompt") or "")
-        print(rel(run))
-        print(rel(master(run)))
+            sys.exit("usage: codedoc.py start <slug> --target T --scope P [P ...] --prompt TEXT "
+                     "[--code-root PATH] [--project outputs/RUN]")
+        run = start(rest[0], opt("--target"), opt("--scope", True), opt("--prompt") or "",
+                    opt("--code-root") or "", opt("--project") or "")
+        print(run_rel(run))
+        print(run_rel(master(run)))
         return 0
     if cmd == "find":
         run = find(" ".join(rest))
         if run:
-            print(rel(run))
+            print(run_rel(run))
             return 0
         return 1
     if cmd == "inventory":
