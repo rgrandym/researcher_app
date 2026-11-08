@@ -148,6 +148,15 @@ def gate(doc: Path, mark: bool):
                                     "OPENER", "DICTION"):
             soft.append(line)
 
+    if runmeta.meta(run_dir).get("kind") == "code-doc":
+        # A code document cites the code (`path:line`), not an evidence ledger.
+        code, out = run([str(SCRIPTS / "codedoc.py"), "check", str(doc)])
+        hard += [l for l in out.splitlines() if l.startswith("ERROR")]
+        soft += [l for l in out.splitlines() if l.startswith("WARN")]
+        if mark:
+            run([str(SCRIPTS / "voice.py"), "mark", str(doc)])
+        return hard, soft
+
     code, out = run([str(SCRIPTS / "audit_citations.py"), str(run_dir), doc.name,
                      *(["--document"] if unchanged is not None else [])])
     for line in out.splitlines():

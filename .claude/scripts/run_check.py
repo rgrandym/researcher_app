@@ -110,6 +110,21 @@ def check(run: Path, ship: bool) -> int:
 
     stages, missing = [], []
 
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import runmeta
+    if runmeta.meta(run).get("kind") == "code-doc":
+        import codedoc
+        rows = codedoc.stages(run)
+        print(f"run: {run}")
+        width = max(len(r[0]) for r in rows)
+        for label, ok, detail in rows:
+            print(f"  {'ok ' if ok else 'MISSING'.ljust(3)} {label.ljust(width)}  {detail}")
+        gaps = [r[0] for r in rows if not r[1]]
+        if ship and gaps:
+            print(f"\nNOT SHIPPABLE: {', '.join(gaps)}")
+            return 1
+        return 0
+
     def stage(label, ok, detail, blocking=True):
         stages.append((label, ok, detail))
         if not ok and blocking:

@@ -116,6 +116,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
                     "audit",
                     "changes",
                     "rebuild",
+                    "code-doc",
                 )
             },
             # Applying accepted changes is mechanical (a script does the editing); the

@@ -102,6 +102,9 @@ their source data. It runs only when the author types it; no other stage,
 `/polish` rewrites a passage in the author's voice without changing its claims.
 `/plagiarism` scores a report's originality against its sources and the web and
 lists the passages to fix; it never edits the report.
+`/code-doc` writes the source-of-truth document for a feature or file of the
+project's code, every statement cited `path:line`, in its own `code-doc` run;
+it runs only when the author types it and updates the same document on re-run.
 
 **Revision:** `/audit` → `/changes` → the author accepts → `/revise` (Word,
 PowerPoint, Excel, Markdown, edited in place) or `/rebuild` (a PDF, or a new

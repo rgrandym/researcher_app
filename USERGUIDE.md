@@ -464,7 +464,7 @@ In the app, the command a message starts with picks the model, on Claude and on 
 
 | Tier | Claude | Codex | Commands |
 |---|---|---|---|
-| Frontier | Opus | `gpt-6-astra` | `/research`, `/research-pipeline`, `/expand`, `/critique`, `/report`, `/repair`, `/user-edits`, `/figures`, `/narrator`, `/polish`, `/brain_storm` |
+| Frontier | Opus | `gpt-6-astra` | `/research`, `/research-pipeline`, `/expand`, `/critique`, `/report`, `/repair`, `/user-edits`, `/figures`, `/narrator`, `/polish`, `/brain_storm`, `/code-doc` |
 | Workhorse | Sonnet | `gpt-6.1-sol` | `/verify`, `/plagiarism`, `/export`, `/visualize`, `/voice-rule`, `/do`, and questions (messages with no command) |
 | Fast | Haiku (the latest, through the `haiku` alias) | `gpt-6-luna` | `/app`: questions about the app, answered from this guide |
 
@@ -1242,6 +1242,20 @@ Notebooks are made only when you type the command, never by `/export` or any dra
 ```
 
 To run one: `pip install -r requirements.txt` in that folder, open the notebook, and choose *Restart and Run All*. If you edit the report after a notebook exists, `/notebook` on the same item finds it stale and updates its published values; the check then shows which numbers moved. Installing `nbclient` and `ipykernel` lets the workspace save results into each notebook so a reader sees them without running anything.
+
+### Documenting code
+
+`/code-doc` writes the technical reference for one part of a codebase in this project: a feature, a folder or a file. It describes the code as it is written today, for an engineer who knows the language but not this code: what the feature is responsible for, a diagram of its parts and the data between them, its data models, functions, state and dependencies (with version constraints exactly as the code pins them), a step-by-step guide to running and testing it alone, its defects graded High, Medium or Low with a fix for each, and the quirks you need to know before changing it.
+
+```text
+/code-doc .claude/scripts/gate.py
+/code-doc app/backend/
+/code-doc the comment threads in the app
+```
+
+Every statement carries a reference to the lines that show it, such as `app/backend/workspace.py:91-114`, so you can check any sentence against the code in one click. Anything the code does not define, such as an unpinned version or a missing limit, is written `[Not defined in codebase]` rather than guessed. The commands in the guide were run while the document was written, and each says what it returned; one that could not be run says why. An independent reviewer checks the references, reruns the commands and tests each defect before you see the document.
+
+It lands in `outputs/YYYY-MM-DD-code-doc-<slug>/<slug>.md`, with a record of the code it describes. Type `/code-doc` on the same target after the code changes and the same document is updated: it lists which files moved and rewrites only the sections that cite them, keeping anything you wrote yourself. `python3 .claude/scripts/codedoc.py status <run>` shows what has drifted without changing anything. A feature name that could mean two things, or a target too large for one document, gets a question first.
 
 ---
 
