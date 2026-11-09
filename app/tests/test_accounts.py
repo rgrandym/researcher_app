@@ -113,15 +113,20 @@ def test_usage_from_previous_login_is_hidden(home: Path) -> None:
 
 
 def test_imports_claude_usage_snapshot_for_verified_account(home: Path) -> None:
+    import datetime as dt
+    import time
+
     folder = home / ".claude-second"
     folder.mkdir()
     (folder / ".claude.json").write_text(json.dumps({
         "oauthAccount": {"emailAddress": "second@example.com", "accountUuid": "account-2"},
         "cachedUsageUtilization": {
-            "accountUuid": "account-2", "fetchedAtMs": 1792860000000,
+            "accountUuid": "account-2", "fetchedAtMs": int(time.time() * 1000),
             "utilization": {
                 "five_hour": {"utilization": 0, "resets_at": None},
-                "seven_day": {"utilization": 31, "resets_at": "2026-10-26T13:00:00+00:00"},
+                "seven_day": {"utilization": 31, "resets_at": (
+                    dt.datetime.now(dt.UTC) + dt.timedelta(days=7)
+                ).isoformat()},
             },
         },
     }))

@@ -464,7 +464,10 @@ class TurnManager:
             prompt = route_text.strip()[len(CONTINUE) + 1 :].strip() or "Carry on with the task in progress."
         if doing and route_text == prompt:
             prompt = route_text.strip()[len(DO) + 1 :].strip() or "Ask the author what to do."
-        picked = await self._route(provider, seg.provider, route_text, seg.route_key if continuing else "")
+        routing_text = route_text
+        if continuing and session.pipeline and session.pipeline.get("stage"):
+            routing_text += f" stage={session.pipeline['stage']}"
+        picked = await self._route(provider, seg.provider, routing_text, seg.route_key if continuing else "")
         seg.model, seg.effort = picked.model, picked.effort
         # A typed command starts a fresh native session, unless the author's words arrive
         # inside a handoff packet: that packet is the context the new agent needs.
@@ -484,7 +487,7 @@ class TurnManager:
                     f"\n\n(This app session has worked on {runs}. "
                     "Use it if the command names no run.)"
                 )
-        if session.project and (route_text == prompt or continuing):
+        if session.project and native is None:
             prompt += project_note(session.project)
         if question and router.runtime_of(seg.provider) == "codex":
             prompt += f"\n\n({QUESTION})"  # Codex takes no system note; its sandbox is read-only
@@ -507,6 +510,11 @@ class TurnManager:
             if fresh and seg.native_session_id:
                 text += ", new conversation"
             route_data: dict[str, Any] = {"kind": "route", "text": text, "tier": picked.tier}
+            if picked.key == "research-pipeline" and session.pipeline:
+                route_data["stage"] = session.pipeline.get("stage")
+                route_data["run"] = session.pipeline.get("run")
+                route_data["native_session"] = native
+                route_data["fresh_native"] = native is None
             if question:
                 route_data["read_only"] = True
                 route_data["request"] = route_text
@@ -693,6 +701,8 @@ class TurnManager:
         seg = session.current()
         if seg is not None:
             seg.native_session_id = result.native_session or seg.native_session_id
+            if seg.native_session_id and seg.native_session_id not in seg.native_sessions:
+                seg.native_sessions.append(seg.native_session_id)
             if result.cost_usd:
                 seg.cost_usd += float(result.cost_usd)
         if result.end_reason == "limit" and seg is not None:
@@ -790,6 +800,7 @@ class TurnManager:
                 await self._handover_offer(session_id, seg)
             if repair:
                 running.gate_repaired = True
+                await self._emit(session_id, Event(type="notice", data={"kind": "repair_loop", "stage": (session.pipeline or {}).get("stage", "")}))
                 running.task = asyncio.create_task(self._run(session_id, repair, running))
                 return
             following = await self._next_stage(session_id, result, running)
@@ -915,6 +926,8 @@ class TurnManager:
         changed = False
         if ev.type == "session" and seg is not None and ev.data.get("session_id"):
             seg.native_session_id = str(ev.data["session_id"])
+            if seg.native_session_id not in seg.native_sessions:
+                seg.native_sessions.append(seg.native_session_id)
             changed = True
         if ev.type in ("tool_call", "tool_result"):
             text = " ".join(
@@ -953,6 +966,8 @@ class TurnManager:
         if ev.type == "usage" and seg is not None and ev.data.get("tokens_in") is not None:
             seg.tokens_in += int(ev.data.get("tokens_in") or 0)
             seg.tokens_out += int(ev.data.get("tokens_out") or 0)
+            seg.cached_in += int(ev.data.get("cached_in") or 0)
+            seg.cache_written += int(ev.data.get("cache_written") or 0)
             changed = True
         if changed:
             sessions.save(session)

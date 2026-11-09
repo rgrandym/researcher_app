@@ -105,7 +105,11 @@ have been superseded, and that is a thing to search for.
 
 ## 3. Fan out, don't crawl
 
-One `research-scout` subagent per sub-question, **all spawned in a single message** so they run in parallel. Cap: 6 concurrent.
+Assign scouts from uncovered evidence needs in `brief.md` and `coverage.md`. Start
+with the smallest set of non-overlapping briefs that covers those needs. One scout
+may cover related sub-questions when the same source search answers both. Use one
+scout for a question settled by one authoritative primary source. Spawn the
+initial scouts together so their independent work runs in parallel. Cap: 6 concurrent.
 
 Give each scout a brief built from `references/scout-brief.md`. Never give two scouts overlapping scope — duplicate work is duplicate tokens.
 
@@ -146,6 +150,8 @@ Then act on it:
 
 - **`THIN`** records that a claim rests on one source. That is not automatically a defect — re-scout when the claim is load-bearing *and* a second independent source plausibly exists; otherwise keep it and let the report attribute it in text (`.claude/references/attribution.md`).
 - **`CONTESTED`** → spawn one scout to adjudicate; contradictions are findings, not noise. Establish whether the sources measured different things, different periods, or genuinely disagree.
+- **Load-bearing gap or dissent** → add one targeted scout for the uncovered
+  question or strongest contrary case. Do not repeat an initial scout's search.
 - **`GAP`** → classify it as access-restricted, unpublished, or not-searched. The three mean different things to the reader: `.claude/references/gaps.md`.
 - **Convergent citations** — several sources that all trace to one origin. Mark them; `/verify` will collapse them.
 

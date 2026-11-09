@@ -130,6 +130,14 @@ DEFAULT_SETTINGS: dict[str, Any] = {
             "export": ["workhorse", "low"],
             "app": ["fast", "low"],
         },
+        # A staged pipeline uses the stage in its prompt. The first gather prompt has
+        # no stage argument, so the router treats it as gather.
+        "pipeline_stages": {
+            "gather": ["workhorse", "medium"],
+            "draft": ["frontier", "medium"],
+            "review": ["frontier", "medium"],
+            "finish": ["frontier", "medium"],
+        },
         "chat": ["workhorse", "medium"],
     },
 }
@@ -170,6 +178,8 @@ def _merge_routing(base: dict[str, Any], stored: dict[str, Any]) -> None:
                     base["tiers"].setdefault(runtime, {}).update(tiers)
         elif key == "commands" and isinstance(value, dict):
             base["commands"].update(value)
+        elif key == "pipeline_stages" and isinstance(value, dict):
+            base["pipeline_stages"].update(value)
         else:
             base[key] = value
 

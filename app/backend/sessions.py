@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 import uuid
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -23,12 +25,30 @@ from pydantic import BaseModel, Field
 from backend import config
 from backend.providers.base import Event
 
+_transcript_cache: OrderedDict[str, tuple[tuple[int, int, int], list[Event]]] = OrderedDict()
+_transcript_lock = threading.RLock()
+_TRANSCRIPT_CACHE_LIMIT = 64
+
+
+def _stamp(path: Path) -> tuple[int, int, int]:
+    stat = path.stat()
+    return stat.st_ino, stat.st_size, stat.st_mtime_ns
+
+
+def _cache_put(key: str, stamp: tuple[int, int, int], events: list[Event]) -> None:
+    _transcript_cache[key] = (stamp, events)
+    _transcript_cache.move_to_end(key)
+    if len(_transcript_cache) > _TRANSCRIPT_CACHE_LIMIT:
+        _transcript_cache.popitem(last=False)
+
 
 class Segment(BaseModel):
     provider: str
     model: str = ""
     effort: str = ""
     native_session_id: str | None = None
+    # Fresh commands can create several native conversations inside one app segment.
+    native_sessions: list[str] = Field(default_factory=list)
     # The command that started the native session; replies without one keep its route.
     route_key: str = ""
     # The last turn was work (a command, /continue, /do) that handed back to the author: a
@@ -43,6 +63,8 @@ class Segment(BaseModel):
     cost_usd: float = 0.0
     tokens_in: int = 0
     tokens_out: int = 0
+    cached_in: int = 0
+    cache_written: int = 0
     searches: int = 0
     fetches: int = 0
 
@@ -150,25 +172,50 @@ def list_all() -> list[dict[str, Any]]:
 def delete(session_id: str) -> None:
     import shutil
 
-    shutil.rmtree(_dir(session_id), ignore_errors=True)
+    folder = _dir(session_id)
+    with _transcript_lock:
+        _transcript_cache.pop(str(folder / "transcript.jsonl"), None)
+    shutil.rmtree(folder, ignore_errors=True)
 
 
 def append(session_id: str, event: Event) -> None:
-    with (_dir(session_id) / "transcript.jsonl").open("a") as fh:
-        fh.write(event.model_dump_json() + "\n")
+    path = _dir(session_id) / "transcript.jsonl"
+    key = str(path)
+    with _transcript_lock:
+        previous = _stamp(path) if path.exists() else None
+        with path.open("a") as fh:
+            fh.write(event.model_dump_json() + "\n")
+        cached = _transcript_cache.get(key)
+        if cached and cached[0] == previous:
+            _cache_put(key, _stamp(path), [*cached[1], event])
+        else:
+            _transcript_cache.pop(key, None)
 
 
 def transcript(session_id: str) -> list[Event]:
     path = _dir(session_id) / "transcript.jsonl"
-    if not path.is_file():
-        return []
-    out = []
-    for line in path.read_text().splitlines():
-        try:
-            out.append(Event.model_validate_json(line))
-        except ValueError:
-            continue  # a torn last line after a crash
-    return out
+    with _transcript_lock:
+        if not path.is_file():
+            return []
+        key = str(path)
+        stamp = _stamp(path)
+        cached = _transcript_cache.get(key)
+        if cached and cached[0] == stamp:
+            _transcript_cache.move_to_end(key)
+            return list(cached[1])
+        out = []
+        for line in path.read_text().splitlines():
+            try:
+                out.append(Event.model_validate_json(line))
+            except ValueError:
+                continue  # a torn last line after a crash
+        _cache_put(key, stamp, out)
+        return list(out)
+
+
+def transcript_revision(session_id: str) -> tuple[int, int, int] | None:
+    path = _dir(session_id) / "transcript.jsonl"
+    return _stamp(path) if path.is_file() else None
 
 
 def write_handoff(session: Session, packet: str) -> str:

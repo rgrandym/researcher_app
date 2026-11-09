@@ -23,6 +23,17 @@ change with the scope: every named claim is re-fetched exactly as in a full pass
 Append the result to `verification.md` under a heading that names the date and the
 scope, so a later full pass sees what was already checked.
 
+After the first full verification, record its reviewed state with
+`python3 .claude/scripts/verification_scope.py snapshot <run> draft.md`. Before
+checking a later repair, run `python3 .claude/scripts/verification_scope.py diff
+<run> report.md` and read the generated `.verification-scope.md` for changed
+passages, changed evidence rows, and removed
+claims as the scope. If it says `FULL VERIFY`, check the whole current document.
+Include the conclusion and downstream claims affected by a removed or changed
+passage. After the scoped review passes, snapshot `report.md` for the next round.
+A matching fingerprint reuses the earlier verdict only while its source row and
+conclusion remain unchanged.
+
 ## 0. Run the mechanical audit first
 
 ```bash
@@ -42,6 +53,10 @@ date: the verifier does not re-fetch that row, and judges only whether the draft
 sentence says what the quote says (scope, qualifiers, causation, attribution, and
 whether a newer figure supersedes it). `STALE`, `PARTIAL`, `ABSENT` and `NO-COPY`
 rows are re-fetched exactly as before. Pass each batch its rows' results.
+
+After each repair, repeat the mechanical quote check for every evidence ID in
+changed passages and changed source rows, even if the earlier verdict was
+`SUPPORTED`.
 
 Then check what the author supplied:
 

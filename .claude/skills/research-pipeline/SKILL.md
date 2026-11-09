@@ -21,8 +21,8 @@ skills run only when the author types them, so the Skill tool cannot load them;
 reading the file is the one route, inside this pipeline and inside `expand`. Read
 a stage's file when that stage starts, not all of them up front.
 
-**You never hold the document.** Drafting (stage 5) and repair (stage 8) run in a
-`report-writer` agent: brief it with `MODE`, `RUN`, and for repair the ledgers to
+**You never hold the document.** Drafting (stage 5) and repair (stage 8) run in an
+isolated writer agent: brief it with `MODE`, `RUN`, and for repair the ledgers to
 act on. It reads the stage skill itself, writes the file, runs the gate, and hands
 back a short summary. The reviewers read the file from disk. A draft or a repair
 pasted into this thread is re-read on every later call for the rest of the run,
@@ -34,6 +34,12 @@ When the writer returns `NEEDS SCOUT`, send the scouts, then call the writer aga
 with the new evidence IDs. When it returns `NEEDS VOICE`, ask the author the
 narration question (`.claude/references/voice.md`) and record it in
 `<run>/voice.md` first.
+
+For REPAIR only, use `report-repairer` on Sonnet when all findings name exact
+local edits and none changes the answer, a load-bearing claim, or interpretation.
+Otherwise use `report-writer` on Opus. If the repairer returns `NEEDS FRONTIER`,
+send the finding to `report-writer`. Reverify changed claims independently before
+shipping in either case.
 
 **Review is done by subagents, not by you.** The thread that wrote the draft
 cannot review it: it already believes the argument, and it is the source of any
@@ -52,7 +58,7 @@ reasoning. Both work in isolated contexts and both are adversarial by design.
 | 5 | Draft | `report`, in `report-writer` | Every fact carries `[E#]`; `gate.py` exits 0; every blocked source registered with `wanted.py` |
 | 6 | Verify | `verify` | Zero `FABRICATED`/`CONTRADICTED` unresolved |
 | 7 | Critique | `critique` | Zero `BLOCKING` unresolved |
-| 8 | Repair | `repair`, in `report-writer` | Every finding has a disposition; `draft.md` promoted to `report.md` |
+| 8 | Repair | `repair`, in `report-writer` or `report-repairer` under the rule above | Every finding has a disposition; `draft.md` promoted to `report.md` |
 | 9 | Ship | — | `gate.py` exits 0 with **0 agent artifacts**; `run_check.py --ship` exits 0; confidence statement written; every `coverage.md` gap visible in the report; `wanted.py build` has written the author's list |
 | 10 | Export *(on request)* | `export` | Gates 6–8 clean; format and style chosen by the user |
 | 11 | Expand *(on request)* | `expand` | New evidence reconciled, not appended; changed claims re-verified |
@@ -82,7 +88,7 @@ each covers, and what it must leave on disk before the app starts the next:
 | `gather` | 0–4: supplied sources, brief, gap hunt, scouts, coverage audit, and the voice decision (research §5b) | `brief.md`, `voice.md`, a filled `coverage.md`, evidence rows, digests in `notes/digests/` |
 | `draft` | 5: the `report-writer` in DRAFT mode | `draft.md` |
 | `review` | 6–7: `verify` and `critique`, concurrently | `verification.md` and `critique.md` |
-| `finish` | 8–9: the `report-writer` in REPAIR mode, then the ship gates and the confidence statement | `report.md`, `repair-log.md`, `run_check.py --ship` clean |
+| `finish` | 8–9: an isolated writer in REPAIR mode, then the ship gates and the confidence statement | `report.md`, `repair-log.md`, `run_check.py --ship` clean |
 
 - **The first stage** arrives as the author's request with a note that the run is
   staged. Do `gather` and end your turn. Do not start drafting.
@@ -104,8 +110,12 @@ the rest of this file, in one conversation.
 ## Parallelism
 
 - Stage 3: all scouts in one message.
-- Stages 6 and 7 can run **concurrently** — verification and critique are independent. Spawn `source-verifier` batches and `report-critic` together, then merge findings before repair.
+- Stages 6 and 7 run **concurrently**. Dispatch `source-verifier` batches and
+  `report-critic` in the same launch, then wait for both ledgers before repair.
+  Do this in the staged `review` turn as well as in a single-conversation run.
 - Never spawn an agent whose brief depends on another running agent's output.
+- Batch small independent deterministic checks, such as citation audits and
+  source-index reads, in one tool dispatch when their inputs are already on disk.
 
 ## Scaling to the question
 
@@ -116,11 +126,14 @@ failure — not thoroughness.** Judge the tier before you scaffold anything, usi
 - **Tier 0–1** — a fact, a definition, a question with one sourced answer. Answer
   in chat, plainly and briefly, with the link. **No run folder, no brief, no
   report.** Stop here; the rest of this skill does not apply.
-- **Tier 2 · Standard** (most requests that reach this skill): 3–5 scouts, full
-  verify, one critic.
-- **Tier 3 · Deep** (decision-grade, contested, high-stakes): 6 scouts including a
-  dedicated dissent scout, full verify, two critics with different angles, two
-  repair rounds.
+- **Tier 2 · Standard** (most requests that reach this skill): the smallest set
+  of scouts covering distinct evidence needs, full verify, one critic. Add a
+  targeted scout only for a load-bearing gap or contested point found by the
+  coverage audit.
+- **Tier 3 · Deep** (decision-grade, contested, high-stakes): cover each distinct
+  evidence need, then add a dedicated dissent or adjudication scout where the
+  coverage audit warrants one; full verify, two critics with different angles,
+  two repair rounds.
 
 Run the gap hunt even on a question that looks small — it takes seconds and it is
 what catches a question that only *looks* quick. If it surfaces a live

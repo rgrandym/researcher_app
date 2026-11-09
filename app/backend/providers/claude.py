@@ -94,9 +94,11 @@ class ClaudeParser:
         self.limit_rejected = False
         self.agents: dict[str, dict[str, Any]] = {}  # Agent tool_use id -> subagent info
         self.files: set[str] = set()
-        self._seen_usage: dict[str, tuple[int, int]] = {}
+        self._seen_usage: dict[str, tuple[int, int, int, int]] = {}
         self._tokens_in = 0
         self._tokens_out = 0
+        self._cached_in = 0
+        self._cache_written = 0
         self.context_tokens = 0
 
     def _event(self, type_: Any, data: dict[str, Any], agent: str | None = None) -> Event:
@@ -157,26 +159,39 @@ class ClaudeParser:
                 for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
             )
             tokens_out = int(u.get("output_tokens") or 0)
-            previous_in, previous_out = self._seen_usage.get(mid, (0, 0))
+            cached = int(u.get("cache_read_input_tokens") or 0)
+            written = int(u.get("cache_creation_input_tokens") or 0)
+            previous_in, previous_out, previous_cached, previous_written = self._seen_usage.get(
+                mid, (0, 0, 0, 0)
+            )
             delta_in = max(0, tokens_in - previous_in)
             delta_out = max(0, tokens_out - previous_out)
-            self._seen_usage[mid] = (max(tokens_in, previous_in), max(tokens_out, previous_out))
+            delta_cached = max(0, cached - previous_cached)
+            delta_written = max(0, written - previous_written)
+            self._seen_usage[mid] = (
+                max(tokens_in, previous_in), max(tokens_out, previous_out),
+                max(cached, previous_cached), max(written, previous_written),
+            )
             self._tokens_in += delta_in
             self._tokens_out += delta_out
+            self._cached_in += delta_cached
+            self._cache_written += delta_written
             if agent is None:
                 self.context_tokens = tokens_in
             if delta_in or delta_out:
                 events.append(
-                self._event(
-                    "usage",
-                    {
-                        "tokens_in": delta_in,
-                        "tokens_out": delta_out,
-                        "context_tokens": tokens_in if agent is None else None,
-                        "model": message.get("model"),
-                    },
-                    agent,
-                )
+                    self._event(
+                        "usage",
+                        {
+                            "tokens_in": delta_in,
+                            "tokens_out": delta_out,
+                            "cached_in": delta_cached,
+                            "cache_written": delta_written,
+                            "context_tokens": tokens_in if agent is None else None,
+                            "model": message.get("model"),
+                        },
+                        agent,
+                    )
                 )
         for block in message.get("content") or []:
             if not isinstance(block, dict):
@@ -247,13 +262,16 @@ class ClaudeParser:
         final_out = int(final_usage.get("output_tokens") or 0)
         delta_in = max(0, final_in - self._tokens_in)
         delta_out = max(0, final_out - self._tokens_out)
+        delta_cached = max(0, int(final_usage.get("cache_read_input_tokens") or 0) - self._cached_in)
+        delta_written = max(0, int(final_usage.get("cache_creation_input_tokens") or 0) - self._cache_written)
         percent = (
             round(100 * self.context_tokens / window, 1) if window and self.context_tokens else None
         )
         return self._event(
             "usage",
             {
-                **({"tokens_in": delta_in, "tokens_out": delta_out} if final_usage else {}),
+                **({"tokens_in": delta_in, "tokens_out": delta_out,
+                    "cached_in": delta_cached, "cache_written": delta_written} if final_usage else {}),
                 "cost_usd": msg.get("total_cost_usd"),
                 "context_tokens": self.context_tokens or None,
                 "context_window": window,

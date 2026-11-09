@@ -23,6 +23,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -456,7 +457,9 @@ def over_threshold(usage: UsageWindows | None, threshold: float) -> UsageWindow 
 
 # ------------------------------------------------------------------ Codex threads' own record
 
-_rollout_cache: dict[str, tuple[float, dict[str, int]]] = {}
+_rollout_cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
+_rollout_lock = threading.RLock()
+_ROLLOUT_DISCOVERY_S = 2.0
 
 
 def _codex_sessions_dir() -> Path:
@@ -490,6 +493,11 @@ def codex_child_threads(thread_id: str | None, since: float) -> list[dict[str, s
 
 
 def codex_thread_usage(thread_id: str | None) -> dict[str, int] | None:
+    with _rollout_lock:
+        return _codex_thread_usage(thread_id)
+
+
+def _codex_thread_usage(thread_id: str | None) -> dict[str, int] | None:
     """Tokens and web searches of one Codex thread and every subagent thread it spawned, from
     the rollout files Codex writes as it works (~/.codex/sessions/.../rollout-*-<id>.jsonl).
 
@@ -499,44 +507,101 @@ def codex_thread_usage(thread_id: str | None) -> dict[str, int] | None:
     if not thread_id:
         return None
     base = _codex_sessions_dir()
-    main = next(iter(base.glob(f"*/*/*/rollout-*-{thread_id}.jsonl")), None)
-    if main is None:
-        return None
-    # Subagent threads start after their parent: rollout names begin with the start time
-    # ("rollout-2026-10-09T17-20-57-"), so only later rollouts can be its children.
-    started = main.name[: len("rollout-2026-10-09T17-20-57")]
-    files = [main] + [
-        p for p in sorted(base.glob("*/*/*/rollout-*.jsonl")) if p != main and p.name >= started
-    ]
-    child = re.compile(r'"parent_thread_id"\s*:\s*"' + re.escape(thread_id) + '"')
-    newest = max(p.stat().st_mtime for p in files)
-    hit = _rollout_cache.get(thread_id)
-    if hit and hit[0] >= newest:
-        return hit[1]
-    totals = {"tokens_in": 0, "tokens_out": 0, "searches": 0, "threads": 0}
-    for path in files:
+    key = f"{base}:{thread_id}"
+    entry = _rollout_cache.get(key)
+    if entry is None:
+        main = next(iter(base.glob(f"*/*/*/rollout-*-{thread_id}.jsonl")), None)
+        if main is None:
+            return None
+        entry = {"main": main, "paths": [main], "scanned_at": 0.0,
+                 "files": {}, "headers": {}}
+        _rollout_cache[key] = entry
+        if len(_rollout_cache) > 128:
+            _rollout_cache.popitem(last=False)
+    else:
+        _rollout_cache.move_to_end(key)
+    main = entry["main"]
+    recently_written = False
+    for known in entry["paths"]:
         try:
-            text = path.read_text(errors="replace")
+            if time.time() - known.stat().st_mtime < 60:
+                recently_written = True
+                break
         except OSError:
             continue
-        if path != main and not child.search(text[:20000]):
-            continue  # another thread's rollout
-        last: dict[str, Any] | None = None
-        for line in text.splitlines():
-            if '"token_count"' not in line and '"web_search' not in line:
+    if (entry["scanned_at"] == 0.0 or recently_written) and (
+        time.monotonic() - entry["scanned_at"] >= _ROLLOUT_DISCOVERY_S
+    ):
+        # Only inspect candidate headers periodically. Token counts in known threads
+        # still update on every call from newly appended bytes below.
+        started = main.name[: len("rollout-2026-10-09T17-20-57")]
+        candidates = [
+            p for p in sorted(base.glob("*/*/*/rollout-*.jsonl"))
+            if p == main or p.name >= started
+        ]
+        metadata: dict[Path, dict[str, Any]] = {}
+        for path in candidates:
+            cached_header = entry["headers"].get(path)
+            if cached_header is not None:
+                metadata[path] = cached_header
+                continue
+            try:
+                with path.open(errors="replace") as fh:
+                    metadata[path] = json.loads(fh.readline()).get("payload") or {}
+                    entry["headers"][path] = metadata[path]
+            except (OSError, ValueError, AttributeError):
+                continue
+        family = {thread_id}
+        paths = [main]
+        # A child may itself spawn agents. Include descendants in the same total.
+        for path in candidates:
+            if path == main:
+                continue
+            meta = metadata.get(path, {})
+            if meta.get("parent_thread_id") in family:
+                family.add(str(meta.get("id") or path.stem))
+                paths.append(path)
+        entry["paths"] = paths
+        entry["scanned_at"] = time.monotonic()
+    totals = {"tokens_in": 0, "tokens_out": 0, "cached_in": 0, "searches": 0, "threads": 0}
+    for path in entry["paths"]:
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        prior = entry["files"].get(path)
+        if prior is None or prior["inode"] != stat.st_ino or prior["offset"] > stat.st_size:
+            prior = {"inode": stat.st_ino, "offset": 0, "pending": b"",
+                     "tokens_in": 0, "tokens_out": 0, "cached_in": 0, "searches": 0}
+        if stat.st_size > prior["offset"]:
+            try:
+                with path.open("rb") as fh:
+                    fh.seek(prior["offset"])
+                    chunk = fh.read()
+            except OSError:
+                continue
+            lines = (prior["pending"] + chunk).split(b"\n")
+            prior["pending"] = lines.pop()
+            prior["offset"] = stat.st_size
+        else:
+            lines = []
+        for line in lines:
+            if b'"token_count"' not in line and b'"web_search' not in line:
                 continue
             try:
                 payload = json.loads(line).get("payload") or {}
-            except ValueError:
+            except (ValueError, UnicodeDecodeError):
                 continue
             kind = payload.get("type")
             if kind == "token_count" and payload.get("info"):
-                last = payload["info"].get("total_token_usage") or last
+                last = payload["info"].get("total_token_usage") or {}
+                prior["tokens_in"] = int(last.get("input_tokens") or 0)
+                prior["tokens_out"] = int(last.get("output_tokens") or 0)
+                prior["cached_in"] = int(last.get("cached_input_tokens") or 0)
             elif kind in ("web_search_call", "web_search"):
-                totals["searches"] += 1
+                prior["searches"] += 1
+        entry["files"][path] = prior
         totals["threads"] += 1
-        if last:
-            totals["tokens_in"] += int(last.get("input_tokens") or 0)
-            totals["tokens_out"] += int(last.get("output_tokens") or 0)
-    _rollout_cache[thread_id] = (newest, totals)
+        for name in ("tokens_in", "tokens_out", "cached_in", "searches"):
+            totals[name] += prior[name]
     return totals

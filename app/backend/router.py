@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 COMMAND = re.compile(r"^/([A-Za-z0-9:_-]+)")
 TIERS = ("frontier", "workhorse", "fast")
+PIPELINE_STAGE = re.compile(r"\bstage=(gather|draft|review|finish)\b")
 
 
 class Route(BaseModel):
@@ -64,7 +65,13 @@ def route(
     commands = routing.get("commands") or {}
     typed = bool(name and name in commands)
     key = name if typed and name else sticky if sticky in commands else "chat"
-    tier, effort = _pair(commands.get(key) or routing.get("chat"))
+    selected = commands.get(key) or routing.get("chat")
+    if key == "research-pipeline" and settings.get("staged_pipeline", True):
+        stage = PIPELINE_STAGE.search(text)
+        selected = (routing.get("pipeline_stages") or {}).get(
+            stage.group(1) if stage else "gather", selected
+        )
+    tier, effort = _pair(selected)
     model = str(tiers.get(tier, ""))
     if not model:
         return own

@@ -181,6 +181,7 @@ export interface Routing {
   fresh: boolean;
   tiers: Record<"claude" | "codex", Record<Tier, string>>;
   commands: Record<string, [Tier, string]>;
+  pipeline_stages: Record<"gather" | "draft" | "review" | "finish", [Tier, string]>;
   chat: [Tier, string];
 }
 
@@ -234,12 +235,30 @@ export interface Activity {
       model: string;
       cost_usd: number;
       tokens_in: number;
+      fresh_in: number;
+      cached_in: number;
+      cache_written: number;
       tokens_out: number;
       searches: number;
       fetches: number;
       search_cap: number;
       fetch_cap: number;
       open: boolean;
+    }[];
+    pipeline_stages: {
+      stage: string;
+      run: string | null;
+      wall_seconds: number;
+      agent_seconds: number;
+      subagent_seconds: number;
+      tool_wait_seconds: number;
+      fresh_in: number;
+      cached_in: number;
+      cache_written: number;
+      tokens_out: number;
+      repair_loops: number;
+      tokens_complete: boolean;
+      complete: boolean;
     }[];
     notices: { text: string }[];
   };

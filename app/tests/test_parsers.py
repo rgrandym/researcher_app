@@ -36,6 +36,8 @@ def test_recorded_claude_turn(data: Any) -> None:
     usage_events = [e for e in events if e.type == "usage" and e.data.get("tokens_in") is not None]
     assert len(usage_events) == 3
     assert sum(e.data["tokens_in"] for e in usage_events) == 18 + 35402 + 33888
+    assert sum(e.data["cached_in"] for e in usage_events) == 33888
+    assert sum(e.data["cache_written"] for e in usage_events) == 35402
     assert sum(e.data["tokens_out"] for e in usage_events) == 230
 
 

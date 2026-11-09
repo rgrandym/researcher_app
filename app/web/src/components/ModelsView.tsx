@@ -292,7 +292,7 @@ function RoutingPanel({ routing, all, put }: { routing: Routing; all: Connection
     void put({ routing: { ...routing, tiers: { ...routing.tiers, [runtime]: { ...routing.tiers[runtime], [tier]: model } } } });
   const byTier = (tier: Tier) =>
     Object.entries(routing.commands)
-      .filter(([, [t]]) => t === tier)
+      .filter(([name, [t]]) => name !== "research-pipeline" && t === tier)
       .map(([name]) => `/${name}`)
       .join(" ");
   return (
@@ -339,6 +339,19 @@ function RoutingPanel({ routing, all, put }: { routing: Routing; all: Connection
               </div>
             </div>
           ))}
+          <div className="rounded-md border border-border bg-surface px-3 py-2 text-[0.8125rem]">
+            <div className="font-medium">Research pipeline stages</div>
+            <div className="mt-2 flex flex-wrap gap-3">
+              {(["gather", "draft", "review", "finish"] as const).map((stage) => (
+                <label key={stage} className="flex items-center gap-1 text-[0.7812rem] text-muted">
+                  {stage}
+                  <select value={routing.pipeline_stages?.[stage]?.[0] ?? "frontier"} onChange={(e) => void put({ routing: { ...routing, pipeline_stages: { ...routing.pipeline_stages, [stage]: [e.target.value as Tier, routing.pipeline_stages?.[stage]?.[1] ?? "medium"] } } })} className="rounded-md border border-border bg-surface px-1.5 py-0.5 text-fg">
+                    {TIERS.map((tier) => <option key={tier.id} value={tier.id}>{tier.label}</option>)}
+                  </select>
+                </label>
+              ))}
+            </div>
+          </div>
         </div>
       )}
     </section>

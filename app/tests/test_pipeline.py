@@ -45,7 +45,7 @@ def test_stages_chain_and_wait_for_the_author(root: Path) -> None:
         assert claude.prompts[2][0] == "go on" and claude.prompts[2][1] is not None
         assert claude.prompts[3][0].startswith("/research-pipeline stage=review")
         assert sessions.load(sid).pipeline == {"run": RUN, "stage": "review"}
-        assert all(o.model == "opus" for o in claude.options)
+        assert [o.model for o in claude.options] == ["sonnet", "opus", "opus", "opus"]
 
     asyncio.run(go())
 

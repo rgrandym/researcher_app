@@ -354,12 +354,15 @@ function UsageSummary({ data, connection, running }: { data: Activity; connectio
   // Every signed-in subscription, and the session's own connection even if it is signed out.
   const plans = (useConnections().data ?? []).filter((c) => c.billing === "plan" && (c.signed_in || c.id === connection));
   const input = segments.reduce((sum, segment) => sum + segment.tokens_in, 0);
+  const fresh = segments.reduce((sum, segment) => sum + (segment.fresh_in ?? segment.tokens_in), 0);
+  const cached = segments.reduce((sum, segment) => sum + (segment.cached_in ?? 0), 0);
   const output = segments.reduce((sum, segment) => sum + segment.tokens_out, 0);
   return (
     <div className="space-y-2">
       <div className="text-[0.7188rem]">
         <span className="font-medium">This conversation</span>
         <span className="text-faint"> · {tokens(input)} input / {tokens(output)} output tokens</span>
+        <span className="text-faint"> · {tokens(fresh)} fresh / {tokens(cached)} cache read</span>
         {data.cost.context_percent != null && <span className="text-faint"> · context {Math.max(0, Math.round(100 - data.cost.context_percent))}% left</span>}
       </div>
       {plans.map((c) => (
@@ -371,6 +374,16 @@ function UsageSummary({ data, connection, running }: { data: Activity; connectio
           <span className="ml-auto tabular-nums text-faint">{tokens(segment.tokens_in)} in / {tokens(segment.tokens_out)} out</span>
         </div>
       ))}
+      {(data.cost.pipeline_stages ?? []).length > 0 && <div className="space-y-1 pt-1">
+        <div className="text-[0.6875rem] font-medium">Pipeline stages</div>
+        {data.cost.pipeline_stages.map((stage, i) => (
+          <div key={i} className="rounded-md bg-panel px-2 py-1.5 text-[0.6875rem]">
+            <div className="font-medium">{stage.stage}{stage.complete ? "" : " · running"} · {stage.wall_seconds}s wall</div>
+            <div className="text-faint">{stage.agent_seconds}s agent time (incl. {stage.subagent_seconds}s subagents) · {stage.tool_wait_seconds}s tool waits · {stage.repair_loops} repair loops</div>
+            <div className="text-faint">{tokens(stage.fresh_in)} fresh · {tokens(stage.cached_in)} cache read · {tokens(stage.cache_written)} cache write · {tokens(stage.tokens_out)} output{stage.tokens_complete ? "" : " · Codex stage total unavailable"}</div>
+          </div>
+        ))}
+      </div>}
     </div>
   );
 }

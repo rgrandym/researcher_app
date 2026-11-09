@@ -38,6 +38,18 @@ def test_command_picks_tier_per_runtime(data: Path) -> None:
     assert (r.model, r.effort, r.tier, r.key) == ("gpt-6-astra", "medium", "frontier", "brain_storm")
 
 
+def test_pipeline_routes_each_stage(data: Path) -> None:
+    s = _settings()
+    expected = {"gather": "sonnet", "draft": "opus", "review": "opus", "finish": "opus"}
+    for stage, model in expected.items():
+        r = router.route(f"/research-pipeline stage={stage} run=outputs/x", "claude-sub", s)
+        assert r.model == model
+    assert router.route("/research-pipeline question", "claude-sub", s).model == "sonnet"
+    assert router.route("/continue stage=review", "claude-sub", s, sticky="research-pipeline").model == "opus"
+    s["staged_pipeline"] = False
+    assert router.route("/research-pipeline question", "claude-sub", s).model == "opus"
+
+
 def test_plain_text_and_unknown_commands_are_chat(data: Path) -> None:
     s = _settings()
     for text in ("what does the gate check?", "/compact", "  /nonsense here"):

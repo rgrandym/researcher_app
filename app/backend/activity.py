@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import threading
 import time
+from collections import OrderedDict
+from functools import lru_cache
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -21,6 +24,21 @@ from backend.sessions import Segment
 
 WEB_TOOLS = ("WebSearch", "WebFetch")
 _monitor: ModuleType | None = None
+_event_cache: OrderedDict[tuple[str, tuple[int, int, int] | None, bool], dict[str, Any]] = OrderedDict()
+_event_cache_lock = threading.Lock()
+
+
+@lru_cache(maxsize=128)
+def _evidence_count(path: Path, mtime_ns: int, size: int) -> int:
+    return workspace.count_jsonl(path)
+
+
+def evidence_count(path: Path) -> int:
+    try:
+        stat = path.stat()
+    except OSError:
+        return 0
+    return _evidence_count(path, stat.st_mtime_ns, stat.st_size)
 
 
 def monitor() -> ModuleType | None:
@@ -350,7 +368,7 @@ def progress(runs: list[str], running: bool = False) -> list[dict[str, Any]]:
                 "run": name,
                 "kind": workspace.run_meta(path).get("kind"),
                 "stages": workspace.stages(name),
-                "evidence_rows": workspace.count_jsonl(path / "evidence.jsonl"),
+                "evidence_rows": evidence_count(path / "evidence.jsonl"),
                 "notes": len(list((path / "notes").glob("*.md")))
                 if (path / "notes").is_dir()
                 else 0,
@@ -361,9 +379,12 @@ def progress(runs: list[str], running: bool = False) -> list[dict[str, Any]]:
 
 
 def cost(
-    session: sessions.Session, events: list[Event], providers: dict[str, Any]
+    session: sessions.Session, events: list[Event], providers: dict[str, Any],
+    stage_rows: list[dict[str, Any]] | None = None,
+    context: dict[str, Any] | None = None,
+    cap_notices: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    context = next(
+    context = context if context is not None else next(
         (
             e.data
             for e in reversed(events)
@@ -375,14 +396,18 @@ def cost(
     for seg in session.segments:
         searches, fetches = caps_for(seg.native_session_id)
         tokens_in, tokens_out, used_searches = seg.tokens_in, seg.tokens_out, seg.searches
+        cached_in = seg.cached_in
         if seg.provider.startswith("codex"):
             # Codex's stream reports usage only for a completed turn and only the main
             # thread's; its rollout files hold the rest (a turn stopped by a limit, subagents).
-            rollout = usage.codex_thread_usage(seg.native_session_id)
-            if rollout:
-                tokens_in = max(tokens_in, rollout["tokens_in"])
-                tokens_out = max(tokens_out, rollout["tokens_out"])
-                used_searches = max(used_searches, rollout["searches"])
+            natives = seg.native_sessions or ([seg.native_session_id] if seg.native_session_id else [])
+            rollouts = [usage.codex_thread_usage(native) for native in dict.fromkeys(natives)]
+            found = [row for row in rollouts if row]
+            if found:
+                tokens_in = max(tokens_in, sum(row["tokens_in"] for row in found))
+                tokens_out = max(tokens_out, sum(row["tokens_out"] for row in found))
+                cached_in = max(cached_in, sum(row.get("cached_in", 0) for row in found))
+                used_searches = max(used_searches, sum(row["searches"] for row in found))
         segments.append(
             {
                 "provider": seg.provider,
@@ -392,6 +417,9 @@ def cost(
                 "model": seg.model,
                 "cost_usd": round(seg.cost_usd, 4),
                 "tokens_in": tokens_in,
+                "fresh_in": max(0, tokens_in - cached_in - seg.cache_written),
+                "cached_in": cached_in,
+                "cache_written": seg.cache_written,
                 "tokens_out": tokens_out,
                 "searches": used_searches,
                 "fetches": seg.fetches,
@@ -406,10 +434,159 @@ def cost(
         "context_percent": context.get("context_percent"),
         "context_tokens": context.get("context_tokens"),
         "segments": segments,
-        "notices": [e.data for e in events if e.type == "notice" and e.data.get("kind") == "cap"][
-            -3:
-        ],
+        "pipeline_stages": stage_usage(stage_rows if stage_rows is not None else stage_timings(events)),
+        "notices": cap_notices if cap_notices is not None else [
+            e.data for e in events if e.type == "notice" and e.data.get("kind") == "cap"
+        ][-3:],
     }
+
+
+def stage_timings(events: list[Event]) -> list[dict[str, Any]]:
+    """Measure staged turns from transcript timestamps. Overlapping tool and agent
+    durations are reported separately; neither is subtracted from wall time."""
+    starts = [i for i, e in enumerate(events) if e.type == "notice" and e.data.get("kind") == "route" and e.data.get("stage")]
+    result: list[dict[str, Any]] = []
+    for pos, start in enumerate(starts):
+        stop = starts[pos + 1] if pos + 1 < len(starts) else len(events)
+        batch = events[start:stop]
+        first = batch[0]
+        done = next((e for e in batch if e.type == "done"), None)
+        end = done.ts if done else batch[-1].ts
+        waits: dict[str, tuple[float, bool]] = {}
+        agents: dict[str, float] = {}
+        tool_seconds = subagent_seconds = 0.0
+        main_waits: list[tuple[float, float]] = []
+        for e in batch:
+            ident = str(e.data.get("id") or "")
+            if e.type == "tool_call" and ident:
+                waits[ident] = (e.ts, e.agent is None)
+                if e.data.get("subagent"):
+                    agents[ident] = e.ts
+            elif e.type == "tool_result" and ident:
+                if ident in waits:
+                    begun, main_wait = waits.pop(ident)
+                    tool_seconds += max(0, e.ts - begun)
+                    if main_wait:
+                        main_waits.append((begun, e.ts))
+                if ident in agents:
+                    subagent_seconds += max(0, e.ts - agents.pop(ident))
+        tool_seconds += sum(max(0, end - t) for t, _ in waits.values())
+        subagent_seconds += sum(max(0, end - t) for t in agents.values())
+        main_waits.extend((t, end) for t, main_wait in waits.values() if main_wait)
+        covered = 0.0
+        last = first.ts
+        for a, b in sorted(main_waits):
+            covered += max(0, b - max(a, last))
+            last = max(last, b)
+        main_agent_seconds = max(0, end - first.ts - covered)
+        input_total = sum(int(e.data.get("tokens_in") or 0) for e in batch if e.type == "usage")
+        cached = sum(int(e.data.get("cached_in") or 0) for e in batch if e.type == "usage")
+        written = sum(int(e.data.get("cache_written") or 0) for e in batch if e.type == "usage")
+        repair_calls = sum(
+            e.type == "tool_call" and (e.data.get("subagent") or {}).get("type") in
+            ("report-writer", "report-repairer")
+            for e in batch
+        )
+        native = next((str(e.data["session_id"]) for e in batch
+                       if e.type == "session" and e.data.get("session_id")), None)
+        native = native or first.data.get("native_session")
+        result.append({
+            "stage": first.data["stage"], "run": first.data.get("run"),
+            "wall_seconds": round(max(0, end - first.ts), 1),
+            "agent_seconds": round(main_agent_seconds + subagent_seconds, 1),
+            "subagent_seconds": round(subagent_seconds, 1),
+            "tool_wait_seconds": round(tool_seconds, 1),
+            "fresh_in": max(0, input_total - cached - written),
+            "cached_in": cached, "cache_written": written,
+            "tokens_out": sum(int(e.data.get("tokens_out") or 0) for e in batch if e.type == "usage"),
+            "repair_loops": max(0, repair_calls - 1) + sum(
+                e.type == "notice" and e.data.get("kind") == "repair_loop" for e in batch
+            ),
+            "complete": done is not None,
+            "_live_at": end,
+            "_open_tools": len(waits),
+            "_open_subagents": len(agents),
+            "_main_waiting": any(main_wait for _, main_wait in waits.values()),
+            "_turns": [{"provider": first.provider, "native": native,
+                        "fresh_native": first.data.get("fresh_native"),
+                        "tokens_in": input_total, "cached_in": cached,
+                        "cache_written": written,
+                        "tokens_out": sum(int(e.data.get("tokens_out") or 0) for e in batch if e.type == "usage")}],
+        })
+    grouped: list[dict[str, Any]] = []
+    for row in result:
+        if grouped and grouped[-1]["stage"] == row["stage"] and (
+            not grouped[-1]["run"] or not row["run"] or grouped[-1]["run"] == row["run"]
+        ):
+            current = grouped[-1]
+            current["run"] = current["run"] or row["run"]
+            for key in ("wall_seconds", "agent_seconds", "subagent_seconds",
+                        "tool_wait_seconds", "fresh_in", "cached_in", "cache_written",
+                        "tokens_out", "repair_loops"):
+                current[key] += row[key]
+            current["_turns"].extend(row["_turns"])
+            current["complete"] = row["complete"]
+            for key in ("_live_at", "_open_tools", "_open_subagents", "_main_waiting"):
+                current[key] = row[key]
+        else:
+            grouped.append(row)
+    return grouped
+
+
+def stage_usage(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Add Codex's subagent rollouts to stage totals. Claude stream events already
+    include each subagent's usage. A shared or missing Codex thread stays labelled
+    partial so the panel cannot suggest that its main-thread tokens are complete."""
+    result = []
+    for row in rows:
+        shown = {key: value for key, value in row.items() if not key.startswith("_")}
+        if not row["complete"]:
+            elapsed = max(0.0, time.time() - row["_live_at"])
+            shown["wall_seconds"] = round(shown["wall_seconds"] + elapsed, 1)
+            shown["tool_wait_seconds"] = round(
+                shown["tool_wait_seconds"] + elapsed * row["_open_tools"], 1
+            )
+            shown["subagent_seconds"] = round(
+                shown["subagent_seconds"] + elapsed * row["_open_subagents"], 1
+            )
+            shown["agent_seconds"] = round(
+                shown["agent_seconds"] + elapsed * (
+                    row["_open_subagents"] + (0 if row["_main_waiting"] else 1)
+                ), 1
+            )
+        codex = [turn for turn in row["_turns"] if str(turn["provider"]).startswith("codex")]
+        shown["tokens_complete"] = True
+        if codex:
+            natives: dict[str, bool] = {}
+            for turn in codex:
+                native = turn["native"]
+                if not native:
+                    shown["tokens_complete"] = False
+                    continue
+                natives.setdefault(native, bool(turn["fresh_native"]))
+            total = {"tokens_in": 0, "cached_in": 0, "tokens_out": 0}
+            for native, fresh in natives.items():
+                if not fresh:
+                    shown["tokens_complete"] = False
+                    continue
+                rollout = usage.codex_thread_usage(native)
+                if not rollout:
+                    shown["tokens_complete"] = False
+                    continue
+                for key in total:
+                    total[key] += rollout[key]
+            codex_in = sum(turn["tokens_in"] for turn in codex)
+            codex_cached = sum(turn["cached_in"] for turn in codex)
+            codex_out = sum(turn["tokens_out"] for turn in codex)
+            if total["tokens_in"] < codex_in or total["tokens_out"] < codex_out:
+                shown["tokens_complete"] = False
+            if shown["tokens_complete"]:
+                shown["fresh_in"] = max(0, shown["fresh_in"] - (codex_in - codex_cached)
+                                         + total["tokens_in"] - total["cached_in"])
+                shown["cached_in"] += total["cached_in"] - codex_cached
+                shown["tokens_out"] += total["tokens_out"] - codex_out
+        result.append(shown)
+    return result
 
 
 def permissions(events: list[Event], open_permissions: set[str]) -> list[dict[str, Any]]:
@@ -454,6 +631,26 @@ def permissions(events: list[Event], open_permissions: set[str]) -> list[dict[st
 def build(session_id: str, running: bool, providers: dict[str, Any], open_permissions: set[str] | None = None) -> dict[str, Any]:
     session = sessions.load(session_id)
     events = sessions.transcript(session_id)
+    key = (session_id, sessions.transcript_revision(session_id), running)
+    with _event_cache_lock:
+        summary = _event_cache.get(key)
+        if summary is not None:
+            _event_cache.move_to_end(key)
+    if summary is None:
+        summary = {
+            "agents": agents(events, running),
+            "agents_earlier": earlier_agents(events),
+            "stage_rows": stage_timings(events),
+            "context": next((e.data for e in reversed(events)
+                             if e.type == "usage" and e.data.get("context_percent") is not None), {}),
+            "cap_notices": [e.data for e in events
+                            if e.type == "notice" and e.data.get("kind") == "cap"][-3:],
+        }
+        with _event_cache_lock:
+            _event_cache[key] = summary
+            _event_cache.move_to_end(key)
+            if len(_event_cache) > 64:
+                _event_cache.popitem(last=False)
     current = session.current() or (session.segments[-1] if session.segments else None)
     windows = None
     if current and current.provider in providers:
@@ -463,8 +660,8 @@ def build(session_id: str, running: bool, providers: dict[str, Any], open_permis
         except Exception:  # noqa: BLE001  usage is advisory
             windows = None
     return {
-        "agents": agents(events, running),
-        "agents_earlier": earlier_agents(events),
+        "agents": summary["agents"],
+        "agents_earlier": summary["agents_earlier"],
         "permissions": permissions(events, open_permissions or set()),
         "progress": progress(session.runs, running),
         # The task the latest message started, with its own steps (TASK_STEPS).
@@ -472,7 +669,8 @@ def build(session_id: str, running: bool, providers: dict[str, Any], open_permis
         # The staged pipeline's place, when the app is running one: {"run", "stage"}.
         "pipeline": session.pipeline,
         "project": session.project,
-        "cost": cost(session, events, providers),
+        "cost": cost(session, events, providers, summary["stage_rows"],
+                     summary["context"], summary["cap_notices"]),
         "windows": windows,
         "at": time.time(),
     }

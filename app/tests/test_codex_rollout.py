@@ -33,12 +33,31 @@ def test_sums_parent_and_its_subagents_only(tmp_path, monkeypatch):
     ])
     usage._rollout_cache.clear()
     got = usage.codex_thread_usage(parent)
-    assert got == {"tokens_in": 350, "tokens_out": 35, "searches": 1, "threads": 2}
+    assert got == {"tokens_in": 350, "tokens_out": 35, "cached_in": 0, "searches": 1, "threads": 2}
 
 
 def test_unknown_thread_is_none(tmp_path, monkeypatch):
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     assert usage.codex_thread_usage("nope") is None
+
+
+def test_rollout_usage_reads_appended_tokens_and_nested_children(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    day = tmp_path / "sessions" / "2026" / "10" / "09"
+    parent = "parent-2"
+    main = day / f"rollout-2026-10-09T17-20-57-{parent}.jsonl"
+    _write(main, [{"type": "session_meta", "payload": {"id": parent}}, _tokens(100, 10)])
+    _write(day / "rollout-2026-10-09T17-21-00-child.jsonl", [
+        {"type": "session_meta", "payload": {"id": "child", "parent_thread_id": parent}}, _tokens(50, 5),
+    ])
+    _write(day / "rollout-2026-10-09T17-22-00-grandchild.jsonl", [
+        {"type": "session_meta", "payload": {"id": "grandchild", "parent_thread_id": "child"}}, _tokens(20, 2),
+    ])
+    usage._rollout_cache.clear()
+    assert usage.codex_thread_usage(parent)["tokens_in"] == 170
+    with main.open("a") as fh:
+        fh.write(json.dumps(_tokens(130, 13)) + "\n")
+    assert usage.codex_thread_usage(parent)["tokens_in"] == 200
 
 
 def test_child_threads_found_from_rollout_meta(tmp_path, monkeypatch):

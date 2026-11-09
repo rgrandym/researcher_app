@@ -36,7 +36,8 @@ stays byte-identical even when a finding recommends changing it. Record that
 finding as open with the exact proposed edit, and ask the author to **Reopen
 section** if they want it applied. Never unlock or refresh a final lock yourself.
 
-Inside `/research-pipeline` this skill runs in a `report-writer` agent. Typed on
+Inside `/research-pipeline` this skill runs in the isolated writer agent chosen
+by the pipeline's repair rule. Typed on
 its own against a finished report (one finding, one section), it runs here: read
 the findings named and the sections they point to, not the whole document
 (`python3 .claude/scripts/section_map.py <run> --find E42`, then `--show
@@ -96,6 +97,14 @@ by hand — can prove what it did and did not touch:
 python3 .claude/scripts/section_guard.py snapshot <run>/report.md
 python3 .claude/scripts/run_check.py <run> --ship
 ```
+
+After each repair, run `verification_scope.py diff <run> report.md` as described
+in `/verify`. Recheck changed claims and source links with `library.py check`,
+send the affected claims and any changed conclusion to independent verifiers,
+and record their verdicts before closing the round. Keep the first draft's full
+independent verification. A workhorse writer may handle precise local edits
+whose findings do not change the conclusion. Use frontier review when the
+answer, a load-bearing claim, or the interpretation changes.
 
 `run_check` names any stage that never ran. A report has shipped from this
 workspace with its coverage table still holding the empty scaffold, which meant
