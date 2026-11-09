@@ -66,53 +66,75 @@ python3 .claude/scripts/codedoc.py status <run>  # what moved since the last sta
 ```
 
 `status` lists each changed, deleted or new file and the sections that cite it.
-Reread those files and update those sections; leave the rest. Text the author
+Readers reread those files (step 4) and the writer updates those sections; the
+rest is left alone. Text the author
 wrote into the document stands (rule 7): when the code now contradicts it, keep
 their text and say so in chat.
 
-### 3. Read the code
+### 3. Start from what the project already knows
 
 ```bash
-python3 .claude/scripts/codedoc.py inventory <run>
+python3 .claude/scripts/codedoc.py inventory <run>      # files in scope, with line counts
+python3 .claude/scripts/codedoc.py map <run>            # symbol index, built once per commit
+python3 .claude/scripts/codefacts.py import <run>       # the project's evidence about the code, verified
+python3 .claude/scripts/codefacts.py known <run> <files in scope...> --brief
+python3 .claude/scripts/codedoc.py leads <run>          # change plans, reviews and notes on this target
 ```
 
-Read every file in the inventory; a file in scope nobody read is a gap in the
-document. Grep before reading and read the ranges that matter. Write what you
-find to `notes/` as you go (the entry points, data shapes, call chains, each with
-its `path:line`), so the draft is written from notes rather than from memory.
+A project keeps one record of what is known about its codebase, shared by every
+code document and every session: verified facts (each with the exact quote from
+its lines and the file's hash), the line ranges already read, every search
+already run, and the statements of the code documents already written. A fact
+whose quote is gone from the changed code is stale and its lines count as
+unread again; nothing else expires. `import` adds the project's evidence rows
+that cite the code, after checking each quote is still there; it is safe to
+rerun. `known --brief` shows, per file, how much is already read and how many
+facts stand: the readers start from that, and a file already read in full needs
+a reader only for questions its facts do not answer.
 
-For a scope of more than about ten files, split the reading: one `Explore` agent
-per component, spawned in one message, each told to return a digest under 400
-words with a `path:line` for every statement. Write the digests to `notes/`.
-Check any digest statement you rely on against the code before it enters the
-document: a digest is a lead, the code is the source.
+The rule the record enforces: **no range of code is read twice at the same
+version, and no search is run twice**, by any agent, in any session.
 
-Run what the reproduction guide will tell the reader to run: the tests that
-exercise the feature (`cd app && uv run pytest tests/<file> -q`, or the
-project's own runner), a script's `--help` or a dry run. Record each command and
-its result in `notes/commands.md`. Never run a command that writes outside the
-run folder, sends anything to an external service, or deletes anything; such a
-command appears in the guide marked as not run, with the reason.
+### 4. Read, in readers
 
-### 4. Write the document
+**This thread never reads the code.** Code read here is re-read on every later
+call of the session, and one document's worth of it costs more than all the
+readers together. Your context holds the scope, the paths and the handovers.
 
-The reader is an engineer who knows the language but not this codebase, unless
-the author names another. Write in the plain professional British English of
-`.claude/voice/profile.md` (or the house rules when no profile exists). Write the
-master in one pass to the structure below. The gate runs on every write, with the
-voice lint and `codedoc.py check`, and returns failures to repair.
+Split the inventory into components of at most about 2,500 lines (a backend
+module, a front-end panel, a shared library), and spawn one `code-reader` per
+component, all in one message. Brief each with `RUN`, `COMPONENT`, `FILES`,
+`QUESTIONS` (what the five sections need from it: entry points, data shapes,
+behaviour, configuration, defects, the commands the reproduction guide should
+run) and its `LEADS`. Each writes `notes/read-<component>.md` and returns a few
+lines. A scope under about 600 lines takes one reader.
 
-### 5. Independent review
+Give each reader the files of its component and nothing more: a component whose
+files `known --brief` shows read in full and whose questions the facts answer
+needs no reader. On a re-run, spawn readers only for the files `status` reported,
+and name the sections they feed.
 
-Spawn `code-doc-reviewer` on the run. The thread that wrote the document never
-reviews it. It checks every reference against the code, reruns the reproduction
-commands, hunts for behaviour the document omits and confirms or rejects each
-defect. Its findings go to `<run>/review.md`.
+### 5. Write, in the writer
 
-### 6. Repair and stamp
+Spawn `code-doc-writer` with `MODE: WRITE`, the run and the master path (on a
+re-run, also the sections to rewrite). The reader is an engineer who knows the
+language but not this codebase, unless the author names another; the prose is
+the plain professional British English of `.claude/voice/profile.md`, or the
+house rules when no profile exists. The writer builds the document from the
+notes, runs `codedoc.py check` and returns a short handover. Do not read the
+document into this thread.
 
-Apply every finding the reviewer confirms; for each, record in
-`<run>/repair-log.md` what changed or why it was declined. Then:
+### 6. Independent review
+
+Spawn `code-doc-reviewer` on the run. It checks the claims sheet
+(`codedoc.py claims`), reruns the reproduction commands, hunts for omissions
+through the symbol map and confirms or rejects each defect. Its findings go to
+`<run>/review.md`. Neither the writer nor this thread reviews.
+
+### 7. Repair and stamp
+
+Spawn `code-doc-writer` with `MODE: REPAIR`. It applies the confirmed findings and
+records each in `<run>/repair-log.md`. Then:
 
 ```bash
 python3 .claude/scripts/codedoc.py check <run>/<slug>.md   # must exit 0
@@ -122,6 +144,15 @@ python3 .claude/scripts/run_check.py <run> --ship          # every stage on file
 
 The stamp records the commit and a hash of each file in scope, so the next
 `/code-doc` on this target, and `status`, can say exactly what drifted.
+
+### Several documents in one command
+
+`/code-doc` may name several targets ("the remaining node documents", a list of
+files). Resolve and start each, build the map once, then run the stages as
+waves across documents: all readers for a wave of documents in one message (no
+more than six readers at once), then their writers together, then their
+reviewers together, then the repairs. A document whose stage fails waits; the
+others go on. Report one line per document.
 
 ## The document
 

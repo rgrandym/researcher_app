@@ -38,8 +38,12 @@ section** if they want it applied. Never unlock or refresh a final lock yourself
 
 Inside `/research-pipeline` this skill runs in the isolated writer agent chosen
 by the pipeline's repair rule. Typed on
-its own against a finished report (one finding, one section), it runs here: read
-the findings named and the sections they point to, not the whole document
+its own against a finished report (one finding, one section), it runs here.
+**Orient with one call**, `python3 .claude/scripts/run_card.py <run> [--doc <master>]`:
+it gives the masters, any unsaved or unabsorbed author edit, missing stages, the
+section map and the latest repair entries. Do not list folders, read `.run.json`
+or open logs to learn the same things. Then read the findings named and the
+sections they point to, not the whole document
 (`python3 .claude/scripts/section_map.py <run> --find E42`, then `--show
 "<heading>"`).
 

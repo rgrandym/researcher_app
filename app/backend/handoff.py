@@ -22,6 +22,7 @@ from backend.sessions import Session
 
 MAX_TOOL_ROWS = 15
 MAX_LAST_MESSAGE = 2000
+MAX_FILE_ROWS = 40
 STAGE_ORDER = [
     "prompt",
     "brief",
@@ -199,12 +200,27 @@ def changed_files(runs: list[str], extra: list[str], since: float) -> list[dict[
 
 
 def files_block(files: list[dict[str, Any]]) -> str:
+    """Every flagged file, then the most recent others up to MAX_FILE_ROWS, then a count
+    per folder. The packet is re-read on every call of the new session: an uncapped list
+    once reached 624k characters for a run whose library had thousands of pages."""
     if not files:
         return "(no files changed)"
+    flagged = sorted((f for f in files if f["flag"]), key=lambda f: f["path"])
+    others = sorted((f for f in files if not f["flag"]), key=lambda f: -f["mtime"])
+    shown, rest = others[:MAX_FILE_ROWS], others[MAX_FILE_ROWS:]
     rows = []
-    for f in sorted(files, key=lambda f: (f["flag"] is None, f["path"])):
+    for f in flagged + sorted(shown, key=lambda f: f["path"]):
         flag = f" · **FLAGGED: {f['flag']}**" if f["flag"] else ""
         rows.append(f"- {f['path']} · {f['size']} bytes · {_clock(f['mtime'])}{flag}")
+    if rest:
+        folders: dict[str, int] = {}
+        for f in rest:
+            folder = str(Path(f["path"]).parent)
+            folders[folder] = folders.get(folder, 0) + 1
+        listed = sorted(folders.items(), key=lambda kv: -kv[1])
+        summary = ", ".join(f"{d}/ ({n})" for d, n in listed[:MAX_FILE_ROWS])
+        more = f", and {len(listed) - MAX_FILE_ROWS} more folder(s)" if len(listed) > MAX_FILE_ROWS else ""
+        rows.append(f"- {len(rest)} older unflagged file(s) not listed, by folder: {summary}{more}")
     return "\n".join(rows)
 
 

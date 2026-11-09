@@ -139,3 +139,18 @@ def test_return_packet(root: Path) -> None:
 def test_with_pending() -> None:
     assert handoff.with_pending("P", None) == "P"
     assert handoff.with_pending("P", "next").endswith("next")
+
+
+def test_file_list_is_capped_but_keeps_every_flagged_file() -> None:
+    now = time.time()
+    files = [
+        {"path": f"outputs/{RUN}/notes/library/page-{i:04d}.md", "size": 100, "mtime": now - i, "flag": None}
+        for i in range(3000)
+    ]
+    files.append({"path": f"outputs/{RUN}/evidence.jsonl", "size": 10, "mtime": now - 9999, "flag": "truncated"})
+    block = handoff.files_block(files)
+    assert "FLAGGED: truncated" in block
+    assert block.count("\n- ") <= handoff.MAX_FILE_ROWS + 2
+    assert "2960 older unflagged file(s) not listed" in block
+    assert f"outputs/{RUN}/notes/library/ (2960)" in block
+    assert len(block) < 10_000

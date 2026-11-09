@@ -184,3 +184,55 @@ def test_run_check_shows_code_doc_stages(root: Path) -> None:
         cwd=root, capture_output=True, text=True,
     )
     assert out.returncode == 0, out.stdout
+
+
+def test_map_leads_and_claims_give_cheap_context(root: Path) -> None:
+    run, master = _run(root)
+    (root / "src/panel.ts").write_text(
+        "export function render(x: number) {\n  const local = 1\n  return x + local\n}\n"
+        "export interface Props { a: number }\n"
+    )
+    out = _script(root, "map", str(run))
+    assert out.returncode == 0 and "(rebuilt)" in out.stdout
+    rows = (run / "notes/codemap.tsv").read_text()
+    assert "src/widget.py:1\tdef\tadd" in rows
+    assert "src/panel.ts:1\tfunction\trender" in rows and "src/panel.ts:5\tinterface\tProps" in rows
+    assert "local" not in rows
+    assert "(current)" in _script(root, "map", str(run)).stdout
+
+    master.write_text(DOC)
+    out = _script(root, "claims", str(master))
+    assert out.returncode == 0
+    sheet = (run / "notes/claims.md").read_text()
+    assert "> The module adds two numbers" in sheet
+    assert "     2      return a + b" in sheet
+
+    assert "no earlier work" in _script(root, "leads", str(run)).stdout
+
+
+def test_leads_point_to_the_projects_earlier_work(root: Path) -> None:
+    (root / "src").mkdir(exist_ok=True)
+    (root / "src/widget.py").write_text("def add(a, b):\n    return a + b\n")
+    project = root / "outputs/2026-11-07-docs-audit"
+    (project / "subjects/widget-guide").mkdir(parents=True)
+    (project / "subjects/widget-guide/changes.json").write_text(json.dumps({"changes": [{}, {}, {}]}))
+    (project / "notes").mkdir()
+    (project / "notes/widget.md").write_text("WIDGET_GUIDE.md says add() validates input.\n")
+    (project / "notes/other.md").write_text("unrelated\n")
+    out = _script(root, "start", "widget", "--target", "docs/WIDGET_GUIDE.md", "--scope", "src/widget.py",
+                  "--prompt", "/code-doc docs/WIDGET_GUIDE.md", "--project", "outputs/2026-11-07-docs-audit")
+    assert out.returncode == 0, out.stderr
+    leads = _script(root, "leads", out.stdout.split()[0]).stdout
+    assert "subjects/widget-guide/changes.json (3 change(s) already traced to the code)" in leads
+    assert "notes/widget.md" in leads and "other.md" not in leads
+
+
+def test_readers_notes_must_use_full_references(root: Path) -> None:
+    run, _ = _run(root)
+    (run / "notes/read-core.md").write_text(
+        "# core\n\n- add returns a sum `src/widget.py:1-2`\n- shorthand `W:2`\n- past the end `src/widget.py:9`\n")
+    out = _script(root, "notes", str(run))
+    assert out.returncode == 1
+    assert "`W` does not exist" in out.stdout and "is outside the file" in out.stdout
+    (run / "notes/read-core.md").write_text("# core\n\n- add returns a sum `src/widget.py:1-2`\n")
+    assert "OK notes" in _script(root, "notes", str(run)).stdout

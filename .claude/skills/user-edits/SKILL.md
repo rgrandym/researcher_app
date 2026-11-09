@@ -82,6 +82,10 @@ python3 app/backend/edit_state.py inspect $doc
 The rule that decides the round: **their
 concepts, not their sentences.**
 
+**Orient with one call:** `python3 .claude/scripts/run_card.py $run --doc $doc`
+gives the masters, the save state, the section map and the latest repair entries.
+Do not list folders, read `.run.json` or open logs to learn the same things.
+
 **Run the save check before reading or changing the report.** It answers the one question
 you cannot answer by reading: is the edit the user is describing actually on
 disk, or still in their editor?

@@ -16,6 +16,10 @@ when the code it describes has changed.
     python3 .claude/scripts/codedoc.py stamp <run>         # record the code the document describes
     python3 .claude/scripts/codedoc.py status <run>        # what changed since; exit 1 if anything
     python3 .claude/scripts/codedoc.py stages <run>        # stage table, used by run_check.py
+    python3 .claude/scripts/codedoc.py notes <run>         # references in notes/read-*.md resolve
+    python3 .claude/scripts/codedoc.py map <run>           # symbol index of the code root, once per commit
+    python3 .claude/scripts/codedoc.py leads <run>         # earlier work in the project on this target
+    python3 .claude/scripts/codedoc.py claims <doc>        # notes/claims.md: statements beside cited lines
 
 A code-doc run is a folder under outputs/ or a project's `code-docs/` directory whose `.run.json` has kind "code-doc",
 one master `<slug>.md`, the target as typed and the scope as paths relative to the
@@ -328,6 +332,36 @@ def blocks(text: str):
     return out
 
 
+def check_refs(lines: list, name: str) -> tuple:
+    """(errors, cited files) for every `path:line` reference in some text."""
+    errors, cited = [], set()
+    for n, line in enumerate(lines, 1):
+        for m in REF.finditer(line):
+            path, a, b = m.group(1), int(m.group(2)), int(m.group(3) or m.group(2))
+            p = inside(path)
+            if p is None:
+                errors.append(f"ERROR {name}:{n}: `{m.group(0)[1:-1]}` points outside the project")
+            elif not p.is_file():
+                errors.append(f"ERROR {name}:{n}: `{path}` does not exist")
+            elif a < 1 or b < a or b > line_count(p):
+                errors.append(f"ERROR {name}:{n}: `{m.group(0)[1:-1]}` is outside the file "
+                              f"({line_count(p)} lines)")
+            else:
+                cited.add(rel(p))
+    return errors, cited
+
+
+def check_notes(run) -> list:
+    """Reference errors in the readers' notes: a writer cites what the notes cite, so a
+    wrong line in a note becomes a wrong line in the document."""
+    run = Path(run)
+    use_code_root(run)
+    errors = []
+    for note in sorted((run / "notes").glob("read-*.md")):
+        errors += check_refs(note.read_text().splitlines(), note.name)[0]
+    return errors
+
+
 def check(doc: Path):
     """(errors, warnings) for a code document."""
     errors, warns = [], []
@@ -355,20 +389,8 @@ def check(doc: Path):
         errors.append(f"ERROR {name}: sections out of order: {', '.join(l for _, l in sorted(found))}")
 
     # References resolve to lines that exist inside the project.
-    cited = set()
-    for n, line in enumerate(lines, 1):
-        for m in REF.finditer(line):
-            path, a, b = m.group(1), int(m.group(2)), int(m.group(3) or m.group(2))
-            p = inside(path)
-            if p is None:
-                errors.append(f"ERROR {name}:{n}: `{m.group(0)[1:-1]}` points outside the project")
-            elif not p.is_file():
-                errors.append(f"ERROR {name}:{n}: `{path}` does not exist")
-            elif a < 1 or b < a or b > line_count(p):
-                errors.append(f"ERROR {name}:{n}: `{m.group(0)[1:-1]}` is outside the file "
-                              f"({line_count(p)} lines)")
-            else:
-                cited.add(rel(p))
+    ref_errors, cited = check_refs(lines, name)
+    errors += ref_errors
 
     # Every statement carries a reference, a labelled gap, or a labelled inference.
     seen_h2 = False
@@ -508,6 +530,141 @@ def stages(run) -> list:
     return out
 
 
+# ------------------------------------------------------------------ cheap context
+# Three outputs that let agents find and check code without reading it whole: a
+# symbol map built once per commit, the earlier work a project already holds on a
+# target, and a sheet that puts each statement beside the lines it cites.
+
+SYMBOL = {
+    ".py": re.compile(r"^\s*(?:async\s+)?(def|class)\s+(\w+)"),
+    # top-level declarations only: an indented const is a local variable, not a symbol
+    ".ts": re.compile(r"^(?:export\s+)?(?:default\s+)?(?:async\s+)?"
+                      r"(function|class|interface|type|enum|const|let)\s+(\w+)"),
+}
+for _ext in (".tsx", ".js", ".jsx", ".mjs"):
+    SYMBOL[_ext] = SYMBOL[".ts"]
+
+
+def map_path(run: Path) -> Path:
+    """One map per project: code documents inside a project share it."""
+    run = Path(run)
+    if run.parent.name == "code-docs":
+        return run.parent / ".codemap.tsv"
+    return run / "notes" / "codemap.tsv"
+
+
+def codemap(run) -> tuple:
+    """Write the symbol map for the run's code root if it is missing or from another
+    commit. Returns (path, symbol count, rebuilt)."""
+    run = Path(run)
+    use_code_root(run)
+    out = map_path(run)
+    commit = git("rev-parse", "HEAD") or "no-commit"
+    if out.is_file() and out.read_text().split("\n", 1)[0] == f"# {CODE_ROOT} {commit}":
+        return out, sum(1 for _ in out.open()) - 1, False
+    tracked = git("ls-files", "--cached", "--others", "--exclude-standard")
+    files = tracked.splitlines() if tracked else [rel(p) for p in CODE_ROOT.rglob("*") if p.is_file()]
+    rows = []
+    for f in sorted(files):
+        pat = SYMBOL.get(Path(f).suffix)
+        if pat is None or set(Path(f).parts) & skip_dirs():
+            continue
+        try:
+            text = (CODE_ROOT / f).read_text(errors="replace")
+        except OSError:
+            continue
+        for n, line in enumerate(text.split("\n"), 1):
+            m = pat.match(line)
+            if m:
+                rows.append(f"{f}:{n}\t{m.group(1)}\t{m.group(2)}")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(f"# {CODE_ROOT} {commit}\n" + "\n".join(rows) + "\n")
+    return out, len(rows), True
+
+
+def _slugs(target: str) -> list:
+    """Slugs a project may have used for the documents a target names."""
+    out = []
+    for token in re.findall(r"[\w./-]+\.(?:md|py|ts|tsx|txt)\b", target):
+        stem = Path(token).stem
+        out.append(re.sub(r"[^a-z0-9]+", "-", stem.lower()).strip("-"))
+    return out
+
+
+def leads(run) -> list:
+    """Earlier work in the enclosing project that bears on this target: the supplied
+    document's change plan and review, and notes that name it. Paths only."""
+    run = Path(run)
+    if run.parent.name != "code-docs":
+        return []
+    project = run.parent.parent
+    target = load(run).get("target", "")
+    slugs = _slugs(target)
+    names = [Path(t).name for t in re.findall(r"[\w./-]+\.md\b", target)]
+    out = []
+    subjects = project / "subjects"
+    for sub in sorted(subjects.iterdir()) if subjects.is_dir() else []:
+        if any(s[:40] == sub.name[:40] for s in slugs):
+            for f in ("text.md", "changes.json", "review.md"):
+                p = sub / f
+                if p.is_file():
+                    extra = ""
+                    if f == "changes.json":
+                        try:
+                            data = json.loads(p.read_text())
+                            items = data.get("changes", data) if isinstance(data, dict) else data
+                            extra = f" ({len(items)} change(s) already traced to the code)"
+                        except (ValueError, TypeError):
+                            pass
+                    out.append(f"{run_rel(p)}{extra}")
+    notes = project / "notes"
+    for p in sorted(notes.rglob("*.md")) if notes.is_dir() else []:
+        try:
+            text = p.read_text(errors="replace")
+        except OSError:
+            continue
+        if any(n in text for n in names):
+            out.append(run_rel(p))
+    return out
+
+
+def claims(doc: Path, max_lines: int = 8) -> tuple:
+    """Write notes/claims.md: every cited statement with the lines it cites. Returns
+    (path, statements, references)."""
+    doc = Path(doc)
+    use_code_root(doc.parent)
+    cache, parts, n_refs, n_claims = {}, [], 0, 0
+    for n, kind, body, section in blocks(doc.read_text()):
+        refs = list(REF.finditer(body)) if kind in ("para", "item", "row") else []
+        if not refs:
+            continue
+        n_claims += 1
+        parts.append(f"### L{n} · {section[:50]}\n\n> {body[:600]}\n")
+        for m in refs[:6]:
+            path, a, b = m.group(1), int(m.group(2)), int(m.group(3) or m.group(2))
+            p = inside(path)
+            if p is None or not p.is_file():
+                parts.append(f"`{path}:{a}`: missing\n")
+                continue
+            if p not in cache:
+                cache[p] = p.read_text(errors="replace").split("\n")
+            lines = cache[p]
+            span = list(range(a, min(b, len(lines)) + 1))
+            if len(span) > max_lines:
+                half = max_lines // 2
+                span = span[:half] + [None] + span[-half:]
+            shown = "\n".join("    ..." if i is None else f"{i:6d}  {lines[i - 1]}" for i in span)
+            parts.append(f"`{m.group(0)[1:-1]}`\n```\n{shown}\n```\n")
+            n_refs += 1
+        if len(refs) > 6:
+            parts.append(f"(+{len(refs) - 6} more reference(s) on this line)\n")
+    out = doc.parent / "notes" / "claims.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(f"# Claims of {doc.name}\n\nEach statement, then the lines it cites "
+                   f"(long ranges shortened to {max_lines} lines).\n\n" + "\n".join(parts))
+    return out, n_claims, n_refs
+
+
 def main():
     args = sys.argv[1:]
     if not args:
@@ -565,6 +722,28 @@ def main():
         if not moved:
             print("current: the code matches the document's stamp")
         return 1 if moved else 0
+    if cmd == "notes":
+        errors = check_notes(rest[0])
+        for line in errors:
+            print(line)
+        print(f"{len(errors)} bad reference(s) in the readers' notes" if errors
+              else "OK notes: every reference resolves")
+        return 1 if errors else 0
+    if cmd == "map":
+        path, count, rebuilt = codemap(rest[0])
+        print(f"{run_rel(path)}: {count} symbol(s){' (rebuilt)' if rebuilt else ' (current)'}")
+        return 0
+    if cmd == "leads":
+        found = leads(rest[0])
+        for line in found:
+            print(line)
+        if not found:
+            print("no earlier work in this project names the target")
+        return 0
+    if cmd == "claims":
+        path, n, r = claims(Path(rest[0]), int(opt("--max-lines") or 8))
+        print(f"{run_rel(path)}: {n} statement(s), {r} reference(s)")
+        return 0
     if cmd == "stages":
         for label, ok, detail in stages(rest[0]):
             print(f"  {'ok ' if ok else 'MISSING'} {label}  {detail}")
