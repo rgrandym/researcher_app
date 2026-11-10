@@ -39,12 +39,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     var quitting = false
     var downloads: [ObjectIdentifier: URL] = [:]
     var popups: [NSWindow] = []  // the app's own pages opened in a window of their own
+    let publisher = Publisher()  // the only code that writes outside the workspace
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = makeMenu()
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()  // keeps the UI's remembered state
+        // Registered on the main window's page only; the handler checks the origin again.
+        configuration.userContentController.addScriptMessageHandler(
+            publisher, contentWorld: .page, name: "publish")
         webView = WKWebView(frame: .zero, configuration: configuration)
+        publisher.webView = webView
         webView.navigationDelegate = self
         webView.uiDelegate = self
         if #available(macOS 13.3, *) { webView.isInspectable = true }

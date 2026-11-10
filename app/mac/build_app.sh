@@ -96,9 +96,9 @@ plutil -lint "$WORK/Info.plist" >/dev/null
 # is left exactly as it is, and the app is signed with a stable local certificate, so a
 # rebuilt app keeps its identity too. (An ad-hoc signature is a hash of the files: every
 # rebuild was a new app to macOS, which asked for its permissions again.)
-BUILD_FORMAT=3
+BUILD_FORMAT=4
 STAMP="$( { echo "$BUILD_FORMAT"; swiftc --version 2>&1
-  cat "$WORK/Info.plist" "$APP_DIR/mac/main.swift" "$APP_DIR/mac/make_icon.swift"; } | shasum -a 256 | cut -d' ' -f1)"
+  cat "$WORK/Info.plist" "$APP_DIR/mac/main.swift" "$APP_DIR/mac/publish_core.swift" "$APP_DIR/mac/publish_ui.swift" "$APP_DIR/mac/make_icon.swift"; } | shasum -a 256 | cut -d' ' -f1)"
 SIGNER="Research Local Signing"
 if [[ -d "$BUNDLE" && "$(cat "$BUNDLE/Contents/Resources/build-stamp" 2>/dev/null)" == "$STAMP" ]] \
   && codesign -dr - "$BUNDLE" 2>&1 | grep -q "certificate leaf" \
@@ -127,7 +127,7 @@ ensure_signer() {
 }
 
 log "Compiling"
-swiftc -O -swift-version 5 "$APP_DIR/mac/main.swift" -o "$APP/Contents/MacOS/Research"
+swiftc -O -swift-version 5 "$APP_DIR/mac/main.swift" "$APP_DIR/mac/publish_core.swift" "$APP_DIR/mac/publish_ui.swift" -o "$APP/Contents/MacOS/Research"
 swiftc -O "$APP_DIR/mac/make_icon.swift" -o "$WORK/make_icon"
 "$WORK/make_icon" "$WORK/icon.png"
 ICONSET="$WORK/AppIcon.iconset"

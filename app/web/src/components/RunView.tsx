@@ -13,6 +13,7 @@ import Markdown from "./Markdown";
 import AppearancePanel from "./AppearancePanel";
 import type { AppearancePick, AppearanceResponse, AppearanceValues } from "./AppearancePanel";
 import SessionView from "./SessionView";
+import PublishControl from "./PublishControl";
 import CritiqueQuestionsDialog, { type CritiqueAnswers, type CritiqueQuestion } from "./CritiqueQuestionsDialog";
 import ChangesDialog, { type Subject } from "./ChangesDialog";
 import OfficePane, { OfficeHtml, type OfficeFocus } from "./OfficePane";
@@ -1312,6 +1313,7 @@ export default function RunView({ name, file }: { name: string; file?: string })
                 </button>
               ),
             )}
+          <PublishControl run={name} />
           {shownStale.length > 0 && tab !== "file" && tab !== "chat" && (
             <button
               disabled={refreshExports.isPending || shownBlocked.length === shownStale.length}

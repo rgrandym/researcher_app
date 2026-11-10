@@ -29,7 +29,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from backend import accounts, activity, appearance, autoedits, comments, config, edit_state, final_sections, freshness, keychain, office_view, render, revision, sessions, usage, workspace
+from backend import accounts, activity, appearance, autoedits, comments, config, edit_state, final_sections, freshness, keychain, office_view, publication, render, revision, sessions, usage, workspace
 from backend.providers.base import Event, ProviderError
 from backend.providers.claude import ClaudeProvider
 from backend.turns import TurnManager
@@ -516,6 +516,28 @@ def run(name: str) -> dict[str, Any]:
         return {**workspace.run_detail(name), "stale": freshness.stale(name)}
     except (FileNotFoundError, ValueError) as exc:
         raise _bad(exc, 404) from exc
+
+
+@app.get("/api/runs/{name}/publications")
+def publications(name: str) -> list[dict[str, Any]]:
+    """Proposals to write outside the workspace. Listing and reading never writes anything."""
+    try:
+        return publication.list_proposals(name)
+    except (FileNotFoundError, ValueError) as exc:
+        raise _bad(exc, 404) from exc
+
+
+@app.get("/api/runs/{name}/publications/{proposal}")
+def publication_snapshot(name: str, proposal: str) -> dict[str, Any]:
+    """The bytes a proposal would write, for the desktop app's own review. Read-only: nothing here
+    writes outside the workspace or approves anything; only the native app can, after the author
+    has reviewed and authenticated."""
+    try:
+        return publication.snapshot(name, proposal)
+    except FileNotFoundError as exc:
+        raise _bad(exc, 404) from exc
+    except ValueError as exc:
+        raise _bad(exc, 422) from exc
 
 
 class RefreshBody(BaseModel):
