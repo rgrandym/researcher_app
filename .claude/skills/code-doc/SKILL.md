@@ -7,7 +7,7 @@ disable-model-invocation: true
 
 # Code documentation
 
-A code document is the single source of truth for one part of a codebase: what
+A code document is the single source of truth for one implemented part of a codebase: what
 it does, how, with what, and how to run it alone, written so an engineer could
 rebuild the feature from the document and the repository. Its evidence is the
 code. A sentence that no line of code supports is the same failure as an uncited
@@ -19,42 +19,57 @@ sentence in a report, and the workspace rules apply with that substitution: a
 
 **Only when the author types `/code-doc`**, with a target: a feature name
 (`/code-doc user edits absorption`), a directory (`/code-doc app/backend/`) or a
-file (`/code-doc .claude/scripts/gate.py`). No other stage makes one. A question
+implementation file (`/code-doc .claude/scripts/gate.py`). No other stage makes one. A question
 about code without the command is answered in chat at Tier 0 or 1 and names
 `/code-doc` when a document would serve better.
 
-The target must lie inside the project folder: the workspace's own code, or code
-the author has placed in it (a repository copied under a run's `external_data/`,
-for example). Nothing outside the project is read.
+The implementation must lie in this workspace or in a checkout explicitly
+named with `--code-root`. A reference document may supply leads, but cannot
+be the target of a new code-doc run.
 
 ## The steps
 
 ### 1. Resolve the target to a scope
 
-A path is its own scope. A feature name is resolved by searching: grep for its
+A path to implementation code is its own starting scope. A path to a user guide,
+runbook, specification, or other reference document is a lead, not an
+implementation scope. Resolve it to one implementation owner before starting.
+If it describes a workflow spanning several owners, ask which node or
+component the author wants documented; do not make the workflow one code doc.
+
+A feature name is resolved by searching: grep for its
 terms across `app/`, `.claude/scripts/`, `.claude/skills/`, `.claude/agents/`
 and any code folder the author named, then follow imports and call sites one
-hop out from the entry points until the feature's boundary is clear. The scope is
-the files that implement the feature; a file that only mentions it stays out.
-Tests that exercise it belong in scope.
+hop out from the entry points until the implementation owner's boundary is
+clear. Name one implementation file as the anchor. Scope includes files owned
+by that component and its direct tests. A caller, dependency, viewer, or
+downstream consumer stays outside scope unless it implements the same owner.
+Cite the specific lines needed to explain an interaction without documenting
+that other component's internals. A file that only mentions the feature stays
+out.
 
-When the name matches two unrelated things, or the scope would exceed about forty
-files, ask the author one concrete question (which of the two, or which part
-first) and wait. Do not document a guess.
+Before readers start, print the proposed anchor, file inventory, and total
+lines. `codedoc.py start` refuses more than 40 files or 6,000 lines. When the
+name matches unrelated things, the scope exceeds either limit, or a reference
+document spans several implementation owners, ask which component to document
+and wait. Do not document a guess or widen scope to make a cross-app workflow
+exhaustive.
 
 ### 2. Start or find the run
 
 ```bash
 python3 .claude/scripts/codedoc.py start <slug> --target "<what the author typed>" \
-        --scope <path> [<path> ...] --prompt "<the author's message, verbatim>" \
-        [--project outputs/<current-project>]
+        --anchor <implementation-file> --scope <owned-path> [<owned-path> ...] \
+        --prompt "<the author's message, verbatim>" \
+        [--code-root <checkout>] [--project outputs/<current-project>]
 ```
 
+When documenting a sibling checkout, pass its path with `--code-root`.
 When invoked from a project's Chat tab, pass that project with `--project`. The
 document and its notes, review and stamp then stay in
 `<project>/code-docs/<slug>/`. Use a new top-level run only when the author starts
 a new search outside a project. It prints the run folder and the master. A target already documented returns its
-existing run, widens the scope if needed and appends the new request to
+existing run, adds owned scope if needed and appends the new request to
 `prompt.md`: the document is updated in place, never written beside itself. A new
 target outside a project gets `outputs/YYYY-MM-DD-code-doc-<slug>/` with the master `<slug>.md`.
 
@@ -103,7 +118,7 @@ readers together. Your context holds the scope, the paths and the handovers.
 
 Split the inventory into components of at most about 2,500 lines (a backend
 module, a front-end panel, a shared library), and spawn one `code-reader` per
-component, all in one message. Brief each with `RUN`, `COMPONENT`, `FILES`,
+component, at most three readers for one document. Brief each with `RUN`, `COMPONENT`, `FILES`,
 `QUESTIONS` (what the five sections need from it: entry points, data shapes,
 behaviour, configuration, defects, the commands the reproduction guide should
 run) and its `LEADS`. Each writes `notes/read-<component>.md` and returns a few
@@ -193,7 +208,13 @@ subsections:
   while writing this document and what it returned. A step that could not be run
   says why.
 
-**4. Code health, gaps and improvements.** Each finding is one list item or table
+**4. Supplemental implementation details.** The quirks an engineer needs to
+change the code safely: branches the names do not suggest, ordering
+dependencies, silent fallbacks, data shape guarantees and who relies on them,
+and coupling to other parts of the project. Describe only the interaction
+needed to understand this component; do not document adjacent implementations.
+
+**5. Code health, gaps and suggested improvements.** Each finding is one list item or table
 row with: severity (**High**: wrong results, data loss, a security exposure or a
 crash on a reachable path; **Medium**: a misbehaviour on an edge case, a missing
 guard, debt that makes a likely change risky; **Low**: clarity, duplication,
@@ -203,11 +224,6 @@ A finding needs a failure the code can actually reach: trace it before writing
 it, and label anything not traced as `Inference:`. Comments in the code such as
 TODO or FIXME are cited as what they are, the author's own note. When there are
 no defects worth reporting, say so in one cited sentence; do not invent any.
-
-**5. Supplemental implementation details.** The quirks an engineer needs to
-change the code safely: branches the names do not suggest, ordering
-dependencies, silent fallbacks, data shape guarantees and who relies on them,
-coupling to other parts of the project (which file breaks if this one changes).
 
 ## Rules that hold throughout
 
@@ -222,9 +238,10 @@ reviewer can.
 
 **Describe what is, not what should be.** The document describes the code as it
 runs today, including behaviour that looks like a mistake. Intent goes in
-section 4 as an improvement, never into sections 1 to 3 as a description. A
-docstring or comment that disagrees with the code is a section 4 finding; the
-code is the source of truth.
+section 5 as a suggested improvement, never into sections 1 to 4 as a
+description. A docstring or comment that disagrees with the code is a section 5
+finding; the code is the source of truth. Suggestions do not authorise edits
+to application code.
 
 **Gaps are visible.** A configuration, version, limit or behaviour the code does
 not define is written `[Not defined in codebase]`, never guessed, never dropped.

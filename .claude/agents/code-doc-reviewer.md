@@ -43,11 +43,12 @@ Then check, citing the document's line for each problem:
 - **Exactness.** Signatures, field names, defaults, version constraints,
   environment variables and error messages match the code character for
   character. Fenced code is copied, not paraphrased.
-- **Omissions.** From the symbol map, list the entry points and public functions
-  of the files in scope, and read those the document never cites. Report the
-  entry points, branches, state, settings or dependencies the document leaves
-  out, and anything that would stop an engineer reproducing the feature from the
-  document and the repository alone.
+- **Omissions.** Check the anchor and public entry points owned by this
+  component. Read uncited functions only when they affect those entry points.
+  Report missing branches, state, settings, dependencies, or contracts needed
+  to reproduce this component. Check callers and downstream components at
+  their boundary; their internals are outside this review. Do not widen scope
+  to make a cross-app workflow exhaustive.
 - **Invented behaviour.** Anything described as the code's behaviour that the
   code does not do: an idealised flow, a validation that does not exist, a retry
   that is not there. Also any value written where the code defines none, which
@@ -56,7 +57,7 @@ Then check, citing the document's line for each problem:
   outside the run folder, contacts an external service or deletes anything. Say
   whether each produced what the guide says. A command or flag that does not
   exist is a finding.
-- **Defects.** For each section 4 finding, trace the scenario through the code:
+- **Defects.** For each final-section finding, trace the scenario through the code:
   CONFIRMED (reachable as described), PLAUSIBLE (reachable only under
   assumptions you name) or REJECTED (cannot happen, with the line that prevents
   it). Check the severity against the skill's definitions. Then list any defect

@@ -8,7 +8,8 @@ exist, every statement carries one or is a labelled gap, and the document says
 when the code it describes has changed.
 
     python3 .claude/scripts/codedoc.py start <slug> --target "<what was typed>" \
-            --scope <path> [<path> ...] --prompt "<the request, verbatim>" \
+            --anchor <implementation-file> --scope <path> [<path> ...] \
+            --prompt "<the request, verbatim>" \
             [--code-root <path>] [--project outputs/<run>]
     python3 .claude/scripts/codedoc.py find "<target>"     # the run already documenting it
     python3 .claude/scripts/codedoc.py inventory <run>     # files in scope, with line counts
@@ -45,6 +46,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import runmeta  # noqa: E402
 
 KIND = "code-doc"
+MAX_SCOPE_FILES = 40
+MAX_SCOPE_LINES = 6000
 # The repository the document describes: this project, unless a run names another.
 CODE_ROOT = ROOT
 GAP = "[Not defined in codebase]"
@@ -52,13 +55,13 @@ SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "bu
              ".pytest_cache", ".mypy_cache", ".history", "outputs"}
 
 # `app/backend/workspace.py:91` or `app/backend/workspace.py:91-114`, in backticks.
-REF = re.compile(r"`((?:[\w@+.-]+/)*[\w@+-][\w@+.-]*):(\d+)(?:-(\d+))?`")
+REF = re.compile(r"`((?:[\w@+.-]+/)*\.?[\w@+-][\w@+.-]*):(\d+)(?:-(\d+))?`")
 INFERENCE = re.compile(r"^\W*(?:\*\*|\*|_)?Inference(?:\*\*|\*|_)?\s*:", re.I)
 FENCE = re.compile(r"^\s*(```|~~~)")
 SEVERITY = re.compile(r"\b(?:High|Medium|Low)\b")
 
 # Sections in order: (heading pattern, required sub-headings).
-SECTIONS = [
+LEGACY_SECTIONS = [
     ("overview", r"overview", []),
     ("architecture", r"architecture|interactions", []),
     ("specification", r"specification", [
@@ -69,6 +72,7 @@ SECTIONS = [
     ("code health", r"code health|gaps|improvement", []),
     ("supplemental details", r"supplemental|implementation details|quirks", []),
 ]
+SECTIONS = LEGACY_SECTIONS[:3] + [LEGACY_SECTIONS[4], LEGACY_SECTIONS[3]]
 
 # The documentation process never reaches the reader. Internal file names are not
 # listed: a document about this workspace's own scripts names them legitimately.
@@ -210,8 +214,27 @@ def find(target: str, project: str = ""):
     return hits[-1] if hits else None
 
 
+def scope_inventory(scope: list, anchor: str) -> list:
+    """Reject an unanchored or oversized feature before a run or reader exists."""
+    anchor_path = inside(anchor) if anchor else None
+    if anchor_path is None or not anchor_path.is_file():
+        sys.exit("ERROR --anchor must name an existing implementation file")
+    if Path(rel(anchor_path)).parts[0] in {"docs", "external_data"}:
+        sys.exit("ERROR --anchor must name implementation code, not a reference document")
+    files = expand(scope)
+    if rel(anchor_path) not in files:
+        sys.exit("ERROR --anchor must be included in --scope")
+    rows = [(f, line_count(CODE_ROOT / f)) for f in files]
+    total = sum(n for _, n in rows)
+    if len(rows) > MAX_SCOPE_FILES or total > MAX_SCOPE_LINES:
+        sys.exit(f"ERROR scope has {len(rows)} files and {total} lines; "
+                 f"limit is {MAX_SCOPE_FILES} files and {MAX_SCOPE_LINES} lines. "
+                 "Choose one implementation component and rerun before starting readers.")
+    return rows
+
+
 def start(slug: str, target: str, scope: list, prompt: str, code_root: str = "",
-          project: str = "") -> Path:
+          project: str = "", anchor: str = "") -> Path:
     global CODE_ROOT
     if code_root:
         q = Path(code_root)
@@ -219,11 +242,25 @@ def start(slug: str, target: str, scope: list, prompt: str, code_root: str = "",
         if not q.is_dir():
             sys.exit(f"ERROR code root is not a directory: {code_root}")
         CODE_ROOT = q
+    existing = find(target, project)
+    if existing and not code_root:
+        use_code_root(existing)
     bad = [s for s in scope if inside(s) is None or not inside(s).exists()]
     if bad:
         sys.exit(f"ERROR scope paths that do not exist inside the project: {', '.join(bad)}")
     scope = [rel(s) for s in scope]
-    existing = find(target, project)
+    if not existing and re.search(r"(?:^|[/\\])docs[/\\][^\s]*\.md\b", target, re.I):
+        sys.exit("ERROR a reference document cannot be the code-doc target; "
+                 "name one implementation node or component instead")
+    if existing:
+        previous = json.loads((existing / ".run.json").read_text())
+        combined = sorted(set(previous.get("scope", [])) | set(scope))
+        if set(combined) != set(previous.get("scope", [])) or previous.get("format_version", 1) >= 2:
+            scope_inventory(combined, anchor)
+        elif rel(anchor) not in expand(combined):
+            sys.exit("ERROR --anchor must be included in --scope")
+    else:
+        scope_inventory(scope, anchor)
     if existing:
         data = json.loads((existing / ".run.json").read_text())
         data["scope"] = sorted(set(data.get("scope", [])) | set(scope))
@@ -248,6 +285,7 @@ def start(slug: str, target: str, scope: list, prompt: str, code_root: str = "",
         sys.exit(f"ERROR a different folder already uses {run_rel(run)}")
     (run / "notes").mkdir(parents=True, exist_ok=True)
     data = {"kind": KIND, "doc_kind": KIND, "masters": [f"{clean}.md"], "target": target,
+            "format_version": 2, "anchor": rel(anchor),
             "scope": sorted(set(scope)),
             "created": datetime.now(timezone.utc).isoformat(timespec="seconds")}
     if CODE_ROOT != ROOT:
@@ -371,11 +409,13 @@ def check(doc: Path):
     use_code_root(run)
     lines = text.splitlines()
 
+    # Older stamped documents keep their original section order.
+    sections = SECTIONS if load(run).get("format_version", 1) >= 2 else LEGACY_SECTIONS
     # Structure: the five sections, in order, with the three specification parts.
     h2 = [(n, s[3:].strip()) for n, s in enumerate(lines, 1) if s.startswith("## ")]
     h3 = [(n, s[4:].strip()) for n, s in enumerate(lines, 1) if s.startswith("### ")]
     found = []
-    for label, pat, subs in SECTIONS:
+    for label, pat, subs in sections:
         hit = next(((n, h) for n, h in h2 if re.search(pat, h, re.I)), None)
         if not hit:
             errors.append(f"ERROR {name}: no section for {label}")
@@ -387,6 +427,8 @@ def check(doc: Path):
                 errors.append(f"ERROR {name}:{hit[0]}: {label} has no '{sub}' subsection")
     if [n for n, _ in found] != sorted(n for n, _ in found):
         errors.append(f"ERROR {name}: sections out of order: {', '.join(l for _, l in sorted(found))}")
+    if sections is SECTIONS and found and found[-1][1] == "code health" and found[-1][0] != h2[-1][0]:
+        errors.append(f"ERROR {name}: code health must be the final section")
 
     # References resolve to lines that exist inside the project.
     ref_errors, cited = check_refs(lines, name)
@@ -414,11 +456,11 @@ def check(doc: Path):
         errors.append(f"ERROR {name}:{n}: statement with no code reference, "
                       f"no {GAP} and no 'Inference:' label: {plain[:70]}")
 
-    arch = next((h for n, h in h2 if re.search(SECTIONS[1][1], h, re.I)), None)
+    arch = next((h for n, h in h2 if re.search(sections[1][1], h, re.I)), None)
     if arch and arch not in diagram_sections:
         errors.append(f"ERROR {name}: the architecture section has no diagram")
 
-    health = next((n for n, h in h2 if re.search(SECTIONS[3][1], h, re.I)), None)
+    health = next((n for n, h in h2 if re.search(sections[-1 if sections is SECTIONS else 3][1], h, re.I)), None)
     if health:
         end = min([n for n, _ in h2 if n > health] or [len(lines) + 1])
         if not SEVERITY.search("\n".join(lines[health:end - 1])):
@@ -683,11 +725,16 @@ def main():
         return vals if many else (vals[0] if vals else None)
 
     if cmd == "start":
-        if not rest or rest[0].startswith("--") or not opt("--target") or not opt("--scope", True):
-            sys.exit("usage: codedoc.py start <slug> --target T --scope P [P ...] --prompt TEXT "
+        if not rest or rest[0].startswith("--") or not opt("--target") or not opt("--scope", True) or not opt("--anchor"):
+            sys.exit("usage: codedoc.py start <slug> --target T --anchor FILE --scope P [P ...] --prompt TEXT "
                      "[--code-root PATH] [--project outputs/RUN]")
         run = start(rest[0], opt("--target"), opt("--scope", True), opt("--prompt") or "",
-                    opt("--code-root") or "", opt("--project") or "")
+                    opt("--code-root") or "", opt("--project") or "", opt("--anchor") or "")
+        rows = inventory(run)
+        print(f"anchor: {load(run).get('anchor') or rel(opt('--anchor'))}")
+        for file, lines in rows:
+            print(f"{lines:6d}  {file}")
+        print(f"scope: {len(rows)} file(s), {sum(n for _, n in rows)} line(s)")
         print(run_rel(run))
         print(run_rel(master(run)))
         return 0

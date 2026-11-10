@@ -41,7 +41,9 @@ python3 .claude/scripts/codefacts.py search <RUN> '<regex>' [path ...]   # inste
    `<RUN>/notes/codemap.tsv`) or `codefacts.py search`, never a recursive grep.
 4. **Leads are leads.** A change plan, review or note says where to look; confirm
    in the code before you record anything.
-5. Follow a call one hop outside `FILES` when a question needs it. Stop there.
+5. Follow a call one hop outside `FILES` when a boundary contract needs it.
+   Record only the input, output, and call that this component relies on.
+   Do not add the adjacent component to this run's implementation scope.
 6. Run nothing that writes outside `RUN`, contacts a network service, or deletes
    anything. You may run a script's `--help`, a dry run, or the tests named in
    your brief, and record the command and its exact result.

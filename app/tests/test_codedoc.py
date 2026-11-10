@@ -50,6 +50,14 @@ Inference: callers rely on integer results, since the only call site passes inte
 """
 
 
+def _paths(out: subprocess.CompletedProcess[str]) -> tuple[str, str]:
+    """The run and master `start` printed. They are its last two lines, after the anchor,
+    the inventory and the scope total."""
+    assert out.returncode == 0, out.stderr or out.stdout
+    lines = [l.strip() for l in out.stdout.splitlines() if l.strip()]
+    return lines[-2], lines[-1]
+
+
 def _script(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, str(root / ".claude/scripts/codedoc.py"), *args],
@@ -60,10 +68,9 @@ def _script(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
 def _run(root: Path) -> tuple[Path, Path]:
     (root / "src").mkdir(exist_ok=True)
     (root / "src/widget.py").write_text("def add(a, b):\n    return a + b\n")
-    out = _script(root, "start", "widget", "--target", "src/widget.py",
+    out = _script(root, "start", "widget", "--target", "src/widget.py", "--anchor", "src/widget.py",
                   "--scope", "src/widget.py", "--prompt", "/code-doc src/widget.py")
-    assert out.returncode == 0, out.stderr
-    run, master = out.stdout.split()
+    run, master = _paths(out)
     return root / run, root / master
 
 
@@ -74,9 +81,9 @@ def test_start_scaffolds_a_code_doc_run_and_finds_it_again(root: Path) -> None:
     assert master == run / "widget.md"
     assert "/code-doc src/widget.py" in (run / "prompt.md").read_text()
 
-    again = _script(root, "start", "widget-again", "--target", "src/widget.py",
+    again = _script(root, "start", "widget-again", "--target", "src/widget.py", "--anchor", "src/widget.py",
                     "--scope", "src/widget.py", "--prompt", "/code-doc src/widget.py again")
-    assert again.stdout.split()[0] == str(run.relative_to(root))
+    assert _paths(again)[0] == str(run.relative_to(root))
     assert "again" in (run / "prompt.md").read_text()
     assert len(list((root / "outputs").glob("*code-doc*"))) == 1
 
@@ -85,16 +92,17 @@ def test_project_code_doc_stays_in_project_and_is_found_on_rerun(root: Path) -> 
     standalone, _ = _run(root)
     project = root / "outputs/2026-11-08-widget-audit"
     project.mkdir(parents=True)
-    args = ("start", "widget", "--target", "src/widget.py", "--scope", "src/widget.py",
+    args = ("start", "widget", "--target", "src/widget.py", "--anchor", "src/widget.py",
+            "--scope", "src/widget.py",
             "--prompt", "/code-doc src/widget.py", "--project", "outputs/2026-11-08-widget-audit")
     first = _script(root, *args)
     assert first.returncode == 0, first.stderr
     run = project / "code-docs/widget"
-    assert first.stdout.split()[0] == str(run.relative_to(root))
+    assert _paths(first)[0] == str(run.relative_to(root))
     assert (run / ".run.json").is_file()
     again = _script(root, *args)
     assert again.returncode == 0, again.stderr
-    assert again.stdout.split()[0] == str(run.relative_to(root))
+    assert _paths(again)[0] == str(run.relative_to(root))
     assert list((root / "outputs").glob("*code-doc*")) == [standalone]
 
 
@@ -219,10 +227,11 @@ def test_leads_point_to_the_projects_earlier_work(root: Path) -> None:
     (project / "notes").mkdir()
     (project / "notes/widget.md").write_text("WIDGET_GUIDE.md says add() validates input.\n")
     (project / "notes/other.md").write_text("unrelated\n")
-    out = _script(root, "start", "widget", "--target", "docs/WIDGET_GUIDE.md", "--scope", "src/widget.py",
+    out = _script(root, "start", "widget", "--target", "docs/WIDGET_GUIDE.md",
+                  "--anchor", "src/widget.py", "--scope", "src/widget.py",
                   "--prompt", "/code-doc docs/WIDGET_GUIDE.md", "--project", "outputs/2026-11-07-docs-audit")
     assert out.returncode == 0, out.stderr
-    leads = _script(root, "leads", out.stdout.split()[0]).stdout
+    leads = _script(root, "leads", _paths(out)[0]).stdout
     assert "subjects/widget-guide/changes.json (3 change(s) already traced to the code)" in leads
     assert "notes/widget.md" in leads and "other.md" not in leads
 

@@ -24,9 +24,11 @@ def _doc_run(root: Path, slug: str = "widget") -> Path:
         (root / "src/widget.py").write_text(CODE)
     (root / PROJECT).mkdir(parents=True, exist_ok=True)
     out = _sh(root, "codedoc.py", "start", slug, "--target", f"docs/{slug.upper()}.md",
+              "--anchor", "src/widget.py",
               "--scope", "src/widget.py", "--prompt", "/code-doc", "--project", PROJECT)
     assert out.returncode == 0, out.stderr
-    return root / out.stdout.split()[0]
+    # `start` prints the run and the master last, after the anchor and the inventory.
+    return root / [l.strip() for l in out.stdout.splitlines() if l.strip()][-2]
 
 
 def _facts(path: Path, *items: dict) -> Path:
