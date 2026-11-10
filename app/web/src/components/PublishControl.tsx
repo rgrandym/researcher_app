@@ -10,7 +10,9 @@ interface NativeBridge { messageHandlers?: { publish?: { postMessage: (body: unk
 // the exact changes and authenticated. This control asks the app to start that; it cannot write
 // anything itself, and in a browser it can only list the proposals.
 export default function PublishControl({ run }: { run: string }) {
-  const proposals = useQuery({ queryKey: ["publications", run], queryFn: () => api.get<Proposal[]>(`/api/runs/${encodeURIComponent(run)}/publications`), staleTime: 5000 });
+  // A run writes a proposal while the window is open, so the list polls like the rest of
+  // the app's panels and refreshes again the moment the author opens it.
+  const proposals = useQuery({ queryKey: ["publications", run], queryFn: () => api.get<Proposal[]>(`/api/runs/${encodeURIComponent(run)}/publications`), refetchInterval: 15_000 });
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -33,7 +35,7 @@ export default function PublishControl({ run }: { run: string }) {
 
   return (
     <div className="relative ml-2">
-      <button onClick={() => setOpen(!open)} title="Proposals to write files outside this project. Nothing is written until you review and authenticate." className="flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-[0.75rem] hover:border-accent">
+      <button onClick={() => { if (!open) void proposals.refetch(); setOpen(!open); }} title="Proposals to write files outside this project. Nothing is written until you review and authenticate." className="flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-[0.75rem] hover:border-accent">
         <Send size="0.8125rem" /> Publish ({proposals.data.length})
       </button>
       {open && (
