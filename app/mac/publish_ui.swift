@@ -3,11 +3,11 @@
 // Flow: the page asks (via the `publish` message) to publish proposal X of run Y. This code
 // fetches the snapshot itself from the backend it launched, asks the author to pick the
 // destination folder, reads the destination itself, shows exactly what would change, and
-// requires fresh device-owner authentication. Nothing is remembered: each publication asks again.
-// There is no setting, file, environment variable or HTTP call that approves one.
+// writes only once the author approves that review. Nothing is remembered: each publication
+// asks again, and there is no setting, file, environment variable or HTTP call that approves
+// one on the author's behalf.
 
 import AppKit
-import LocalAuthentication
 import WebKit
 
 @MainActor
@@ -99,8 +99,7 @@ final class Publisher: NSObject, WKScriptMessageHandlerWithReply {
 
         let planned = try PublishCore.plan(request, root: proposed)
         guard review(request, planned, root: proposed) else { throw PublishError("Cancelled. Nothing was written.") }
-        try await authenticate(reason: "Publish \(planned.count) file change(s) to \(proposed)")
-        // Re-read the destination after the wait: the review must describe what gets written.
+        // Re-read the destination after the review: what gets written must be what was shown.
         let final = try PublishCore.plan(request, root: proposed)
         guard zip(planned, final).allSatisfy({ $0.oldData == $1.oldData }) else {
             throw PublishError("A target changed while you were reviewing. Nothing was written.")
@@ -110,7 +109,7 @@ final class Publisher: NSObject, WKScriptMessageHandlerWithReply {
         }
         try audit(["event": "approved", "request": request.request_id, "run": run, "proposal": proposal,
                    "root": proposed, "ops": request.operations.map { ["path": $0.path, "action": $0.action, "sha256": $0.sha256 ?? "", "expect": $0.expect] },
-                   "authentication": "deviceOwner"])  // failing here stops before any write
+                   "approval": "reviewed"])  // failing here stops before any write
         do {
             try PublishCore.apply(final, root: proposed)
         } catch {
@@ -145,7 +144,7 @@ final class Publisher: NSObject, WKScriptMessageHandlerWithReply {
         let box = NSAlert()
         box.alertStyle = .warning
         box.messageText = "Publish \(planned.count) change(s) outside the workspace?"
-        box.informativeText = "Review the exact changes. You will then be asked to authenticate."
+        box.informativeText = "Review the exact changes. Nothing is written unless you approve."
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 760, height: 420))
         let text = NSTextView(frame: scroll.bounds)
         text.isEditable = false
@@ -155,23 +154,8 @@ final class Publisher: NSObject, WKScriptMessageHandlerWithReply {
         scroll.hasVerticalScroller = true
         box.accessoryView = scroll
         box.addButton(withTitle: "Cancel")  // the default button: Return cancels
-        box.addButton(withTitle: "Authenticate and publish…")
+        box.addButton(withTitle: "Approve and publish")
         return box.runModal() == .alertSecondButtonReturn
-    }
-
-    private func authenticate(reason: String) async throws {
-        let context = LAContext()
-        context.touchIDAuthenticationAllowableReuseDuration = 0  // no reuse of an earlier approval
-        var failure: NSError?
-        guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &failure) else {
-            throw PublishError("This Mac cannot authenticate you (\(failure?.localizedDescription ?? "unknown")). Nothing was written.")
-        }
-        do {
-            guard try await context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason)
-            else { throw PublishError("Authentication failed.") }
-        } catch {
-            throw PublishError("Authentication did not succeed. Nothing was written.")
-        }
     }
 
     // MARK: audit (outside the workspace, in the app's own support folder)

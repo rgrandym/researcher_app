@@ -531,7 +531,7 @@ def publications(name: str) -> list[dict[str, Any]]:
 def publication_snapshot(name: str, proposal: str) -> dict[str, Any]:
     """The bytes a proposal would write, for the desktop app's own review. Read-only: nothing here
     writes outside the workspace or approves anything; only the native app can, after the author
-    has reviewed and authenticated."""
+    has reviewed and approved."""
     try:
         return publication.snapshot(name, proposal)
     except FileNotFoundError as exc:
