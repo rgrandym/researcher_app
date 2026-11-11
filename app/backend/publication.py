@@ -3,8 +3,13 @@
 An agent prepares `<run>/publications/<id>.json` and the files it points to. This module reads
 them, validates them and returns a snapshot (the bytes to write, with hashes). It performs no
 external write and has no approval path. Only the desktop app's native code, after the author
-has reviewed the exact changes and authenticated with the device owner credentials, writes
-outside the workspace. Browser-only mode can show a proposal but cannot publish it.
+has reviewed the exact changes and approved them, writes outside the workspace. Browser-only
+mode can show a proposal but cannot publish it.
+
+Which proposals have been published is read from the app's own audit log, the record the
+app writes when it publishes. Reading it is what puts a published proposal below the ones
+still waiting. Nothing here writes that log, so the backend cannot make a proposal look
+published, or unpublished, or carry one out.
 
 Proposal file:
     {"title": "...", "destination_root": "/abs/path",
@@ -28,6 +33,9 @@ from typing import Any
 
 from backend import workspace
 
+# The app's own record of what it published, read to order the list. Written only by the
+# desktop app, in its own support folder, and never by this module.
+AUDIT = Path.home() / "Library" / "Application Support" / "Research" / "publication-audit.jsonl"
 MAX_OPERATIONS = 32
 MAX_FILE_BYTES = 2_000_000
 TTL_SECONDS = 600
@@ -79,14 +87,57 @@ def _digest(data: bytes) -> str:
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
+def _audit_lines() -> list[dict[str, Any]]:
+    """The desktop app's audit log, or [] when there is none (no app, nothing published)."""
+    try:
+        text = AUDIT.read_text("utf-8")
+    except (OSError, ValueError):
+        return []
+    out = []
+    for line in text.splitlines():
+        if line.strip():
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict):
+                out.append(row)
+    return out
+
+
+def published_times(run: str) -> dict[str, str]:
+    """{proposal id: when it was published} for this run, from the app's audit log.
+
+    The log holds an `approved` record naming the run and proposal, then a `published`
+    record carrying the same request id once the files are written. A proposal that was
+    approved but whose write failed is not published and is not listed here.
+    """
+    approved: dict[str, str] = {}
+    for row in _audit_lines():
+        if row.get("event") == "approved" and row.get("run") == run:
+            request, proposal = row.get("request"), row.get("proposal")
+            if isinstance(request, str) and isinstance(proposal, str) and ID.match(proposal):
+                approved[request] = proposal
+    out: dict[str, str] = {}
+    for row in _audit_lines():
+        if row.get("event") == "published":
+            proposal = approved.get(str(row.get("request")))
+            if proposal:
+                out[proposal] = str(row.get("time", ""))
+    return out
+
+
 def list_proposals(run: str) -> list[dict[str, Any]]:
+    """Every proposal, those still waiting first and the published ones after them."""
     folder = _folder(run)
     if not folder.is_dir():
         return []
     found = []
+    done = published_times(run)
     for path in sorted(folder.glob("*.json")):
         if not ID.match(path.stem):
             continue
+        published = done.get(path.stem, "")
         try:
             raw = json.loads(path.read_text("utf-8"))
             found.append(
@@ -95,10 +146,14 @@ def list_proposals(run: str) -> list[dict[str, Any]]:
                     "title": str(raw.get("title", path.stem))[:200],
                     "destination_root": str(raw.get("destination_root", "")),
                     "operations": len(raw.get("operations", [])),
+                    "published": published,
                 }
             )
         except (OSError, ValueError, AttributeError):
-            found.append({"id": path.stem, "title": path.stem, "destination_root": "", "operations": 0, "invalid": True})
+            found.append({"id": path.stem, "title": path.stem, "destination_root": "",
+                          "operations": 0, "invalid": True, "published": published})
+    # Waiting proposals first, newest published last: the list a reader works down.
+    found.sort(key=lambda p: (bool(p["published"]), p["published"], p["id"]))
     return found
 
 

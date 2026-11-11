@@ -101,3 +101,74 @@ def test_no_route_writes_outside_or_approves() -> None:
     assert not [p for p, _ in routes if any(word in p for word in forbidden)]
     source_text = Path(publication.__file__).read_text()
     assert "write_text" not in source_text and "write_bytes" not in source_text and "open(" not in source_text
+
+
+def audit(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+
+def approved(proposal: str, request: str, run: str = RUN) -> dict:
+    return {"event": "approved", "run": run, "proposal": proposal, "request": request,
+            "approval": "reviewed", "time": "2026-11-11T08:00:00Z"}
+
+
+def test_published_proposals_sort_below_the_waiting_ones(
+    root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source(root)
+    folder = root / "outputs" / RUN / "publications"
+    folder.mkdir(exist_ok=True)
+    for pid in ("a01", "b02", "c03"):
+        (folder / f"{pid}.json").write_text(
+            json.dumps({"title": pid.upper(), "destination_root": "/tmp/elsewhere", "operations": [w()]}))
+    log = tmp_path / "publication-audit.jsonl"
+    monkeypatch.setattr(publication, "AUDIT", log)
+
+    assert [p["id"] for p in publication.list_proposals(RUN)] == ["a01", "b02", "c03"]
+    assert all(p["published"] == "" for p in publication.list_proposals(RUN))
+
+    audit(log, [approved("a01", "r1"), {"event": "published", "request": "r1", "time": "2026-11-11T09:00:00Z"}])
+    listed = publication.list_proposals(RUN)
+    assert [p["id"] for p in listed] == ["b02", "c03", "a01"]
+    assert listed[-1]["published"] == "2026-11-11T09:00:00Z"
+    assert listed[0]["published"] == ""
+
+
+def test_an_approval_whose_write_failed_is_not_published(
+    root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source(root)
+    propose(root, [w()])
+    log = tmp_path / "publication-audit.jsonl"
+    monkeypatch.setattr(publication, "AUDIT", log)
+    audit(log, [approved("p1", "r1"), {"event": "failed", "request": "r1", "error": "boom"}])
+    assert publication.list_proposals(RUN)[0]["published"] == ""
+    assert publication.published_times(RUN) == {}
+
+
+def test_another_runs_publications_and_a_damaged_log_are_ignored(
+    root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source(root)
+    propose(root, [w()])
+    log = tmp_path / "publication-audit.jsonl"
+    monkeypatch.setattr(publication, "AUDIT", log)
+
+    audit(log, [approved("p1", "r1", run="2026-01-01-other-run"),
+                {"event": "published", "request": "r1", "time": "2026-11-11T09:00:00Z"}])
+    assert publication.published_times(RUN) == {}
+
+    log.write_text('not json\n{"event": "published", "request": "r1"}\n[]\n')
+    assert publication.published_times(RUN) == {}
+    assert publication.list_proposals(RUN)[0]["id"] == "p1"
+
+    monkeypatch.setattr(publication, "AUDIT", tmp_path / "absent.jsonl")
+    assert publication.published_times(RUN) == {}
+
+
+def test_the_backend_cannot_record_or_perform_a_publication() -> None:
+    """Published state is read from the app's log; nothing here can write it or fake it."""
+    text = Path(publication.__file__).read_text()
+    assert "write_text" not in text and "write_bytes" not in text and "open(" not in text
+    assert "shutil" not in text and "subprocess" not in text
